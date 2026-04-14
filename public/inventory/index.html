@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inventory Dashboard | NITM Ops Hub</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg-primary: #0a0f1a;
+  --bg-secondary: #111827;
+  --bg-tertiary: #1e293b;
+  --border: #1f2937;
+  --border-light: #334155;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #3b82f6;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --chicago: #f97316;
+  --vegas: #a855f7;
+  --fba: #facc15;
+}
+body { background: var(--bg-primary); color: var(--text-primary); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 4px; }
+
+.top-nav { background: var(--bg-secondary); padding: 8px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--border); }
+.top-nav a { color: var(--text-muted); text-decoration: none; font-size: 13px; font-weight: 600; }
+.top-nav a:hover { color: var(--text-primary); }
+.top-nav .current { color: var(--text-primary); font-weight: 700; }
+.top-nav .divider { color: var(--border-light); }
+
+.header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid var(--border); }
+.app-title { font-size: 22px; font-weight: 700; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.btn { padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; border: none; transition: all 0.15s; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #2563eb; }
+.btn-secondary { background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-light); }
+.btn-secondary:hover { background: var(--border-light); color: var(--text-primary); }
+.status-indicator { font-size: 12px; color: var(--success); }
+.status-indicator.loading { color: var(--accent); }
+.status-indicator.error { color: var(--danger); }
+
+.tabs { display: flex; gap: 4px; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.tab-btn { padding: 10px 20px; background: transparent; color: var(--text-muted); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.tab-btn:hover { background: var(--bg-tertiary); }
+.tab-btn.active { background: var(--accent); color: #fff; }
+
+.tab-content { display: none; padding: 24px; }
+.tab-content.active { display: block; }
+
+.stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.stat-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.stat-value { font-size: 24px; font-weight: 700; }
+.stat-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+.table-container { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.table-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; gap: 12px; }
+.table-title { font-size: 16px; font-weight: 700; }
+.table-filters { display: flex; gap: 8px; flex-wrap: wrap; }
+.filter-btn { padding: 6px 12px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-light); border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.filter-btn:hover, .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+th { background: var(--bg-tertiary); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); cursor: pointer; }
+th:hover { color: var(--text-primary); }
+td { font-size: 14px; vertical-align: middle; }
+tr:hover td { background: rgba(59, 130, 246, 0.05); }
+
+.sku { font-family: 'SF Mono', monospace; font-weight: 700; color: var(--accent); font-size: 13px; }
+.wh-chicago { color: var(--chicago); font-weight: 600; font-size: 15px; }
+.wh-vegas { color: var(--vegas); font-weight: 600; font-size: 15px; }
+
+.dist-bar { display: flex; height: 24px; border-radius: 4px; overflow: hidden; min-width: 140px; background: var(--bg-tertiary); }
+.dist-chicago { background: var(--chicago); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 700; min-width: 30px; }
+.dist-vegas { background: var(--vegas); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 700; min-width: 30px; }
+
+.balance-badge { display: inline-flex; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+.balance-balanced { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+.balance-chi-heavy { background: rgba(249, 115, 22, 0.15); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
+.balance-vegas-heavy { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+.balance-vegas-empty { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+.balance-chi-empty { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+.fba-value { color: var(--fba); font-weight: 600; }
+.fba-days { font-size: 11px; margin-top: 2px; }
+.fba-days.danger { color: var(--danger); }
+.fba-days.warning { color: var(--warning); }
+.fba-days.good { color: var(--text-muted); }
+.fba-empty { color: var(--text-muted); }
+
+.pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+.pipeline-column { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; min-height: 400px; }
+.pipeline-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.pipeline-title { font-size: 14px; font-weight: 700; }
+.pipeline-count { background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px; font-size: 12px; color: var(--text-muted); }
+.pipeline-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.order-card { background: var(--bg-tertiary); border: 1px solid var(--border-light); border-radius: 8px; padding: 12px; cursor: pointer; }
+.order-card:hover { border-color: var(--accent); }
+.order-card-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.order-card-meta { font-size: 11px; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; }
+.order-card-date { color: var(--accent); }
+
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 16px; width: 90%; max-width: 600px; max-height: 90vh; overflow-y: auto; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid var(--border); }
+.modal-title { font-size: 18px; font-weight: 700; }
+.modal-close { background: none; border: none; color: var(--text-muted); font-size: 24px; cursor: pointer; }
+.modal-body { padding: 24px; }
+.form-group { margin-bottom: 20px; }
+.form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.form-input, .form-select, .form-textarea { width: 100%; padding: 10px 14px; background: var(--bg-tertiary); border: 1px solid var(--border-light); border-radius: 8px; color: var(--text-primary); font-size: 14px; font-family: inherit; }
+.form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); }
+.form-textarea { min-height: 80px; resize: vertical; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 12px; padding: 16px 24px; border-top: 1px solid var(--border); }
+
+.timeline-editor { background: var(--bg-tertiary); border-radius: 8px; padding: 16px; margin-top: 8px; }
+.timeline-stage { display: grid; grid-template-columns: 140px 1fr 120px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.timeline-stage:last-child { border-bottom: none; }
+.stage-name { font-size: 13px; font-weight: 600; }
+.stage-input { padding: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 6px; color: var(--text-primary); font-size: 13px; width: 100%; }
+
+.settings-section { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+.settings-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.connection-card { background: var(--bg-tertiary); border: 1px solid var(--border-light); border-radius: 8px; padding: 16px; }
+.connection-status { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.connection-dot { width: 8px; height: 8px; border-radius: 50%; }
+.connection-dot.connected { background: var(--success); }
+.connection-dot.pending { background: var(--warning); }
+
+.upload-zone { border: 2px dashed var(--border-light); border-radius: 12px; padding: 20px; text-align: center; cursor: pointer; }
+.upload-zone:hover { border-color: var(--accent); background: rgba(59, 130, 246, 0.05); }
+.upload-icon { font-size: 24px; margin-bottom: 8px; }
+.upload-text { font-size: 12px; color: var(--text-secondary); }
+.upload-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.upload-status { margin-top: 10px; font-size: 12px; padding: 6px 10px; border-radius: 6px; }
+.upload-status.success { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+
+.sku-mapping-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg-tertiary); border: 1px solid var(--border-light); border-radius: 8px; margin-bottom: 8px; }
+.sku-mapping-item .sf-sku { color: var(--chicago); font-family: monospace; font-weight: 600; min-width: 100px; }
+.sku-mapping-item .arrow { color: var(--text-muted); }
+.sku-mapping-item .fba-sku { color: var(--fba); font-family: monospace; font-weight: 600; flex: 1; }
+.sku-mapping-item .product-name { color: var(--text-secondary); font-size: 12px; flex: 2; }
+.sku-mapping-item .remove-btn { background: none; border: none; color: var(--danger); cursor: pointer; font-size: 16px; padding: 4px 8px; opacity: 0.7; }
+.sku-mapping-item .remove-btn:hover { opacity: 1; }
+
+@media (max-width: 1024px) { .pipeline { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 768px) { .pipeline { grid-template-columns: 1fr; } .form-row { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #1e293b;font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:#f1f5f9;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#f1f5f9;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
+
+<header class="header">
+  <h1 class="app-title">Inventory Dashboard</h1>
+  <div class="header-right">
+    <span id="statusIndicator" class="status-indicator">● Ready</span>
+    <button class="btn btn-secondary" onclick="refreshData()">🔄 Refresh Data</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" onclick="switchTab('warehouse')">Warehouse Balance</button>
+  <button class="tab-btn" onclick="switchTab('orders')">📦 Order Tracking</button>
+  <button class="tab-btn" onclick="switchTab('purchasing')">Purchasing & Orders</button>
+  <button class="tab-btn" onclick="switchTab('settings')">⚙️ Settings</button>
+</nav>
+
+<div id="warehouseTab" class="tab-content active">
+
+  <div class="table-container">
+    <div class="table-header">
+      <div class="table-title">Inventory by SKU</div>
+      <div class="table-filters">
+        <button class="filter-btn active" onclick="setFilter('all')">All</button>
+        <button class="filter-btn" onclick="setFilter('rebalance')">Needs Rebalancing</button>
+        <button class="filter-btn" onclick="setFilter('fba-low')">FBA Low</button>
+        <button class="filter-btn" onclick="setFilter('fba')">FBA Only</button>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th onclick="sortTable('sku')">SKU</th>
+          <th onclick="sortTable('name')">Product</th>
+          <th onclick="sortTable('sfChicago')" style="text-align:center;color:var(--chicago)">Chicago</th>
+          <th onclick="sortTable('sfLasVegas')" style="text-align:center;color:var(--vegas)">Las Vegas</th>
+          <th style="text-align:center">Distribution</th>
+          <th style="text-align:center">Balance</th>
+          <th onclick="sortTable('velocity')" style="text-align:center">Velocity</th>
+          <th onclick="sortTable('fba')" style="text-align:center;color:var(--fba)">FBA</th>
+        </tr>
+      </thead>
+      <tbody id="inventoryTable"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="ordersTab" class="tab-content">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+    <h2 style="font-size:18px;font-weight:700;">Supplier Order Pipeline</h2>
+    <button class="btn btn-primary" onclick="openNewOrderModal()">+ New Order</button>
+  </div>
+  <div class="pipeline">
+    <div class="pipeline-column"><div class="pipeline-header"><span class="pipeline-title">📋 Need to Order</span><span class="pipeline-count" id="count-need_to_order">0</span></div><div class="pipeline-body" id="stage-need_to_order"></div></div>
+    <div class="pipeline-column"><div class="pipeline-header"><span class="pipeline-title">🛒 Ordered</span><span class="pipeline-count" id="count-ordered">0</span></div><div class="pipeline-body" id="stage-ordered"></div></div>
+    <div class="pipeline-column"><div class="pipeline-header"><span class="pipeline-title">🚢 Shipped</span><span class="pipeline-count" id="count-shipped">0</span></div><div class="pipeline-body" id="stage-shipped"></div></div>
+    <div class="pipeline-column"><div class="pipeline-header"><span class="pipeline-title">🛬 In Transit</span><span class="pipeline-count" id="count-in_transit">0</span></div><div class="pipeline-body" id="stage-in_transit"></div></div>
+    <div class="pipeline-column"><div class="pipeline-header"><span class="pipeline-title">✅ Received</span><span class="pipeline-count" id="count-received">0</span></div><div class="pipeline-body" id="stage-received"></div></div>
+  </div>
+</div>
+
+<div id="purchasingTab" class="tab-content">
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-label">Active Orders</div><div class="stat-value" id="activeOrders">-</div></div>
+    <div class="stat-card"><div class="stat-label">Units On Order</div><div class="stat-value" id="unitsOnOrder">-</div></div>
+    <div class="stat-card"><div class="stat-label">Estimated Value</div><div class="stat-value" id="orderValue">-</div></div>
+  </div>
+</div>
+
+<div id="settingsTab" class="tab-content">
+  <div class="settings-section">
+    <div class="settings-title">⚖️ Distribution Targets</div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Target: 75% Chicago / 25% Las Vegas</p>
+    <div class="form-row" style="max-width:400px;">
+      <div class="form-group"><label class="form-label">Chicago %</label><input type="number" class="form-input" id="targetChicago" value="75" min="0" max="100"></div>
+      <div class="form-group"><label class="form-label">Las Vegas %</label><input type="number" class="form-input" id="targetVegas" value="25" min="0" max="100"></div>
+    </div>
+    <button class="btn btn-primary" onclick="saveTargets()">Save Targets</button>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-title">🔌 Data Sources</div>
+    <div class="settings-grid">
+      <div class="connection-card">
+        <div class="connection-status"><div class="connection-dot" id="sfConnectionDot"></div><span style="font-weight:600">ShipFusion API</span></div>
+        <p style="font-size:12px;color:var(--text-muted)">3PL warehouse data via secure API</p>
+      </div>
+      <div class="connection-card">
+        <div class="connection-status"><div class="connection-dot pending" id="fbaConnectionDot"></div><span style="font-weight:600">Amazon FBA</span></div>
+        <div class="upload-zone" onclick="document.getElementById('fbaFileInput').click()">
+          <div class="upload-icon">📦</div>
+          <div class="upload-text">Drop CSV or click to upload</div>
+          <div class="upload-hint">Seller Central → Reports → FBA Inventory</div>
+          <input type="file" id="fbaFileInput" accept=".csv,.txt" style="display:none" onchange="handleFbaUpload(this)">
+        </div>
+        <div id="fbaUploadStatus"></div>
+      </div>
+      <div class="connection-card">
+        <div class="connection-status"><div class="connection-dot pending" id="finaleConnectionDot"></div><span style="font-weight:600">Finale Inventory</span></div>
+        <div class="upload-zone" onclick="document.getElementById('finaleFileInput').click()">
+          <div class="upload-icon">📄</div>
+          <div class="upload-text">Drop CSV or click to upload</div>
+          <div class="upload-hint">Finale → Products → Export</div>
+          <input type="file" id="finaleFileInput" accept=".csv" style="display:none" onchange="handleFinaleUpload(this)">
+        </div>
+        <div id="finaleUploadStatus"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-title">⏱️ Default Lead Times (days)</div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Order → Production</label><input type="number" class="form-input" id="lt-production" value="7"></div>
+      <div class="form-group"><label class="form-label">Production → Ship</label><input type="number" class="form-input" id="lt-ship" value="3"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Ship → Port</label><input type="number" class="form-input" id="lt-port" value="30"></div>
+      <div class="form-group"><label class="form-label">Port → Delivery</label><input type="number" class="form-input" id="lt-delivery" value="7"></div>
+    </div>
+    <button class="btn btn-primary" onclick="saveLeadTimes()">Save Lead Times</button>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-title">🔗 SKU Mapping (ShipFusion → FBA)</div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Link your ShipFusion SKUs to Amazon FBA SKUs so inventory displays together</p>
+    <div id="skuMappingList"></div>
+    <div style="display:flex;gap:12px;align-items:flex-end;margin-top:16px;">
+      <div class="form-group" style="margin-bottom:0;flex:1;">
+        <label class="form-label">ShipFusion SKU</label>
+        <select class="form-select" id="newMapSfSku">
+          <option value="">Select ShipFusion SKU...</option>
+        </select>
+      </div>
+      <div style="padding-bottom:4px;color:var(--text-muted);">→</div>
+      <div class="form-group" style="margin-bottom:0;flex:1;">
+        <label class="form-label">FBA SKU</label>
+        <select class="form-select" id="newMapFbaSku">
+          <option value="">Select FBA SKU...</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="addSkuMapping()">Add</button>
+    </div>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-title">🗑️ Clear Data</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="clearFbaData()">Clear FBA</button>
+      <button class="btn btn-secondary" onclick="clearFinaleData()">Clear Finale</button>
+      <button class="btn btn-secondary" onclick="clearAllOrders()">Clear Orders</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="orderModal">
+  <div class="modal">
+    <div class="modal-header"><h3 class="modal-title">New Supplier Order</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Product / SKU</label><input type="text" class="form-input" id="orderProduct" placeholder="e.g., ALW"></div>
+        <div class="form-group"><label class="form-label">Quantity</label><input type="number" class="form-input" id="orderQuantity" placeholder="5000"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Supplier</label><select class="form-select" id="orderSupplier"><option value="">Select...</option><option>Round Color Printing</option><option>Corporate Graphics</option><option>Alibaba</option></select></div>
+        <div class="form-group"><label class="form-label">Destination</label><select class="form-select" id="orderDestination"><option value="sf-chicago">SF Chicago</option><option value="sf-lasvegas">SF Las Vegas</option><option value="amazon-fba">Amazon FBA</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Cost</label><input type="text" class="form-input" id="orderCost" placeholder="$0.00"></div>
+        <div class="form-group"><label class="form-label">Order Date</label><input type="date" class="form-input" id="orderDate"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Timeline</label>
+        <div class="timeline-editor">
+          <div class="timeline-stage"><span class="stage-name">📋 Order Placed</span><input type="date" class="stage-input" id="stage-ordered-date"><span></span></div>
+          <div class="timeline-stage"><span class="stage-name">🏭 Production</span><input type="text" class="stage-input" id="stage-production" placeholder="7"><span style="font-size:11px;color:var(--text-muted)">days</span></div>
+          <div class="timeline-stage"><span class="stage-name">🚢 Shipped</span><input type="text" class="stage-input" id="stage-shipped" placeholder="3"><span style="font-size:11px;color:var(--text-muted)">days</span></div>
+          <div class="timeline-stage"><span class="stage-name">🛬 Port Arrival</span><input type="text" class="stage-input" id="stage-port" placeholder="30"><span style="font-size:11px;color:var(--text-muted)">days</span></div>
+          <div class="timeline-stage"><span class="stage-name">✅ Delivered</span><input type="text" class="stage-input" id="stage-delivered" placeholder="7"><span style="font-size:11px;color:var(--text-muted)">days</span></div>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Tracking Link</label><input type="url" class="form-input" id="orderTrackingUrl" placeholder="https://..."></div>
+      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="orderNotes"></textarea></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="saveOrder()">Create Order</button></div>
+  </div>
+</div>
+
+<script>
+let inventoryData = [], fbaData = [], finaleData = [], supplierOrders = [], skuMappings = [];
+let currentFilter = 'all', sortField = 'sku', sortAsc = true;
+let targetChicago = 75, targetVegas = 25;
+
+const STORAGE = { orders: 'nitm_supplier_orders', leadTimes: 'nitm_order_leadtimes', fbaData: 'nitm_fba_csv', finaleData: 'nitm_finale_csv', targets: 'nitm_distribution_targets', skuMappings: 'nitm_sku_mappings' };
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadFromStorage();
+  renderOrderPipeline();
+  refreshData();
+  document.getElementById('orderDate').valueAsDate = new Date();
+  document.getElementById('stage-ordered-date').valueAsDate = new Date();
+});
+
+function loadFromStorage() {
+  try {
+    supplierOrders = JSON.parse(localStorage.getItem(STORAGE.orders)) || [];
+    fbaData = JSON.parse(localStorage.getItem(STORAGE.fbaData)) || [];
+    finaleData = JSON.parse(localStorage.getItem(STORAGE.finaleData)) || [];
+    skuMappings = JSON.parse(localStorage.getItem(STORAGE.skuMappings)) || [];
+    const targets = JSON.parse(localStorage.getItem(STORAGE.targets)) || {};
+    if (targets.chicago) { targetChicago = targets.chicago; document.getElementById('targetChicago').value = targetChicago; }
+    if (targets.vegas) { targetVegas = targets.vegas; document.getElementById('targetVegas').value = targetVegas; }
+    const lt = JSON.parse(localStorage.getItem(STORAGE.leadTimes)) || {};
+    if (lt.production) document.getElementById('lt-production').value = lt.production;
+    if (lt.ship) document.getElementById('lt-ship').value = lt.ship;
+    if (lt.port) document.getElementById('lt-port').value = lt.port;
+    if (lt.delivery) document.getElementById('lt-delivery').value = lt.delivery;
+    if (fbaData.length > 0) document.getElementById('fbaConnectionDot').className = 'connection-dot connected';
+    if (finaleData.length > 0) document.getElementById('finaleConnectionDot').className = 'connection-dot connected';
+  } catch (e) {}
+}
+
+async function refreshData() {
+  const indicator = document.getElementById('statusIndicator');
+  indicator.className = 'status-indicator loading';
+  indicator.textContent = '● Fetching...';
+  try {
+    const res = await fetch('/inventory/api/shipfusion');
+    const data = await res.json();
+    if (data.success && data.inventory) {
+      inventoryData = data.inventory;
+      indicator.className = 'status-indicator';
+      indicator.innerHTML = `● <span style="color:var(--success)">ShipFusion</span> · ${data.count} SKUs`;
+      document.getElementById('sfConnectionDot').className = 'connection-dot connected';
+    } else throw new Error(data.message || data.error);
+    if (fbaData.length > 0) { mergeFbaData(); indicator.innerHTML += ` + <span style="color:var(--fba)">FBA</span>`; }
+    if (finaleData.length > 0) { mergeFinaleData(); indicator.innerHTML += ` + <span style="color:#c084fc">Finale</span>`; }
+    renderWarehouseTab();
+  } catch (e) {
+    indicator.className = 'status-indicator error';
+    indicator.textContent = '● Error: ' + e.message;
+  }
+}
+
+function parseCSV(text) {
+  const rows = []; let row = [], cell = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') { if (inQ && text[i+1] === '"') { cell += '"'; i++; } else inQ = !inQ; }
+    else if (c === ',' && !inQ) { row.push(cell.trim()); cell = ''; }
+    else if ((c === '\n' || c === '\r') && !inQ) { if (c === '\r' && text[i+1] === '\n') i++; row.push(cell.trim()); if (row.some(c => c)) rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell || row.length) { row.push(cell.trim()); if (row.some(c => c)) rows.push(row); }
+  if (rows.length < 2) return [];
+  const headers = rows[0];
+  return rows.slice(1).map(r => { const obj = {}; headers.forEach((h, i) => obj[h] = r[i] || ''); return obj; });
+}
+
+function handleFbaUpload(input) { if (input.files[0]) processFbaCSV(input.files[0]); }
+function processFbaCSV(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const rows = parseCSV(e.target.result);
+      fbaData = rows.map(r => {
+        // Support both Restock Inventory Report and Manage FBA Inventory report formats
+        const sku = r['Merchant SKU'] || r['seller-sku'] || r['sku'] || r['SKU'] || '';
+        const name = r['Product Name'] || r['product-name'] || '';
+        
+        // Restock Report: "Units Sold Last 30 Days", "Available", "Days of Supply at Amazon Fulfillment Network"
+        // Manage FBA: "afn-fulfillable-quantity", no velocity
+        const unitsSold30 = parseInt(r['Units Sold Last 30 Days'] || 0);
+        const available = parseInt(r['Available'] || r['afn-fulfillable-quantity'] || 0);
+        const daysOfSupply = parseInt(r['Days of Supply at Amazon Fulfillment Network'] || r['Total Days of Supply (including units from open shipments)'] || 0);
+        const alert = r['Alert'] || '';
+        const inbound = parseInt(r['Inbound'] || r['afn-inbound-working-quantity'] || 0) + parseInt(r['Shipped'] || r['afn-inbound-shipped-quantity'] || 0);
+        const asin = r['ASIN'] || r['asin'] || '';
+        
+        // Calculate daily velocity from 30-day sales
+        const fbaVelocity = unitsSold30 > 0 ? unitsSold30 / 30 : 0;
+        
+        return {
+          sku,
+          name,
+          asin,
+          fbaQuantity: available,
+          fbaVelocity,
+          fbaDaysOfSupply: daysOfSupply,
+          fbaInbound: inbound,
+          fbaAlert: alert,
+          fba30DaySales: unitsSold30,
+          hasFba: true
+        };
+      }).filter(r => r.sku);
+      
+      localStorage.setItem(STORAGE.fbaData, JSON.stringify(fbaData));
+      document.getElementById('fbaConnectionDot').className = 'connection-dot connected';
+      
+      const totalVelocity = fbaData.reduce((s, f) => s + f.fbaVelocity, 0).toFixed(1);
+      const lowStock = fbaData.filter(f => f.fbaAlert === 'low_stock').length;
+      
+      // Build detailed preview
+      let previewHtml = `<div class="upload-status success" style="margin-bottom:8px">✓ ${fbaData.length} FBA products · ${totalVelocity} units/day${lowStock > 0 ? ` · ⚠️ ${lowStock} low stock` : ''}</div>`;
+      previewHtml += '<div style="font-size:11px;color:var(--text-muted);max-height:120px;overflow-y:auto;background:var(--bg-secondary);padding:8px;border-radius:6px;margin-top:8px;">';
+      previewHtml += fbaData.map(f => {
+        const days = f.fbaDaysOfSupply || '?';
+        const vel = f.fbaVelocity > 0 ? f.fbaVelocity.toFixed(1) + '/day' : 'no velocity';
+        const alert = f.fbaAlert === 'low_stock' ? ' 🔴' : '';
+        return `<div style="padding:2px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--fba)">${f.sku}</strong>: ${f.fbaQuantity} units · ${days} days · ${vel}${alert}</div>`;
+      }).join('');
+      previewHtml += '</div>';
+      
+      document.getElementById('fbaUploadStatus').innerHTML = previewHtml;
+      refreshData();
+    } catch (err) { document.getElementById('fbaUploadStatus').innerHTML = `<div style="color:var(--danger);font-size:12px;margin-top:8px">Error: ${err.message}</div>`; }
+  };
+  reader.readAsText(file);
+}
+function mergeFbaData() {
+  fbaData.forEach(fp => {
+    // First check SKU mappings (ShipFusion SKU → FBA SKU)
+    const mapping = skuMappings.find(m => m.fbaSku === fp.sku);
+    let existing = null;
+    
+    if (mapping) {
+      // Found a mapping - look for the ShipFusion SKU
+      existing = inventoryData.find(i => i.sku === mapping.sfSku);
+    } else {
+      // No mapping - try exact match
+      existing = inventoryData.find(i => i.sku === fp.sku);
+    }
+    
+    if (existing) {
+      existing.fbaQuantity = fp.fbaQuantity;
+      existing.fbaVelocity = fp.fbaVelocity;
+      existing.fbaDaysOfSupply = fp.fbaDaysOfSupply;
+      existing.fbaInbound = fp.fbaInbound;
+      existing.fbaAlert = fp.fbaAlert;
+      existing.fba30DaySales = fp.fba30DaySales;
+      existing.asin = fp.asin;
+      existing.fbaSku = fp.sku; // Store the FBA SKU for reference
+      existing.hasFba = true;
+    } else if (fp.name) {
+      // No match found - add as FBA-only product
+      inventoryData.push({
+        id: fp.sku,
+        sku: fp.sku,
+        name: fp.name,
+        sfChicago: 0,
+        sfLasVegas: 0,
+        velocity: 0,
+        fbaQuantity: fp.fbaQuantity,
+        fbaVelocity: fp.fbaVelocity,
+        fbaDaysOfSupply: fp.fbaDaysOfSupply,
+        fbaInbound: fp.fbaInbound,
+        fbaAlert: fp.fbaAlert,
+        fba30DaySales: fp.fba30DaySales,
+        asin: fp.asin,
+        hasFba: true,
+        fbaOnly: true
+      });
+    }
+  });
+  
+  // Update the SKU mapping dropdowns
+  updateSkuMappingDropdowns();
+}
+
+function handleFinaleUpload(input) { if (input.files[0]) processFinaleCSV(input.files[0]); }
+function processFinaleCSV(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const rows = parseCSV(e.target.result);
+      finaleData = rows.map(r => ({ sku: r['Product ID'] || r['SKU'] || '', name: r['Short Description'] || r['Name'] || '', velocity: parseFloat(r['Daily Velocity'] || 0) })).filter(r => r.sku);
+      localStorage.setItem(STORAGE.finaleData, JSON.stringify(finaleData));
+      document.getElementById('finaleConnectionDot').className = 'connection-dot connected';
+      document.getElementById('finaleUploadStatus').innerHTML = `<div class="upload-status success">✓ ${finaleData.length} products</div>`;
+      refreshData();
+    } catch (err) { document.getElementById('finaleUploadStatus').innerHTML = `<div style="color:var(--danger);font-size:12px;margin-top:8px">Error: ${err.message}</div>`; }
+  };
+  reader.readAsText(file);
+}
+function mergeFinaleData() {
+  finaleData.forEach(fp => {
+    const existing = inventoryData.find(i => i.sku === fp.sku);
+    if (existing) { existing.name = fp.name || existing.name; if (fp.velocity > 0) existing.velocity = fp.velocity; }
+  });
+}
+
+function renderWarehouseTab() {
+  renderInventoryTable();
+}
+
+function renderInventoryTable() {
+  let data = [...inventoryData];
+  if (currentFilter === 'rebalance') data = data.filter(i => { const t=(i.sfChicago||0)+(i.sfLasVegas||0); if(t===0) return false; return Math.abs((i.sfChicago||0)/t*100-targetChicago)>15; });
+  else if (currentFilter === 'fba') data = data.filter(i => i.hasFba || i.fbaQuantity > 0);
+  else if (currentFilter === 'fba-low') data = data.filter(i => {
+    if (!i.hasFba && !i.fbaQuantity) return false;
+    const days = i.fbaDaysOfSupply || ((i.fbaQuantity||0) / (i.fbaVelocity||1));
+    return days < 30 || i.fbaAlert === 'low_stock';
+  });
+  
+  data.sort((a, b) => {
+    let aV, bV;
+    switch (sortField) {
+      case 'sku': aV = a.sku||''; bV = b.sku||''; break;
+      case 'name': aV = a.name||''; bV = b.name||''; break;
+      case 'sfChicago': aV = a.sfChicago||0; bV = b.sfChicago||0; break;
+      case 'sfLasVegas': aV = a.sfLasVegas||0; bV = b.sfLasVegas||0; break;
+      case 'velocity': aV = a.velocity||0; bV = b.velocity||0; break;
+      case 'fba': aV = a.fbaQuantity||0; bV = b.fbaQuantity||0; break;
+      default: aV = a.sku; bV = b.sku;
+    }
+    if (typeof aV === 'string') return sortAsc ? aV.localeCompare(bV) : bV.localeCompare(aV);
+    return sortAsc ? aV - bV : bV - aV;
+  });
+  
+  document.getElementById('inventoryTable').innerHTML = data.map(item => {
+    const chi = item.sfChicago || 0, veg = item.sfLasVegas || 0, total = chi + veg;
+    const chiPct = total > 0 ? Math.round(chi / total * 100) : 0;
+    const vegPct = total > 0 ? 100 - chiPct : 0;
+    
+    let balanceClass = 'balance-balanced', balanceText = 'BALANCED';
+    if (total === 0) { balanceClass = 'balance-chi-empty'; balanceText = 'NO STOCK'; }
+    else if (veg === 0) { balanceClass = 'balance-vegas-empty'; balanceText = 'VEGAS EMPTY'; }
+    else if (chi === 0) { balanceClass = 'balance-chi-empty'; balanceText = 'CHI EMPTY'; }
+    else if (chiPct > targetChicago + 10) { balanceClass = 'balance-chi-heavy'; balanceText = 'CHI HEAVY'; }
+    else if (chiPct < targetChicago - 10) { balanceClass = 'balance-vegas-heavy'; balanceText = 'VEGAS HEAVY'; }
+    
+    let fbaHtml = '<span class="fba-empty">—</span>';
+    if (item.hasFba || item.fbaQuantity > 0) {
+      const fbaQ = item.fbaQuantity || 0;
+      const fbaV = item.fbaVelocity || 0;
+      // Use Amazon's days of supply if available, otherwise calculate
+      const days = item.fbaDaysOfSupply || (fbaV > 0 ? Math.round(fbaQ / fbaV) : 0);
+      let daysClass = 'good';
+      let daysText = '';
+      if (days === 0 && fbaV === 0) {
+        daysText = 'No velocity data';
+        daysClass = 'warning';
+      } else if (days < 14) {
+        daysText = `⚠️ ${days} days left`;
+        daysClass = 'danger';
+      } else if (days < 30) {
+        daysText = `${days} days left`;
+        daysClass = 'warning';
+      } else {
+        daysText = `${days} days left`;
+      }
+      const alertIcon = item.fbaAlert === 'low_stock' ? '🔴 ' : '';
+      const velocityText = fbaV > 0 ? `${fbaV.toFixed(1)}/day` : '';
+      fbaHtml = `<div class="fba-value">${alertIcon}${fbaQ.toLocaleString()}</div><div class="fba-days ${daysClass}">${daysText}${velocityText ? ' · ' + velocityText : ''}</div>`;
+    }
+    
+    // ShipFusion velocity (30 day average)
+    const sfVelocity = item.velocity || 0;
+    
+    return `<tr>
+      <td><span class="sku">${item.sku}</span></td>
+      <td>${item.name || '—'}</td>
+      <td style="text-align:center"><span class="wh-chicago">${chi.toLocaleString()}</span></td>
+      <td style="text-align:center"><span class="wh-vegas">${veg.toLocaleString()}</span></td>
+      <td style="text-align:center">${total > 0 ? `<div class="dist-bar"><div class="dist-chicago" style="width:${chiPct}%">${chiPct}%</div><div class="dist-vegas" style="width:${vegPct}%">${vegPct}%</div></div>` : '—'}</td>
+      <td style="text-align:center"><span class="balance-badge ${balanceClass}">${balanceText}</span></td>
+      <td style="text-align:center"><span style="color:${sfVelocity > 0 ? 'var(--success)' : 'var(--text-muted)'};font-weight:600">${sfVelocity > 0 ? sfVelocity.toFixed(1) + '/day' : '—'}</span></td>
+      <td style="text-align:center">${fbaHtml}</td>
+    </tr>`;
+  }).join('');
+}
+
+function setFilter(f) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    const t = btn.textContent.toLowerCase();
+    const bf = t.includes('rebalance') ? 'rebalance' : t.includes('fba low') ? 'fba-low' : t.includes('fba') ? 'fba' : 'all';
+    btn.classList.toggle('active', bf === f);
+  });
+  renderInventoryTable();
+}
+function sortTable(field) { if (sortField === field) sortAsc = !sortAsc; else { sortField = field; sortAsc = true; } renderInventoryTable(); }
+
+function renderOrderPipeline() {
+  ['need_to_order', 'ordered', 'shipped', 'in_transit', 'received'].forEach(stage => {
+    const orders = supplierOrders.filter(o => o.stage === stage);
+    document.getElementById(`count-${stage}`).textContent = orders.length;
+    document.getElementById(`stage-${stage}`).innerHTML = orders.map(o => `<div class="order-card" onclick="viewOrder('${o.id}')"><div class="order-card-title">${o.product}</div><div class="order-card-meta"><span>${(o.quantity||0).toLocaleString()} units</span><span>${o.supplier||'-'}</span>${o.expectedDate?`<span class="order-card-date">ETA: ${formatDate(o.expectedDate)}</span>`:''}</div></div>`).join('');
+  });
+  const active = supplierOrders.filter(o => o.stage !== 'received');
+  document.getElementById('activeOrders').textContent = active.length;
+  document.getElementById('unitsOnOrder').textContent = active.reduce((s, o) => s + (o.quantity||0), 0).toLocaleString();
+}
+
+function openNewOrderModal() {
+  document.getElementById('orderModal').classList.add('active');
+  const lt = { production: document.getElementById('lt-production').value||7, ship: document.getElementById('lt-ship').value||3, port: document.getElementById('lt-port').value||30, delivery: document.getElementById('lt-delivery').value||7 };
+  document.getElementById('stage-production').value = lt.production;
+  document.getElementById('stage-shipped').value = lt.ship;
+  document.getElementById('stage-port').value = lt.port;
+  document.getElementById('stage-delivered').value = lt.delivery;
+}
+function closeModal() { document.getElementById('orderModal').classList.remove('active'); }
+function saveOrder() {
+  const order = {
+    id: Date.now().toString(),
+    product: document.getElementById('orderProduct').value,
+    quantity: parseInt(document.getElementById('orderQuantity').value) || 0,
+    supplier: document.getElementById('orderSupplier').value,
+    destination: document.getElementById('orderDestination').value,
+    cost: document.getElementById('orderCost').value,
+    trackingUrl: document.getElementById('orderTrackingUrl').value,
+    notes: document.getElementById('orderNotes').value,
+    stage: 'ordered',
+    timeline: { ordered: document.getElementById('stage-ordered-date').value, production: document.getElementById('stage-production').value, shipped: document.getElementById('stage-shipped').value, port: document.getElementById('stage-port').value, delivered: document.getElementById('stage-delivered').value },
+    createdAt: new Date().toISOString()
+  };
+  let d = new Date(order.timeline.ordered);
+  [order.timeline.production, order.timeline.shipped, order.timeline.port, order.timeline.delivered].forEach(v => { if(v) d.setDate(d.getDate()+parseInt(v)); });
+  order.expectedDate = d.toISOString().split('T')[0];
+  supplierOrders.push(order);
+  localStorage.setItem(STORAGE.orders, JSON.stringify(supplierOrders));
+  closeModal();
+  renderOrderPipeline();
+}
+function viewOrder(id) { const o = supplierOrders.find(x => x.id === id); if(o) alert(`${o.product}\n${o.quantity} units\nSupplier: ${o.supplier}\nETA: ${o.expectedDate||'TBD'}`); }
+function formatDate(s) { return s ? new Date(s).toLocaleDateString('en-US', {month:'short',day:'numeric'}) : ''; }
+
+function saveTargets() {
+  targetChicago = parseInt(document.getElementById('targetChicago').value) || 75;
+  targetVegas = parseInt(document.getElementById('targetVegas').value) || 25;
+  localStorage.setItem(STORAGE.targets, JSON.stringify({ chicago: targetChicago, vegas: targetVegas }));
+  renderInventoryTable();
+  alert('Targets saved!');
+}
+function saveLeadTimes() {
+  localStorage.setItem(STORAGE.leadTimes, JSON.stringify({ production: document.getElementById('lt-production').value, ship: document.getElementById('lt-ship').value, port: document.getElementById('lt-port').value, delivery: document.getElementById('lt-delivery').value }));
+  alert('Lead times saved!');
+}
+function clearFbaData() { if(confirm('Clear FBA data?')) { localStorage.removeItem(STORAGE.fbaData); fbaData=[]; document.getElementById('fbaConnectionDot').className='connection-dot pending'; document.getElementById('fbaUploadStatus').innerHTML=''; refreshData(); }}
+function clearFinaleData() { if(confirm('Clear Finale data?')) { localStorage.removeItem(STORAGE.finaleData); finaleData=[]; document.getElementById('finaleConnectionDot').className='connection-dot pending'; document.getElementById('finaleUploadStatus').innerHTML=''; refreshData(); }}
+function clearAllOrders() { if(confirm('Clear all orders?')) { localStorage.removeItem(STORAGE.orders); supplierOrders=[]; renderOrderPipeline(); }}
+
+function switchTab(tab) {
+  const tabs = ['warehouse', 'orders', 'purchasing', 'settings'];
+  document.querySelectorAll('.tab-btn').forEach((btn, i) => btn.classList.toggle('active', tabs[i] === tab));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById(tab + 'Tab').classList.add('active');
+  
+  // Update SKU mapping UI when switching to settings
+  if (tab === 'settings') {
+    renderSkuMappings();
+    updateSkuMappingDropdowns();
+  }
+}
+
+// ===== SKU MAPPING =====
+function updateSkuMappingDropdowns() {
+  const sfSelect = document.getElementById('newMapSfSku');
+  const fbaSelect = document.getElementById('newMapFbaSku');
+  if (!sfSelect || !fbaSelect) return;
+  
+  // Get ShipFusion SKUs (not already mapped)
+  const mappedSfSkus = skuMappings.map(m => m.sfSku);
+  const sfSkus = inventoryData
+    .filter(i => !i.fbaOnly && !mappedSfSkus.includes(i.sku))
+    .map(i => ({ sku: i.sku, name: i.name }));
+  
+  // Get FBA SKUs (not already mapped)
+  const mappedFbaSkus = skuMappings.map(m => m.fbaSku);
+  const fbaSkus = fbaData
+    .filter(f => !mappedFbaSkus.includes(f.sku))
+    .map(f => ({ sku: f.sku, name: f.name }));
+  
+  sfSelect.innerHTML = '<option value="">Select ShipFusion SKU...</option>' + 
+    sfSkus.map(s => `<option value="${s.sku}">${s.sku} - ${s.name || 'Unknown'}</option>`).join('');
+  
+  fbaSelect.innerHTML = '<option value="">Select FBA SKU...</option>' + 
+    fbaSkus.map(f => `<option value="${f.sku}">${f.sku} - ${f.name || 'Unknown'}</option>`).join('');
+}
+
+function renderSkuMappings() {
+  const container = document.getElementById('skuMappingList');
+  if (!container) return;
+  
+  if (skuMappings.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:12px 0;">No SKU mappings configured. Add mappings below to link ShipFusion and FBA SKUs.</p>';
+    return;
+  }
+  
+  container.innerHTML = skuMappings.map((m, idx) => {
+    const sfItem = inventoryData.find(i => i.sku === m.sfSku);
+    const fbaItem = fbaData.find(f => f.sku === m.fbaSku);
+    const productName = sfItem?.name || fbaItem?.name || '';
+    
+    return `<div class="sku-mapping-item">
+      <span class="sf-sku">${m.sfSku}</span>
+      <span class="arrow">→</span>
+      <span class="fba-sku">${m.fbaSku}</span>
+      <span class="product-name">${productName}</span>
+      <button class="remove-btn" onclick="removeSkuMapping(${idx})" title="Remove mapping">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function addSkuMapping() {
+  const sfSku = document.getElementById('newMapSfSku').value;
+  const fbaSku = document.getElementById('newMapFbaSku').value;
+  
+  if (!sfSku || !fbaSku) {
+    alert('Please select both a ShipFusion SKU and an FBA SKU');
+    return;
+  }
+  
+  // Check for duplicates
+  if (skuMappings.some(m => m.sfSku === sfSku || m.fbaSku === fbaSku)) {
+    alert('One of these SKUs is already mapped');
+    return;
+  }
+  
+  skuMappings.push({ sfSku, fbaSku });
+  localStorage.setItem(STORAGE.skuMappings, JSON.stringify(skuMappings));
+  
+  renderSkuMappings();
+  updateSkuMappingDropdowns();
+  refreshData(); // Re-merge data with new mapping
+}
+
+function removeSkuMapping(idx) {
+  if (confirm('Remove this SKU mapping?')) {
+    skuMappings.splice(idx, 1);
+    localStorage.setItem(STORAGE.skuMappings, JSON.stringify(skuMappings));
+    renderSkuMappings();
+    updateSkuMappingDropdowns();
+    refreshData();
+  }
+}
+</script>
+</body>
+</html>

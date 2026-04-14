@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Social Attribution | NITM Ops Hub</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0a0f1a; --bg2: #111827; --bg3: #0c1220; --bg4: #151d2e;
+  --border: #1e293b; --border2: #151d2e;
+  --text: #f1f5f9; --text2: #94a3b8; --text3: #64748b; --text4: #4a5568;
+  --blue: #3b82f6; --green: #22c55e; --red: #ef4444; --amber: #f59e0b;
+  --purple: #7c3aed; --cyan: #0891b2; --pink: #ec4899; --violet: #8b5cf6;
+  --font: 'DM Sans', sans-serif; --mono: 'JetBrains Mono', monospace;
+}
+body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Top Nav — matches other ops hub pages */
+.top-nav { background: var(--bg2); padding: 8px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #1f2937; }
+.top-nav a { color: var(--text3); text-decoration: none; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.top-nav a:hover { color: var(--text); }
+.top-nav .current { color: var(--text); font-weight: 700; }
+.top-nav .divider { color: #334155; }
+
+/* Header */
+.header { background: var(--bg); border-bottom: 1px solid var(--border2); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 50; }
+.logo-row { display: flex; align-items: center; gap: 8px; }
+.logo-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--blue); transform: rotate(45deg); }
+.logo-text { font-size: 15px; font-weight: 700; letter-spacing: 0.04em; }
+.logo-sep { color: #334155; font-size: 16px; }
+.logo-sub { font-size: 14px; font-weight: 500; color: var(--text3); }
+.upload-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; background: var(--bg4); border: 1px solid var(--border); border-radius: 6px; color: var(--text2); font-size: 13px; font-weight: 500; cursor: pointer; font-family: var(--font); }
+.upload-btn:hover { background: var(--border); color: var(--text); }
+#file-input { display: none; }
+
+/* Toast */
+.toast { margin: 0 24px; padding: 8px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; display: none; }
+.toast.show { display: block; margin-top: 10px; }
+.toast.success { background: #14342880; border: 1px solid #22c55e30; color: #86efac; }
+.toast.error { background: #3f141480; border: 1px solid #ef444430; color: #fca5a5; }
+
+/* Tabs */
+.tabs { display: flex; gap: 0; background: var(--bg); border-bottom: 1px solid var(--border2); padding: 0 24px; overflow-x: auto; }
+.tab-btn { padding: 11px 18px; font-size: 13px; font-weight: 500; color: var(--text4); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; font-family: var(--font); white-space: nowrap; }
+.tab-btn.active { color: var(--text); border-bottom-color: var(--blue); }
+
+/* Main */
+.main { padding: 20px 24px 60px; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Stats */
+.stat-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.stat-chip { display: flex; flex-direction: column; padding: 10px 14px; background: #0f1520; border: 1px solid var(--border2); border-radius: 8px; min-width: 110px; }
+.stat-label { font-size: 10px; font-weight: 600; color: var(--text4); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-val { font-size: 18px; font-weight: 700; color: var(--text); font-family: var(--mono); margin-top: 2px; }
+
+/* Post rows */
+.post-list { display: flex; flex-direction: column; gap: 6px; }
+.post-row { background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px; padding: 14px 16px; cursor: pointer; transition: border-color 0.15s; }
+.post-row:hover { border-color: var(--border); }
+.post-row-inner { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.post-left { display: flex; align-items: center; gap: 12px; flex: 1 1 300px; min-width: 0; }
+.post-thumb { width: 52px; height: 52px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: var(--border); }
+.post-info { min-width: 0; flex: 1; }
+.post-date-row { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.post-date { font-size: 12px; font-weight: 600; color: var(--text2); font-family: var(--mono); }
+.media-badge { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.03em; }
+.media-badge.video { background: #7c3aed30; color: #a78bfa; }
+.media-badge.carousel { background: #0891b230; color: #22d3ee; }
+.media-badge.image { background: #64748b30; color: var(--text2); }
+.sale-pill { font-size: 9px; font-weight: 700; color: var(--red); background: #ef444418; padding: 1px 6px; border-radius: 3px; }
+.platform-badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 3px; letter-spacing: 0.03em; }
+.platform-badge.ig { background: #e1306c20; color: #e1306c; }
+.platform-badge.tt { background: #00f2ea20; color: #25f4ee; }
+.post-caption { font-size: 12px; color: #7a8ba8; margin: 0 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-pill { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px; display: inline-block; }
+.post-metrics { display: flex; gap: 14px; flex: 0 0 auto; }
+.m-col { display: flex; flex-direction: column; align-items: center; min-width: 42px; }
+.m-val { font-size: 14px; font-weight: 600; color: var(--text); font-family: var(--mono); }
+.m-lbl { font-size: 9px; color: var(--text4); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 1px; }
+.post-sales-col { display: flex; flex-direction: column; align-items: center; min-width: 70px; padding-left: 14px; border-left: 1px solid #1a2232; }
+.post-sales-val { font-size: 16px; font-weight: 700; color: var(--green); font-family: var(--mono); }
+
+/* Expanded post */
+.post-expand { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border2); display: none; }
+.post-row.expanded .post-expand { display: block; }
+.expand-grid { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; }
+.expand-item .m-lbl { margin-bottom: 2px; }
+.expand-val { font-size: 14px; font-weight: 600; color: var(--text); font-family: var(--mono); }
+.theme-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.theme-btn { font-size: 10px; padding: 3px 9px; border-radius: 4px; cursor: pointer; font-family: var(--font); border: 1px solid; }
+.ig-link { font-size: 12px; color: var(--blue); text-decoration: none; font-weight: 500; margin-left: auto; }
+
+/* Correlations */
+.corr-section { background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+.corr-title { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
+.corr-table { overflow-x: auto; }
+.corr-row { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #0f172a; min-width: 600px; }
+.corr-head { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px; }
+.corr-cell { flex: 1; font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 6px; }
+.corr-cell-num { flex: 1; font-size: 13px; color: var(--text); font-family: var(--mono); font-weight: 500; }
+.corr-cell-wide { flex: 1.5; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.bar-wrap { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.bar-label { font-size: 10px; color: var(--text3); width: 60px; text-align: right; flex-shrink: 0; }
+.bar-track { flex: 1; height: 18px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; min-width: 40px; }
+.bar-fill span { font-size: 10px; color: #fff; font-family: var(--mono); font-weight: 500; }
+
+/* Calendar */
+.cal-header { display: grid; grid-template-columns: repeat(7,1fr); gap: 4px; margin-bottom: 4px; }
+.cal-day-head { text-align: center; font-size: 12px; font-weight: 600; color: var(--text4); padding: 6px; }
+.cal-week { display: grid; grid-template-columns: repeat(7,1fr); gap: 4px; margin-bottom: 4px; }
+.cal-cell { border: 1px solid var(--border2); border-radius: 6px; padding: 10px 8px; min-height: 100px; display: flex; flex-direction: column; gap: 2px; position: relative; }
+.cal-cell.sale { border-color: #ef444440; }
+.cal-cell-date { font-size: 12px; font-weight: 600; color: var(--text2); font-family: var(--mono); }
+.cal-cell-posts { font-size: 11px; color: var(--text3); }
+.cal-cell-views { font-size: 12px; color: var(--blue); font-family: var(--mono); font-weight: 500; }
+.cal-cell-eng { font-size: 11px; color: var(--amber); font-family: var(--mono); }
+.cal-cell-sales { font-size: 13px; font-weight: 700; font-family: var(--mono); margin-top: auto; }
+.cal-sale-badge { position: absolute; top: 4px; right: 4px; font-size: 8px; font-weight: 700; color: var(--red); background: #ef444418; padding: 1px 4px; border-radius: 2px; }
+
+/* Settings */
+.settings-card { background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px; padding: 20px; margin-bottom: 14px; max-width: 720px; }
+.settings-h { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+.settings-p { font-size: 12px; color: var(--text3); margin: 0 0 14px; line-height: 1.5; }
+.sale-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg2); border-radius: 6px; margin-bottom: 6px; }
+.sale-label { font-weight: 600; color: var(--amber); font-size: 13px; min-width: 120px; }
+.sale-range { color: var(--text2); font-family: var(--mono); font-size: 13px; flex: 1; }
+.remove-btn { background: none; border: none; color: var(--text4); cursor: pointer; font-size: 13px; padding: 2px 6px; }
+.remove-btn:hover { color: var(--red); }
+.input { padding: 7px 11px; font-size: 13px; background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; color: var(--text); outline: none; font-family: var(--font); }
+.input:focus { border-color: var(--blue); }
+.add-btn { padding: 7px 16px; font-size: 13px; font-weight: 600; background: var(--blue); border: none; border-radius: 5px; color: #fff; cursor: pointer; font-family: var(--font); white-space: nowrap; }
+.add-btn:disabled { opacity: 0.4; }
+.danger-btn { padding: 7px 16px; font-size: 13px; font-weight: 500; background: var(--bg2); border: 1px solid #ef444440; border-radius: 5px; color: var(--red); cursor: pointer; font-family: var(--font); }
+.theme-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg2); border-radius: 6px; margin-bottom: 6px; }
+.theme-kw { color: var(--text3); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* Empty */
+.empty-state { text-align: center; padding: 80px 20px; }
+.empty-icon { font-size: 40px; margin-bottom: 12px; }
+.empty-h { font-size: 18px; font-weight: 600; margin-bottom: 10px; }
+.empty-p { font-size: 13px; color: var(--text3); max-width: 440px; margin: 0 auto 20px; line-height: 1.5; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .post-metrics { gap: 8px; }
+  .m-col { min-width: 34px; }
+  .m-val { font-size: 12px; }
+  .stat-chip { min-width: 90px; }
+  .stat-val { font-size: 15px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Top Nav -->
+<nav class="top-nav">
+  <a href="/"><span>←</span> Ops Hub</a>
+  <span class="divider">|</span>
+  <a href="/calendar/">📅 Calendar</a>
+  <span class="divider">|</span>
+  <span class="current">📈 Social</span>
+  <span class="divider">|</span>
+  <a href="/inventory/">📊 Inventory</a>
+  <span class="divider">|</span>
+  <a href="/3pl/">📦 3PL</a>
+  <span class="divider">|</span>
+  <a href="/ambassadors/">🤝 Ambassadors</a>
+</nav>
+
+<!-- Header -->
+<header class="header">
+  <div class="logo-row">
+    <div class="logo-dot"></div>
+    <span class="logo-text">NITM</span>
+    <span class="logo-sep">·</span>
+    <span class="logo-sub">Social Attribution</span>
+  </div>
+  <label class="upload-btn" for="file-input">
+    <span>↑</span> Upload CSV
+  </label>
+  <input type="file" id="file-input" accept=".csv,.CSV" multiple>
+</header>
+
+<div id="toast" class="toast"></div>
+
+<!-- Tabs -->
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="posts">Posts</button>
+  <button class="tab-btn" data-tab="correlations">Correlations</button>
+  <button class="tab-btn" data-tab="calendar">Calendar</button>
+  <button class="tab-btn" data-tab="settings">Settings</button>
+</nav>
+
+<main class="main">
+  <!-- Empty State -->
+  <div id="empty-state" class="empty-state" style="display:none;">
+    <div class="empty-icon">📊</div>
+    <h2 class="empty-h">Upload your data to get started</h2>
+    <p class="empty-p">Drop your <strong>Instagram post performance CSV</strong> and <strong>Shopify sales CSV</strong>. Data persists via localStorage.</p>
+    <label class="add-btn" for="file-input" style="padding:10px 28px;font-size:14px;cursor:pointer">Upload CSVs</label>
+  </div>
+
+  <!-- Posts Tab -->
+  <div id="tab-posts" class="tab-content active">
+    <div id="stats-row" class="stat-row"></div>
+    <div id="post-list" class="post-list"></div>
+  </div>
+
+  <!-- Correlations Tab -->
+  <div id="tab-correlations" class="tab-content"></div>
+
+  <!-- Calendar Tab -->
+  <div id="tab-calendar" class="tab-content"></div>
+
+  <!-- Settings Tab -->
+  <div id="tab-settings" class="tab-content"></div>
+</main>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   STATE — localStorage backed
+   ═══════════════════════════════════════════════════════════════════ */
+const LS = {
+  posts: 'nitm-sa-posts', sales: 'nitm-sa-sales',
+  saleDates: 'nitm-sa-saledates', themes: 'nitm-sa-themes', overrides: 'nitm-sa-overrides'
+};
+
+// ── API helpers ──
+const API = '/social/api/data';
+async function apiLoad() {
+  try {
+    const res = await fetch(API);
+    if(!res.ok) throw new Error('API error');
+    const data = await res.json();
+    return {
+      posts: data.posts || [],
+      sales: data.sales || [],
+      saleDates: data.saleDates || [],
+      themes: data.themes || DEFAULT_THEMES,
+      overrides: data.overrides || {}
+    };
+  } catch(e) {
+    console.warn('API load failed, falling back to localStorage:', e);
+    return null;
+  }
+}
+async function apiSave(key, value) {
+  try {
+    await fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key, value}) });
+  } catch(e) { console.error('API save error:', e); }
+}
+async function apiReset() {
+  try { await fetch(API, {method:'DELETE'}); } catch(e) { console.error('API reset error:', e); }
+}
+
+// Also keep localStorage as fast local cache
+function load(key, fallback) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } }
+function store(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+
+// Save to BOTH localStorage (instant) and API (shared/persistent)
+function saveAll(key, lsKey, val) {
+  store(lsKey, val);
+  apiSave(key, val);
+}
+
+const DEFAULT_THEMES = [
+  { name:"Teaching", color:"#3b82f6", keywords:["explained","must-know","tips","quick tips","ethical","biomarkers","vs.","receptors","management","precautions","routes","nasal cannula","incentive spirometer","pressure injury","foley","straight cath","wound care","hypoglycemia","ekg","rsv","croup","diuretics","antibiotics","iv fluids","bleeding","lab value","labs &"] },
+  { name:"Quiz/Interactive", color:"#f59e0b", keywords:["quiz","how did you do","do you know","question","think you know","did you get it right","stable vs. unstable"] },
+  { name:"Motivation", color:"#22c55e", keywords:["reminder","honor","humble","worth it","small wins","slow & steady","dear future nurse","be humble","caring is","driven enough","nurture yourself"] },
+  { name:"Relatable/Funny", color:"#ec4899", keywords:["iykyk","pov:","if your first clinical","we really do it all","ladadee","which era","too shy","which nursing era","dad next","if only i knew","locked in for clinical"] },
+  { name:"Product Promo", color:"#8b5cf6", keywords:["off site-wide","mark it up","label, wipe","study hack","flashcards","bestie for active recall","books for","phalanges","pharmacology flashcards","note-taking","planner","badge card"] },
+  { name:"Scholarship/Other", color:"#64748b", keywords:["scholarship","screenshot","gift card"] },
+];
+
+let state = {
+  posts: load(LS.posts, []),
+  sales: load(LS.sales, []),
+  saleDates: load(LS.saleDates, []),
+  themes: load(LS.themes, DEFAULT_THEMES),
+  overrides: load(LS.overrides, {}),
+  expandedPost: null,
+  activeTab: 'posts',
+  loading: true
+};
+
+// Load from API on startup (overwrites localStorage cache with shared data)
+(async function initFromAPI() {
+  const apiData = await apiLoad();
+  if(apiData) {
+    if(apiData.posts.length) { state.posts = apiData.posts; store(LS.posts, apiData.posts); }
+    if(apiData.sales.length) { state.sales = apiData.sales; store(LS.sales, apiData.sales); }
+    if(apiData.saleDates.length) { state.saleDates = apiData.saleDates; store(LS.saleDates, apiData.saleDates); }
+    if(apiData.themes.length && JSON.stringify(apiData.themes)!==JSON.stringify(DEFAULT_THEMES)) { state.themes = apiData.themes; store(LS.themes, apiData.themes); }
+    if(Object.keys(apiData.overrides).length) { state.overrides = apiData.overrides; store(LS.overrides, apiData.overrides); }
+  }
+  state.loading = false;
+  render();
+})();
+
+/* ═══════════════════════════════════════════════════════════════════
+   UTILS
+   ═══════════════════════════════════════════════════════════════════ */
+function parseDate(s) {
+  if (!s) return null;
+  if (s.includes(',') && s.includes(':')) { const d = new Date(s); return isNaN(d)?null:d; }
+  const p = s.split('-'); if (p.length===3) return new Date(+p[0],+p[1]-1,+p[2]); return null;
+}
+function fmtKey(d) { return d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:''; }
+function fmtShort(s) { const d=parseDate(s); return d?d.toLocaleDateString('en-US',{month:'short',day:'numeric'}):s; }
+function fmtMoney(v) { return '$'+(v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(0)); }
+function fmtMoneyFull(v) { return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:0,maximumFractionDigits:0}).format(v); }
+function fmtNum(v) { if(v>=1e6) return (v/1e6).toFixed(1)+'M'; if(v>=1e3) return (v/1e3).toFixed(1)+'K'; return String(v); }
+function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function parseCSVLine(line) {
+  const r=[]; let cur='',inQ=false;
+  for(let i=0;i<line.length;i++){const c=line[i];if(c==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++}else inQ=!inQ}else if(c===','&&!inQ){r.push(cur.trim());cur=''}else cur+=c;}
+  r.push(cur.trim()); return r;
+}
+function parseCSV(text) {
+  // Handle newlines inside quoted fields by parsing character-by-character
+  text = text.replace(/^\uFEFF/,'');
+  const rows=[]; let row=[]; let cell=''; let inQ=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(c==='"'){ if(inQ&&text[i+1]==='"'){cell+='"';i++}else inQ=!inQ; }
+    else if(c===','&&!inQ){ row.push(cell); cell=''; }
+    else if((c==='\n'||c==='\r')&&!inQ){
+      if(c==='\r'&&text[i+1]==='\n') i++;
+      row.push(cell); cell='';
+      if(row.some(c=>c.trim())) rows.push(row);
+      row=[];
+    }
+    else { cell+=c; }
+  }
+  if(cell||row.length){row.push(cell);if(row.some(c=>c.trim()))rows.push(row);}
+  if(rows.length<2) return [];
+  const headers=rows[0].map(h=>h.trim());
+  return rows.slice(1).map(r=>{const o={};headers.forEach((h,i)=>o[h]=(r[i]||'').trim());return o;});
+}
+
+function autoTag(caption) {
+  const lc=(caption||'').toLowerCase();
+  for(const t of state.themes){for(const kw of t.keywords){if(lc.includes(kw.toLowerCase())) return t.name;}}
+  return 'Uncategorized';
+}
+
+function getSaleDateSet() {
+  const s=new Set();
+  state.saleDates.forEach(sd=>{const st=parseDate(sd.start),en=parseDate(sd.end);if(!st||!en)return;const c=new Date(st);while(c<=en){s.add(fmtKey(c));c.setDate(c.getDate()+1);}});
+  return s;
+}
+function getDailySales() {
+  const m={};state.sales.forEach(r=>{m[r.day]=(m[r.day]||0)+r.totalSales;});return m;
+}
+function getBaseline() {
+  const ds=getDailySales(),sd=getSaleDateSet();
+  const vals=Object.entries(ds).filter(([d])=>!sd.has(d)).map(([,v])=>v);
+  return vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:0;
+}
+
+function getDOW(s){const d=parseDate(s);return d?['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]:''}
+function getWeekStart(s){const d=parseDate(s);if(!d)return'';const day=d.getDay();d.setDate(d.getDate()-day+(day===0?-6:1));return fmtKey(d);}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CSV UPLOAD
+   ═══════════════════════════════════════════════════════════════════ */
+document.getElementById('file-input').addEventListener('change', async function(e) {
+  const files = Array.from(e.target.files);
+  if(!files.length) return;
+  for(const file of files) {
+    const rows = parseCSV(await file.text());
+    if(!rows.length) continue;
+    const f = rows[0];
+
+    // ── Instagram CSV (has "Instagram Post" URL column)
+    if(f['Time Posted'] && f['Instagram Post']) {
+      const map = new Map(state.posts.map(p=>[p.url,p]));
+      let nn=0,nu=0;
+      for(const r of rows){
+        const url=r['Instagram Post']||'';if(!url)continue;
+        const dt=parseDate(r['Time Posted']);
+        const post={url,platform:'ig',dateKey:dt?fmtKey(dt):'',datePosted:r['Time Posted']||'',imageUrl:r['Image URL']||'',caption:r['Caption']||'',mediaType:r['Media Type (Image, Video, Carousel)']||'',engagementRate:r['Engagement Rate']||'',engagements:parseInt(r['Engagements'])||0,followers:parseInt(r['Followers'])||0,views:parseInt(r['Views'])||0,reach:parseInt(r['Reach'])||0,likes:parseInt(r['Likes'])||0,comments:parseInt(r['Comments'])||0,saves:parseInt(r['Saves'])||0,shares:parseInt(r['Shares'])||0,linkinBio:parseInt(r['Linkin.bio'])||0,watchTime:0,fullWatchRate:''};
+        map.has(url)?nu++:nn++;map.set(url,post);
+      }
+      state.posts=Array.from(map.values());saveAll('posts',LS.posts,state.posts);
+      showToast(`IG: ${nn} new posts, ${nu} updated`,'success');
+
+    // ── TikTok CSV (has "Total Video Views" but no "Instagram Post")
+    } else if(f['Time Posted'] && f['Total Video Views'] && !f['Instagram Post']) {
+      const map = new Map(state.posts.map(p=>[p.url,p]));
+      let nn=0,nu=0;
+      for(const r of rows){
+        const dt=parseDate(r['Time Posted']);
+        const dateKey=dt?fmtKey(dt):'';
+        const caption=r['Caption']||'';
+        // TikTok has no post URL — use "tt:" + date + caption hash as unique key
+        const captionSlug=caption.replace(/[^a-zA-Z0-9]/g,'').slice(0,40).toLowerCase();
+        const url='tt:'+dateKey+':'+captionSlug;
+        const post={url,platform:'tt',dateKey,datePosted:r['Time Posted']||'',imageUrl:r['Image URL']||'',caption,mediaType:'video',engagementRate:r['Engagement Rate']||'',engagements:parseInt(r['Likes']||0)+parseInt(r['Comments']||0)+parseInt(r['Shares']||0),followers:0,views:parseInt(r['Total Video Views'])||0,reach:parseInt(r['Reach'])||0,likes:parseInt(r['Likes'])||0,comments:parseInt(r['Comments'])||0,saves:0,shares:parseInt(r['Shares'])||0,linkinBio:0,watchTime:parseInt(r['Total Watch Time'])||0,fullWatchRate:r['Full Video Watched Rate']||''};
+        map.has(url)?nu++:nn++;map.set(url,post);
+      }
+      state.posts=Array.from(map.values());saveAll('posts',LS.posts,state.posts);
+      showToast(`TikTok: ${nn} new posts, ${nu} updated`,'success');
+
+    // ── Shopify Sales CSV
+    } else if(f['Product title']&&f['Day']&&f['Total sales']) {
+      const map=new Map(state.sales.map(r=>[`${r.product}|${r.day}`,r]));
+      let nn=0,nu=0;
+      for(const r of rows){const k=`${r['Product title']}|${r['Day']}`;const e={product:r['Product title'],day:r['Day'],totalSales:parseFloat(r['Total sales'])||0};map.has(k)?nu++:nn++;map.set(k,e);}
+      state.sales=Array.from(map.values());saveAll('sales',LS.sales,state.sales);
+      showToast(`${nn} new sales rows, ${nu} updated`,'success');
+    } else { showToast('Unrecognized CSV format','error'); }
+  }
+  this.value='';
+  render();
+});
+
+function showToast(msg,type) {
+  const t=document.getElementById('toast');t.textContent=msg;t.className=`toast show ${type}`;
+  setTimeout(()=>{t.className='toast';},4000);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   TABS
+   ═══════════════════════════════════════════════════════════════════ */
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click',function(){
+    state.activeTab=this.dataset.tab;
+    render();
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   RENDER
+   ═══════════════════════════════════════════════════════════════════ */
+
+// Normalize caption for matching cross-posts (strip hashtags, emojis, whitespace)
+function captionKey(caption) {
+  return (caption||'').split('\n')[0].replace(/#\S+/g,'').replace(/[^\w\s]/g,'').replace(/\s+/g,' ').trim().toLowerCase().slice(0,50);
+}
+
+function render() {
+  const hasData = state.posts.length>0||state.sales.length>0;
+  document.getElementById('empty-state').style.display = hasData?'none':'block';
+
+  // Update tab button active states
+  document.querySelectorAll('.tab-btn').forEach(b=>{
+    b.classList.toggle('active', b.dataset.tab===state.activeTab);
+  });
+
+  // Show/hide tab content
+  document.querySelectorAll('.tab-content').forEach(c=>{
+    c.style.display='none';
+    c.classList.remove('active');
+  });
+
+  if(!hasData) return;
+
+  const activeEl = document.getElementById('tab-'+state.activeTab);
+  if(activeEl){ activeEl.style.display='block'; activeEl.classList.add('active'); }
+
+  const ds=getDailySales(), sd=getSaleDateSet(), bl=getBaseline();
+  const postsByDate={};state.posts.forEach(p=>{if(p.dateKey)(postsByDate[p.dateKey]=postsByDate[p.dateKey]||[]).push(p);});
+  const allDates=[...new Set([...Object.keys(ds),...Object.keys(postsByDate)])].sort();
+
+  // Enrich posts (backward compat: posts without platform field → 'ig')
+  const enriched = state.posts.map(p=>{
+    const platform = p.platform || 'ig';
+    const mediaType = p.mediaType || (platform==='tt'?'video':'');
+    const theme=state.overrides[p.url]||autoTag(p.caption);
+    const themeObj=state.themes.find(t=>t.name===theme);
+    return{...p, platform, mediaType, theme, themeColor:themeObj?.color||'#64748b', dailySales:ds[p.dateKey]||0, isSaleDay:sd.has(p.dateKey)};
+  }).sort((a,b)=>a.dateKey>b.dateKey?-1:1);
+
+  // Group cross-posts: same date + similar caption → one group
+  const grouped = [];
+  const used = new Set();
+  for(const p of enriched) {
+    if(used.has(p.url)) continue;
+    used.add(p.url);
+    const ck = captionKey(p.caption);
+    const group = { posts: [p], dateKey: p.dateKey, caption: p.caption, theme: p.theme, themeColor: p.themeColor, dailySales: p.dailySales, isSaleDay: p.isSaleDay, imageUrl: p.imageUrl };
+    // Find matching posts on same date with similar caption
+    for(const q of enriched) {
+      if(used.has(q.url)) continue;
+      if(q.dateKey === p.dateKey && captionKey(q.caption) === ck) {
+        group.posts.push(q);
+        used.add(q.url);
+      }
+    }
+    grouped.push(group);
+  }
+
+  renderPosts(grouped, enriched, ds, bl);
+  renderCorrelations(enriched, bl);
+  renderCalendar(allDates, postsByDate, ds, sd);
+  renderSettings();
+}
+
+/* ─── POSTS TAB ─── */
+function renderPosts(grouped, enriched, ds, bl) {
+  const totalSales=Object.values(ds).reduce((a,b)=>a+b,0);
+  const totalEng=state.posts.reduce((a,p)=>a+p.engagements,0);
+  const totalReach=state.posts.reduce((a,p)=>a+p.reach,0);
+  const totalViews=state.posts.reduce((a,p)=>a+p.views,0);
+  const igCount=enriched.filter(p=>p.platform!=='tt').length;
+  const ttCount=enriched.filter(p=>p.platform==='tt').length;
+
+  document.getElementById('stats-row').innerHTML=[
+    {l:'Content Pieces',v:grouped.length},{l:'Total Posts',v:`${igCount} IG · ${ttCount} TT`},{l:'Total Reach',v:fmtNum(totalReach)},
+    {l:'Total Views',v:fmtNum(totalViews)},{l:'Period Sales',v:fmtMoneyFull(totalSales)},{l:'Daily Baseline',v:fmtMoneyFull(bl)}
+  ].map(s=>`<div class="stat-chip"><span class="stat-label">${s.l}</span><span class="stat-val">${s.v}</span></div>`).join('');
+
+  document.getElementById('post-list').innerHTML = grouped.map(g=>{
+    const fl=(g.caption||'').split('\n')[0].slice(0,90);
+    const expanded=state.expandedPost===g.posts[0].url;
+    const platforms=g.posts.map(p=>p.platform==='tt'?'tt':'ig');
+    const hasIG=platforms.includes('ig'), hasTT=platforms.includes('tt');
+    const igPost=g.posts.find(p=>p.platform!=='tt');
+    const ttPost=g.posts.find(p=>p.platform==='tt');
+    const primaryPost=igPost||ttPost||g.posts[0];
+    const mc=primaryPost.mediaType==='video'?'video':primaryPost.mediaType==='carousel'?'carousel':'image';
+
+    return `<div class="post-row ${expanded?'expanded':''}" data-url="${esc(g.posts[0].url)}" style="border-left:3px solid ${g.themeColor}">
+      <div class="post-row-inner">
+        <div class="post-left">
+          <img src="${esc(g.imageUrl)}" class="post-thumb" alt="" onerror="this.style.display='none'">
+          <div class="post-info">
+            <div class="post-date-row">
+              ${hasIG?'<span class="platform-badge ig">IG</span>':''}
+              ${hasTT?'<span class="platform-badge tt">TT</span>':''}
+              <span class="post-date">${fmtShort(g.dateKey)}</span>
+              ${mc?`<span class="media-badge ${mc}">${esc(mc)}</span>`:''}
+              ${g.isSaleDay?'<span class="sale-pill">SALE</span>':''}
+            </div>
+            <p class="post-caption">${esc(fl)}${g.caption.length>90?'...':''}</p>
+            <span class="theme-pill" style="background:${g.themeColor}20;color:${g.themeColor};border:1px solid ${g.themeColor}40">${esc(g.theme)}</span>
+          </div>
+        </div>
+        <div class="post-sales-col">
+          <span class="post-sales-val" style="opacity:${g.isSaleDay?0.4:1}">${fmtMoney(g.dailySales)}</span>
+          <span class="m-lbl">Daily Sales</span>
+          ${g.isSaleDay?'<span style="font-size:9px;color:var(--red);margin-top:2px">sale day</span>':''}
+        </div>
+      </div>
+
+      ${g.posts.map(p=>{
+        const isIG=p.platform!=='tt';
+        const platClass=isIG?'ig':'tt';
+        const platLabel=isIG?'IG':'TikTok';
+        return `<div style="margin-top:10px;padding:10px 12px;background:#0a0f1a;border-radius:6px;border-left:2px solid ${isIG?'#e1306c':'#25f4ee'}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span class="platform-badge ${platClass}">${platLabel}</span>
+            <span style="font-size:11px;color:var(--text3)">${p.engagementRate} eng rate</span>
+          </div>
+          <div class="post-metrics">
+            ${[{v:fmtNum(p.views),l:'Views'},{v:fmtNum(p.reach),l:'Reach'},{v:fmtNum(p.likes),l:'Likes'},{v:p.comments||'—',l:'Comments'},{v:isIG?fmtNum(p.saves):'—',l:'Saves'},{v:p.shares||'—',l:'Shares'}].map(m=>`<div class="m-col"><span class="m-val">${m.v}</span><span class="m-lbl">${m.l}</span></div>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+
+      <div class="post-expand">
+        <div class="expand-grid">
+          ${g.posts.map(p=>{
+            const isIG=p.platform!=='tt';
+            const items=[
+              ...(isIG?[{l:'IG Followers',v:fmtNum(p.followers)},{l:'Linkin.bio',v:p.linkinBio||'—'}]:[]),
+              ...(!isIG&&p.watchTime?[{l:'TT Watch Time',v:fmtNum(Math.round(p.watchTime/1000000))+'M ms'},{l:'Full Watch Rate',v:p.fullWatchRate||'—'}]:[]),
+            ];
+            return items.map(d=>`<div class="expand-item"><span class="m-lbl">${d.l}</span><span class="expand-val">${d.v}</span></div>`).join('');
+          }).join('')}
+          ${!g.isSaleDay?`<div class="expand-item"><span class="m-lbl">vs. Baseline</span><span class="expand-val" style="color:${g.dailySales>bl?'var(--green)':'var(--red)'}"> ${(g.dailySales>bl?'+':'')+fmtMoneyFull(g.dailySales-bl)}</span></div>`:''}
+        </div>
+        <div class="theme-actions">
+          <span class="m-lbl" style="margin-right:4px">Theme:</span>
+          ${state.themes.map(t=>`<button class="theme-btn" data-url="${esc(g.posts[0].url)}" data-theme="${esc(t.name)}" style="background:${t.color}18;color:${t.color};border-color:${t.color}30;font-weight:${g.theme===t.name?700:400}">${esc(t.name)}</button>`).join('')}
+          ${igPost?`<a href="${esc(igPost.url)}" target="_blank" class="ig-link" onclick="event.stopPropagation()">Instagram ↗</a>`:''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Post click to expand
+  document.querySelectorAll('.post-row').forEach(row=>{
+    row.addEventListener('click',function(e){
+      if(e.target.closest('.theme-btn')) return;
+      const url=this.dataset.url;
+      state.expandedPost=state.expandedPost===url?null:url;
+      render();
+    });
+  });
+  // Theme override buttons — apply to all posts in the group
+  document.querySelectorAll('.theme-btn').forEach(btn=>{
+    btn.addEventListener('click',function(e){
+      e.stopPropagation();
+      const theme=this.dataset.theme;
+      // Find the group this belongs to and override all posts in it
+      const groupUrl=this.dataset.url;
+      const group=grouped.find(g=>g.posts[0].url===groupUrl);
+      if(group) group.posts.forEach(p=>{ state.overrides[p.url]=theme; });
+      else state.overrides[groupUrl]=theme;
+      saveAll('overrides',LS.overrides,state.overrides);
+      render();
+    });
+  });
+}
+
+/* ─── CORRELATIONS TAB ─── */
+function renderCorrelations(enriched, bl) {
+  // By platform
+  const byPlat={};
+  enriched.forEach(p=>{const pl=p.platform==='tt'?'TikTok':'Instagram';if(!byPlat[pl])byPlat[pl]={count:0,reach:0,eng:0,saves:0,views:0,likes:0,comments:0,shares:0};const m=byPlat[pl];m.count++;m.reach+=p.reach;m.eng+=p.engagements;m.saves+=p.saves;m.views+=p.views;m.likes+=p.likes;m.comments+=p.comments;m.shares+=p.shares;});
+  const platArr=Object.entries(byPlat).map(([pl,d])=>({platform:pl,count:d.count,avgReach:Math.round(d.reach/d.count),avgEng:Math.round(d.eng/d.count),avgSaves:Math.round(d.saves/d.count),avgViews:Math.round(d.views/d.count),avgLikes:Math.round(d.likes/d.count),avgComments:Math.round(d.comments/d.count),avgShares:Math.round(d.shares/d.count)})).sort((a,b)=>b.avgEng-a.avgEng);
+  const pColor=pl=>pl==='Instagram'?'#e1306c':'#25f4ee';
+
+  // By media type
+  const byMedia={};
+  enriched.forEach(p=>{const t=p.mediaType||'unknown';if(!byMedia[t])byMedia[t]={count:0,reach:0,eng:0,saves:0,views:0,likes:0,comments:0,shares:0};const m=byMedia[t];m.count++;m.reach+=p.reach;m.eng+=p.engagements;m.saves+=p.saves;m.views+=p.views;m.likes+=p.likes;m.comments+=p.comments;m.shares+=p.shares;});
+  const mediaArr=Object.entries(byMedia).map(([type,d])=>({type,count:d.count,avgReach:Math.round(d.reach/d.count),avgEng:Math.round(d.eng/d.count),avgSaves:Math.round(d.saves/d.count),avgViews:Math.round(d.views/d.count),avgLikes:Math.round(d.likes/d.count),avgComments:Math.round(d.comments/d.count),avgShares:Math.round(d.shares/d.count)})).sort((a,b)=>b.avgEng-a.avgEng);
+
+  // By theme
+  const byTheme={};
+  enriched.forEach(p=>{const t=p.theme;if(!byTheme[t])byTheme[t]={count:0,reach:0,eng:0,saves:0,views:0,color:p.themeColor,salesSum:0,nsCount:0};const m=byTheme[t];m.count++;m.reach+=p.reach;m.eng+=p.engagements;m.saves+=p.saves;m.views+=p.views;if(!p.isSaleDay){m.salesSum+=p.dailySales;m.nsCount++;}});
+  const themeArr=Object.entries(byTheme).map(([theme,d])=>({theme,color:d.color,count:d.count,avgReach:Math.round(d.reach/d.count),avgEng:Math.round(d.eng/d.count),avgSaves:Math.round(d.saves/d.count),avgViews:Math.round(d.views/d.count),avgDailySales:d.nsCount?Math.round(d.salesSum/d.nsCount):0})).sort((a,b)=>b.avgEng-a.avgEng);
+
+  const maxME=Math.max(...mediaArr.map(x=>x.avgEng),1), maxMS=Math.max(...mediaArr.map(x=>x.avgSaves),1);
+  const maxTE=Math.max(...themeArr.map(x=>x.avgEng),1);
+  const mColor=t=>t==='video'?'#7c3aed':t==='carousel'?'#0891b2':'#64748b';
+
+  document.getElementById('tab-correlations').innerHTML=`
+    <div class="corr-section">
+      <h3 class="corr-title">Average Per Post by Platform</h3>
+      <div class="corr-table">
+        <div class="corr-row corr-head">${['Platform','Posts','Avg Views','Avg Reach','Avg Eng','Avg Saves','Avg Likes','Avg Comments','Avg Shares'].map((h,i)=>`<span class="corr-cell${i===0?' corr-cell-wide':''}" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text4)">${h}</span>`).join('')}</div>
+        ${platArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:#cbd5e1"><span class="dot" style="background:${pColor(r.platform)}"></span>${r.platform}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves,r.avgLikes,r.avgComments,r.avgShares].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}</div>`).join('')}
+      </div>
+      <div style="margin-top:20px">${platArr.map(r=>{const maxPE=Math.max(...platArr.map(x=>x.avgEng),1);const maxPV=Math.max(...platArr.map(x=>x.avgViews),1);return`<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="dot" style="background:${pColor(r.platform)}"></span><span style="font-size:13px;font-weight:600;color:#cbd5e1">${r.platform}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts</span></div>${[{l:'Avg Views',v:r.avgViews,max:maxPV,c:pColor(r.platform)},{l:'Avg Eng',v:r.avgEng,max:maxPE,c:pColor(r.platform)}].map(b=>`<div class="bar-wrap"><span class="bar-label">${b.l}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(b.v/b.max*100,2)}%;background:linear-gradient(90deg,${b.c}80,${b.c})"><span>${fmtNum(b.v)}</span></div></div></div>`).join('')}</div>`;}).join('')}</div>
+    </div>
+    <div class="corr-section">
+      <h3 class="corr-title">Average Per Post by Media Type</h3>
+      <div class="corr-table">
+        <div class="corr-row corr-head">${['Type','Posts','Avg Views','Avg Reach','Avg Eng','Avg Saves','Avg Likes','Avg Comments','Avg Shares'].map((h,i)=>`<span class="corr-cell${i===0?' corr-cell-wide':''}" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text4)">${h}</span>`).join('')}</div>
+        ${mediaArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:#cbd5e1;text-transform:capitalize"><span class="dot" style="background:${mColor(r.type)}"></span>${esc(r.type)}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves,r.avgLikes,r.avgComments,r.avgShares].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}</div>`).join('')}
+      </div>
+      <div style="margin-top:20px">${mediaArr.map(r=>`<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="dot" style="background:${mColor(r.type)}"></span><span style="font-size:13px;font-weight:600;color:#cbd5e1;text-transform:capitalize">${esc(r.type)}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts</span></div>${[{l:'Avg Eng',v:r.avgEng,max:maxME,c:'#3b82f6'},{l:'Avg Saves',v:r.avgSaves,max:maxMS,c:'#22c55e'}].map(b=>`<div class="bar-wrap"><span class="bar-label">${b.l}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(b.v/b.max*100,2)}%;background:linear-gradient(90deg,${b.c}80,${b.c})"><span>${fmtNum(b.v)}</span></div></div></div>`).join('')}</div>`).join('')}</div>
+    </div>
+    <div class="corr-section">
+      <h3 class="corr-title">Average Per Post by Theme / Topic</h3>
+      <div class="corr-table">
+        <div class="corr-row corr-head">${['Theme','Posts','Avg Views','Avg Reach','Avg Eng','Avg Saves','Avg Daily Sales'].map((h,i)=>`<span class="corr-cell${i===0?' corr-cell-wide':''}" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text4)">${h}</span>`).join('')}</div>
+        ${themeArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:#cbd5e1"><span class="dot" style="background:${r.color}"></span>${esc(r.theme)}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}<span class="corr-cell-num" style="color:${r.avgDailySales>bl?'var(--green)':'var(--text2)'};">${fmtMoneyFull(r.avgDailySales)}</span></div>`).join('')}
+      </div>
+      <div style="margin-top:20px">${themeArr.map(r=>`<div style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span class="dot" style="background:${r.color}"></span><span style="font-size:13px;font-weight:600;color:#cbd5e1">${esc(r.theme)}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts · avg daily sales ${fmtMoney(r.avgDailySales)}</span></div><div class="bar-wrap"><span class="bar-label">Avg Eng</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(r.avgEng/maxTE*100,2)}%;background:linear-gradient(90deg,${r.color}80,${r.color})"><span>${fmtNum(r.avgEng)}</span></div></div></div></div>`).join('')}</div>
+    </div>`;
+}
+
+/* ─── CALENDAR TAB ─── */
+function renderCalendar(allDates, postsByDate, ds, sd) {
+  const maxEng=Math.max(...Object.values(postsByDate).map(arr=>arr.reduce((s,p)=>s+p.engagements,0)),1);
+  const weeks={};
+  allDates.forEach(d=>{const ws=getWeekStart(d);if(!weeks[ws])weeks[ws]={};const dow=getDOW(d);const dp=postsByDate[d]||[];weeks[ws][dow]={date:d,posts:dp.length,eng:dp.reduce((s,p)=>s+p.engagements,0),views:dp.reduce((s,p)=>s+p.views,0),sales:ds[d]||0,isSale:sd.has(d)};});
+  const sorted=Object.entries(weeks).sort(([a],[b])=>a>b?1:-1);
+
+  document.getElementById('tab-calendar').innerHTML=`
+    <h3 style="font-size:15px;font-weight:600;margin-bottom:16px">Daily Post Performance + Sales</h3>
+    <div class="cal-header">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d=>`<div class="cal-day-head">${d}</div>`).join('')}</div>
+    ${sorted.map(([,days])=>`<div class="cal-week">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(dow=>{
+      const c=days[dow];if(!c)return'<div style="min-height:100px"></div>';
+      const pct=c.eng/maxEng;
+      return`<div class="cal-cell ${c.isSale?'sale':''}" style="background:linear-gradient(135deg,#0c1220 0%,rgba(59,130,246,${Math.min(pct*0.35,0.25)}) 100%)">
+        <div class="cal-cell-date">${fmtShort(c.date)}</div>
+        <div class="cal-cell-posts">${c.posts} post${c.posts!==1?'s':''}</div>
+        <div class="cal-cell-views">${fmtNum(c.views)} views</div>
+        <div class="cal-cell-eng">${fmtNum(c.eng)} eng</div>
+        <div class="cal-cell-sales" style="color:${c.isSale?'var(--red)':'var(--green)'}">${fmtMoney(c.sales)}</div>
+        ${c.isSale?'<div class="cal-sale-badge">SALE</div>':''}
+      </div>`;
+    }).join('')}</div>`).join('')}
+    <div style="margin-top:12px;display:flex;gap:16px">
+      <span style="font-size:11px;color:var(--text3)">Darker blue = higher engagement</span>
+      <span style="font-size:11px;color:var(--red)">Red = sale period (excluded)</span>
+    </div>`;
+}
+
+/* ─── SETTINGS TAB ─── */
+function renderSettings() {
+  const el=document.getElementById('tab-settings');
+  el.innerHTML=`
+    <div class="settings-card">
+      <h3 class="settings-h">Sale / Promo Periods</h3>
+      <p class="settings-p">Sales spikes during these periods won't be attributed to social posts.</p>
+      <div id="sale-list">${state.saleDates.map((sd,i)=>`<div class="sale-row"><span class="sale-label">${esc(sd.label)}</span><span class="sale-range">${sd.start} → ${sd.end}</span><button class="remove-btn" data-sale-idx="${i}">✕</button></div>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+        <input type="text" id="sale-label" class="input" placeholder="Label (e.g. Spring Flash Sale)">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="date" id="sale-start" class="input" style="flex:1;min-width:130px">
+          <span style="color:var(--text4)">→</span>
+          <input type="date" id="sale-end" class="input" style="flex:1;min-width:130px">
+          <button class="add-btn" id="add-sale-btn">Add</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
+      <h3 class="settings-h">Theme / Topic Tags</h3>
+      <p class="settings-p">Posts are auto-tagged by matching caption keywords. Override any post's theme in the Posts tab.</p>
+      <div id="theme-list">${state.themes.map((t,i)=>`<div class="theme-row" style="border-left:3px solid ${t.color}"><span style="font-weight:600;color:${t.color};font-size:13px;min-width:120px">${esc(t.name)}</span><span class="theme-kw">${esc(t.keywords.join(', '))}</span><button class="remove-btn" data-theme-idx="${i}">✕</button></div>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+        <input type="text" id="theme-name" class="input" placeholder="Theme name (e.g. Student Life)">
+        <div style="display:flex;gap:8px">
+          <input type="text" id="theme-keywords" class="input" style="flex:1" placeholder="Keywords (comma-separated)">
+          <button class="add-btn" id="add-theme-btn">Add Theme</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-card">
+      <h3 class="settings-h">Data Status</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+        ${[{l:'Social Posts',v:state.posts.length,ok:state.posts.length>0},{l:'Sales Rows',v:state.sales.length,ok:state.sales.length>0},{l:'Sale Periods',v:state.saleDates.length,ok:state.saleDates.length>0},{l:'Theme Tags',v:state.themes.length,ok:true}].map(d=>`<div style="display:flex;align-items:center;gap:8px"><span class="status-dot" style="background:${d.ok?'var(--green)':'#334155'}"></span><span style="font-size:13px;color:var(--text2)">${d.l}: <strong style="color:var(--text)">${d.v}</strong></span></div>`).join('')}
+      </div>
+      <button class="danger-btn" id="reset-btn">Reset All Data</button>
+    </div>`;
+
+  // Sale date handlers
+  document.getElementById('add-sale-btn').addEventListener('click',()=>{
+    const start=document.getElementById('sale-start').value,end=document.getElementById('sale-end').value,label=document.getElementById('sale-label').value||'Sale';
+    if(!start||!end)return;
+    state.saleDates.push({start,end,label});saveAll('saleDates',LS.saleDates,state.saleDates);render();
+  });
+  el.querySelectorAll('[data-sale-idx]').forEach(btn=>{
+    btn.addEventListener('click',()=>{state.saleDates.splice(+btn.dataset.saleIdx,1);saveAll('saleDates',LS.saleDates,state.saleDates);render();});
+  });
+  // Theme handlers
+  document.getElementById('add-theme-btn').addEventListener('click',()=>{
+    const name=document.getElementById('theme-name').value.trim();if(!name)return;
+    const kws=document.getElementById('theme-keywords').value.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);
+    const colors=['#06b6d4','#f43f5e','#84cc16','#a855f7','#fb923c','#14b8a6','#e879f9','#facc15'];
+    state.themes.push({name,color:colors[state.themes.length%colors.length],keywords:kws});saveAll('themes',LS.themes,state.themes);render();
+  });
+  el.querySelectorAll('[data-theme-idx]').forEach(btn=>{
+    btn.addEventListener('click',()=>{state.themes.splice(+btn.dataset.themeIdx,1);saveAll('themes',LS.themes,state.themes);render();});
+  });
+  // Reset
+  document.getElementById('reset-btn').addEventListener('click',async ()=>{
+    if(!confirm('Clear ALL data? This can\'t be undone.'))return;
+    await apiReset();
+    Object.values(LS).forEach(k=>localStorage.removeItem(k));
+    state={posts:[],sales:[],saleDates:[],themes:DEFAULT_THEMES,overrides:{},expandedPost:null,activeTab:'settings',loading:false};render();
+  });
+}
+
+// Initial render (show loading state, API will call render() again when ready)
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,1733 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NITM Content Tracker</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0c0e12; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #14171e; }
+    ::-webkit-scrollbar-thumb { background: #242832; border-radius: 3px; }
+    input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+  </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/recharts/3.2.1/Recharts.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
+</head>
+<body>
+<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:14px 28px;display:flex;align-items:center;gap:28px;border-bottom:1px solid #1e293b;font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:#f1f5f9;font-weight:700;font-size:16px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#f1f5f9;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useMemo, useEffect, useRef, useCallback } = React;
+    const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } = Recharts;
+
+const DEFAULT_POSTS = [];
+const DEFAULT_DAILY = [];
+const CONTENT_TYPES = ['Funny','Sim Lab','Teaching - Product','Teaching - Poster','Teaching - Whiteboard','Inspirational','Product','Collaborations','Prerequisites','Demonstration','Giveaway','Quiz','B-roll'];
+const DEFAULT_SALE_DAYS = [];
+const DEFAULT_CLICKUP_MAP = {};
+
+const autoClassify = (post) => {
+  const cap = (post.caption || '').toLowerCase();
+  const ct = (post.auto_content_type || '').toLowerCase().trim();
+  const hardKw = ['% off','off site-wide','sale','discount','flash sale','limited time','48 hrs','24 hrs','ends tonight','ends today','shop now','grab yours','get yours','order now','buy now','hours only','last chance'];
+  if (hardKw.some(k => cap.includes(k))) return { intent:'sell', cta:'', confidence:'high', reason:'Promo language' };
+  if (ct === 'product') return { intent:'sell', cta:'', confidence:'high', reason:'Product content' };
+  if (ct === 'teaching - product') return { intent:'sell', cta:'', confidence:'high', reason:'Product-integrated teaching' };
+  if (ct === 'collaborations') return { intent:'sell', cta:'', confidence:'medium', reason:'Collaboration' };
+  const prodNames = ['bundle','flashcard','workbook','navigator','pocket guide','study guide','label lab','templates','cheat sheet','notebook','pharmacology flashcards'];
+  if (prodNames.some(p => cap.includes(p))) return { intent:'sell', cta:'', confidence:'medium', reason:'Product name in caption' };
+  const softKw = ['link in bio','check out','available now','in my shop','link below'];
+  if (softKw.some(k => cap.includes(k)) && !['funny','inspirational'].includes(ct)) return { intent:'sell', cta:'', confidence:'medium', reason:'Soft CTA in caption' };
+  if (['funny','inspirational'].includes(ct)) return { intent:'grow', cta:'', confidence:'high', reason:'Engagement content' };
+  if (['sim lab','quiz','teaching - whiteboard','teaching - poster','demonstration','prerequisites'].includes(ct)) return { intent:'grow', cta:'', confidence:'medium', reason:'Pure educational' };
+  return { intent:'grow', cta:'', confidence:'low', reason:'Default' };
+};
+
+const C = { bg:'#0c0e12', card:'#14171e', border:'#242832', text:'#e2e4e9', dim:'#7a7f8e', muted:'#4e5362', accent:'#3b82f6', green:'#22c55e', amber:'#f59e0b', red:'#ef4444', purple:'#a78bfa', teal:'#2dd4bf' };
+const intentC = { sell:C.green, grow:C.accent };
+const ctaC = { hard:C.red, soft:C.amber, none:C.muted };
+const confC = { high:C.green, medium:C.amber, low:C.red };
+const labelColors = { 'high-performer':C.green, 'grow-hero':C.purple, solid:C.amber, normal:C.muted };
+const labelEmoji = { 'high-performer':'', 'grow-hero':'', solid:'', normal:'' };
+
+const store = {
+  save: async (d) => { try { await fetch('/tracker/api/data', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(d) }); } catch(e) { console.error('Save failed', e); } },
+  load: async () => { try { const r = await fetch('/tracker/api/data'); if (!r.ok) return null; return await r.json(); } catch(e) { return null; } },
+};
+
+const parseCSV = (text) => {
+  const clean = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const rows = [];
+  var row = []; var field = ''; var inQ = false; var skipNext = false;
+  for (var i = 0; i < clean.length; i++) {
+    if (skipNext) { skipNext = false; continue; }
+    var ch = clean[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (i + 1 < clean.length && clean[i + 1] === '"') {
+          field += '"';
+          skipNext = true;
+        } else {
+          inQ = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else {
+      if (ch === '"') { inQ = true; }
+      else if (ch === ',') { row.push(field.trim()); field = ''; }
+      else if (ch === '\n') { row.push(field.trim()); if (row.some(function(f){return f;})) rows.push(row); row = []; field = ''; }
+      else { field += ch; }
+    }
+  }
+  if (field || row.length) { row.push(field.trim()); if (row.some(function(f){return f;})) rows.push(row); }
+  if (rows.length < 2) return [];
+  var hdr = rows[0];
+  return rows.slice(1).map(function(r) {
+    var obj = {};
+    hdr.forEach(function(h, idx) { obj[h] = r[idx] || ''; });
+    return obj;
+  });
+};
+
+const parseIGDate = (ds) => {
+  if (!ds) return '';
+  const iso = ds.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const months = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+  const later = ds.match(/^(\w{3})\s+(\d{1,2}),?\s+(\d{4})/);
+  if (later && months[later[1]]) return `${later[3]}-${months[later[1]]}-${later[2].padStart(2,'0')}`;
+  return '';
+};
+
+const parseIGCSV = (text) => {
+  const clean = text.replace(/^\uFEFF/, '');
+  return parseCSV(clean).map((r, i) => {
+    const date = parseIGDate(r['Time Posted'] || r['Date'] || r['date'] || '');
+    const engStr = (r['Engagement Rate'] || r['engagement_rate'] || '0').replace('%','');
+    return {
+      id: i+1,
+      date,
+      caption: r['Caption'] || r['caption'] || '',
+      media_type: (r['Media Type (Image, Video, Carousel)'] || r['Media Type'] || 'video').toLowerCase(),
+      ig_url: r['Instagram Post'] || r['Post URL'] || r['URL'] || r['Permalink'] || '',
+      engagement_rate: parseFloat(engStr) || 0,
+      views: parseInt(r['Views'] || r['Impressions'] || r['Reach'] || r['views'] || r['reach'] || 0) || 0,
+      likes: parseInt(r['Likes'] || r['likes'] || 0) || 0,
+      saves: parseInt(r['Saves'] || r['saves'] || 0) || 0,
+      shares: parseInt(r['Shares'] || r['shares'] || 0) || 0,
+      comments: parseInt(r['Comments'] || r['comments'] || 0) || 0,
+      auto_content_type: '',
+    };
+  }).filter(p => p.date);
+};
+
+const parseShopifyCSV = (text) => {
+  const rows = parseCSV(text); const d = {};
+  rows.forEach(r => { const day = r['Day']||r['date']||''; if (!day) return; if (!d[day]) d[day]={date:day,orders:0,revenue:0}; d[day].orders += parseInt(r['Quantity ordered']||0)||0; d[day].revenue += parseFloat(r['Total sales']||0)||0; });
+  return Object.values(d).sort((a,b) => a.date.localeCompare(b.date)).map(x => ({...x, revenue: Math.round(x.revenue*100)/100, lt_views:0, lt_clicks:0}));
+};
+
+const parseLTDate = (ds) => {
+  if (!ds) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ds)) return ds;
+  var parts = ds.split('/');
+  if (parts.length === 3) {
+    var m = parts[0].padStart(2,'0');
+    var d = parts[1].padStart(2,'0');
+    var y = parts[2];
+    if (y.length === 2) y = (parseInt(y) >= 50 ? '19' : '20') + y;
+    return y + '-' + m + '-' + d;
+  }
+  return ds;
+};
+
+const parseLTCSV = (text) => {
+  const rows = parseCSV(text); const d = {};
+  rows.forEach(r => {
+    const rawDay = r['date'] || r['Date'] || r['Day'] || '';
+    const day = parseLTDate(rawDay);
+    if (!day) return;
+    d[day] = {
+      lt_views: parseInt(r['total_views'] || r['Views'] || r['views'] || r['Pageviews'] || r['unique_views'] || 0) || 0,
+      lt_clicks: parseInt(r['total_clicks'] || r['Clicks'] || r['clicks'] || r['Link Clicks'] || r['unique_clicks'] || 0) || 0,
+    };
+  });
+  return d;
+};
+
+const parseCUDate = (s) => {
+  if (!s) return null;
+  const clean = s.replace(/^[A-Za-z]+,\s*/, '').replace(/(\d+)(st|nd|rd|th)/g, '$1').trim();
+  const months = {January:'01',February:'02',March:'03',April:'04',May:'05',June:'06',July:'07',August:'08',September:'09',October:'10',November:'11',December:'12'};
+  const m = clean.match(/^(\w+)\s+(\d+)\s+(\d{4})$/);
+  if (!m) return null;
+  const mm = months[m[1]]; if (!mm) return null;
+  return `${m[3]}-${mm}-${m[2].padStart(2,'0')}`;
+};
+
+const parseCUCSV = (text) => {
+  const rows = parseCSV(text);
+  return rows.map(r => ({
+    date: parseCUDate(r['Post Date (date)'] || r['Date'] || ''),
+    taskId: r['Task ID'] || '',
+    taskName: r['Task Name'] || '',
+    contentType: (r['Type (drop down)'] || r['Type'] || '').replace(/[^\x20-\x7E]/g, '').trim(),
+  })).filter(r => r.date && r.taskId);
+};
+
+const BENCH_E = [7,7,8,8,8,8,8,9,9,9,10,10,10,10,10,10,10,11,11,11,11,11,11,11,11,12,12,12,12,12,12,12,12,13,13,13,13,13,14,14,14,14,14,15,15,15,15,15,16,16,16,17,17,17,17,18,18,18,18,18,19,19,19,19,19,19,19,19,19,19,20,20,20,20,20,20,21,21,21,21,22,22,22,22,22,22,22,22,22,23,23,24,24,24,24,25,25,25,25,25,26,26,26,26,26,27,27,27,27,27,27,27,28,28,28,28,28,29,29,29,29,29,30,30,30,30,30,31,31,31,32,32,32,32,32,33,33,33,33,33,33,34,34,34,34,34,34,34,35,35,35,35,35,36,36,36,37,37,37,37,37,38,39,39,39,40,40,41,41,42,42,42,42,43,43,43,43,43,43,43,44,44,44,44,44,45,45,45,45,46,46,46,47,47,47,48,48,48,49,49,49,50,50,50,51,51,51,51,51,52,53,53,54,55,57,58,58,59,60,62,62,62,63,63,64,65,65,66,68,68,68,68,68,69,70,70,70,70,71,71,72,73,74,74,75,76,76,76,77,77,78,78,79,80,80,80,80,80,83,85,85,86,86,87,89,89,90,90,92,92,92,93,93,93,94,94,94,94,94,94,95,95,95,95,95,95,96,96,96,96,97,97,97,98,99];
+const BENCH_L = [250,350,350,350,400,400,450,450,450,450,450,450,450,550,550,550,550,550,550,550,550,550,550,550,550,550,550,550,650,650,650,650,650,680,750,750,750,750,750,750,750,750,750,780,800,800,800,800,850,850,850,850,850,850,850,850,850,850,850,850,900,950,950,950,950,950,950,950,950,950,950,950,950,950,950,950,950,950,950,950,950,1000,1000,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1050,1100,1100,1100,1100,1100,1100,1100,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1150,1200,1200,1200,1200,1200,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1250,1300,1300,1350,1350,1350,1350,1350,1350,1350,1350,1350,1350,1350,1350,1350,1350,1350,1400,1400,1400,1400,1400,1400,1400,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1450,1500,1500,1500,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1550,1600,1600,1600,1650,1650,1650,1650,1700,1750,1750,1850,1900,1900,1900,1900,1950,2000,2050,2250,2300,2300,2350,2400,2500,2900,3000,3000,3100,3300,3450,4400,4500,4500,4500,4600,4600,4900,4900,4900,5750,6600,6850,6850,8500];
+
+const toPercentile = function(val, bench) {
+  if (!bench || !bench.length) return 0;
+  var lo = 0, hi = bench.length;
+  while (lo < hi) { var mid = (lo + hi) >> 1; if (bench[mid] < val) lo = mid + 1; else hi = mid; }
+  var pctRank = (lo / bench.length) * 100;
+  if (pctRank <= 50) return Math.round(pctRank * 49 / 50);
+  if (pctRank >= 75) return 100;
+  return Math.round(50 + (pctRank - 50) * 50 / 25);
+};
+
+const NITMContentTracker = () => {
+  const [posts, setPosts] = useState(DEFAULT_POSTS);
+  const [daily, setDaily] = useState(DEFAULT_DAILY);
+  const [overrides, setOverrides] = useState({});
+  const [saleDays, setSaleDays] = useState(DEFAULT_SALE_DAYS);
+  const [view, setView] = useState('calendar');
+  const [filter, setFilter] = useState('all');
+  const [growFilters, setGrowFilters] = useState({ sort: 'score', dir: 'desc', type: '' });
+  const [sellFilters, setSellFilters] = useState({ sort: 'score', dir: 'desc', type: '' });
+  const [postFilters, setPostFilters] = useState({ sort: 'score', dir: 'desc', type: '' });
+  const [insightSort, setInsightSort] = useState('avgE');
+  const [expandedPost, setExpandedPost] = useState(null);
+  const [recentlyConfirmed, setRecentlyConfirmed] = useState({});
+  const [calMonth, setCalMonth] = useState('2026-03');
+  const [calMediaFilter, setCalMediaFilter] = useState('reels');
+  const [ltMax, setLtMax] = useState(1000);
+  const [ltMid, setLtMid] = useState(500);
+  const [clickupMap, setClickupMap] = useState(DEFAULT_CLICKUP_MAP);
+  const [goals, setGoals] = useState({ ePct: 75, eTarget: 100, eDays: 5, lDays: 5, lTarget: 100 });
+  const [weekDate, setWeekDate] = useState(() => {
+    const t = new Date(); t.setDate(t.getDate() - t.getDay());
+    return t.toISOString().slice(0,10);
+  });
+  const [saleStart, setSaleStart] = useState('');
+  const [saleEnd, setSaleEnd] = useState('');
+  const [showSaleAdd, setShowSaleAdd] = useState(false);
+  const [tlStart, setTlStart] = useState('');
+  const [tlEnd, setTlEnd] = useState('');
+  const [tlGroupBy, setTlGroupBy] = useState('day');
+  const [sheetData, setSheetData] = useState(null);
+  const [sheetName, setSheetName] = useState('');
+  const [sheetTab, setSheetTab] = useState(0);
+  const [percentileMode, setPercentileMode] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState('');
+  const [revUnlocked, setRevUnlocked] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [showPinInput, setShowPinInput] = useState(false);
+  const REV_PIN = '1234';
+  const [loaded, setLoaded] = useState(false);
+  const [caps, setCaps] = useState({ views: 500000, saves: 5000, shares: 3000, likes: 10000, eng: 7 });
+  const [weights, setWeights] = useState({ views: 35, saves: 25, shares: 15, likes: 15, eng: 10 });
+  const [showCaps, setShowCaps] = useState(false);
+  const [presets, setPresets] = useState([
+    { name: 'Balanced (Default)', weights: { views:35, saves:25, shares:15, likes:15, eng:10 }, caps: { views:500000, saves:5000, shares:3000, likes:10000, eng:7 }, builtIn: true },
+    { name: 'Sales Focus', weights: { views:25, saves:35, shares:10, likes:10, eng:20 }, caps: { views:500000, saves:5000, shares:3000, likes:10000, eng:7 }, builtIn: true },
+    { name: 'Virality Focus', weights: { views:45, saves:10, shares:30, likes:10, eng:5 }, caps: { views:500000, saves:5000, shares:3000, likes:10000, eng:7 }, builtIn: true },
+    { name: 'Engagement Focus', weights: { views:15, saves:20, shares:20, likes:20, eng:25 }, caps: { views:500000, saves:5000, shares:3000, likes:10000, eng:7 }, builtIn: true },
+  ]);
+  const [presetName, setPresetName] = useState('');
+  const igRef = useRef(null), shopRef = useRef(null), ltRef = useRef(null), cuRef = useRef(null);
+  const totalWeight = weights.views + weights.saves + weights.shares + weights.likes + weights.eng;
+
+  useEffect(() => { (async () => { const s = await store.load(); if (s) { if(s.posts?.length) setPosts(s.posts); if(s.daily?.length) setDaily(s.daily); if(s.overrides) setOverrides(s.overrides); if(s.saleDays) setSaleDays(s.saleDays); if(s.caps) setCaps(s.caps); if(s.weights) setWeights(s.weights); if(s.ltMax) setLtMax(s.ltMax); if(s.ltMid) setLtMid(s.ltMid); if(s.clickupMap) setClickupMap(s.clickupMap); if(s.goals) setGoals(s.goals); if(s.sheetData) setSheetData(s.sheetData); if(s.sheetName) setSheetName(s.sheetName); if(s.percentileMode) setPercentileMode(s.percentileMode); if(s.presets) setPresets(prev => { const builtIns = prev.filter(p=>p.builtIn); const custom = s.presets.filter(p=>!p.builtIn); return [...builtIns, ...custom]; }); } setLoaded(true); })(); }, []);
+  useEffect(() => { if (!loaded) return; const customPresets = presets.filter(p=>!p.builtIn); const t = setTimeout(() => store.save({ posts, daily, overrides, saleDays, caps, weights, ltMax, ltMid, clickupMap, goals, sheetData, sheetName, percentileMode, presets: customPresets }), 500); return () => clearTimeout(t); }, [posts, daily, overrides, saleDays, caps, weights, ltMax, ltMid, clickupMap, goals, sheetData, sheetName, percentileMode, presets, loaded]);
+
+  const classified = useMemo(() => posts.map(p => ({ ...p, auto: autoClassify(p) })), [posts]);
+  const cuAssignments = useMemo(() => {
+    const assignments = {};
+    const postsByDate = {};
+    classified.forEach(function(p) {
+      if (!postsByDate[p.date]) postsByDate[p.date] = [];
+      postsByDate[p.date].push(p);
+    });
+    Object.entries(postsByDate).forEach(function(entry) {
+      var date = entry[0], dayPosts = entry[1];
+      var tasks = clickupMap[date];
+      if (!tasks || !tasks.length) return;
+      var needsMatch = dayPosts.filter(function(p) {
+        var mt = (p.media_type||'').toLowerCase();
+        var isReel = mt === 'video' || mt === 'reel';
+        return isReel && !overrides[p.id]?.content_type && !p.auto_content_type;
+      });
+      var hasManual = dayPosts.filter(function(p) { return overrides[p.id]?.content_type || p.auto_content_type; });
+      var availTasks = tasks.slice();
+      if (needsMatch.length === 0) return;
+      if (availTasks.length === 1 && needsMatch.length === 1) {
+        assignments[needsMatch[0].id] = { contentType: availTasks[0].contentType, taskId: availTasks[0].taskId, matchConfidence: 'exact' };
+        return;
+      }
+      var pairs = [];
+      for (var pi = 0; pi < needsMatch.length; pi++) {
+        for (var ti = 0; ti < availTasks.length; ti++) {
+          var p = needsMatch[pi], t = availTasks[ti];
+          var cap = (p.caption || '').toLowerCase();
+          var name = (t.taskName || '').toLowerCase();
+          var ct = (t.contentType || '').toLowerCase();
+          var cleanName = name.replace(/^\d{4}\.\d+\s*-?\s*(\d+\s*-?\s*)?/, '').replace(/repeat\s*-?\s*/g, '').trim();
+          var nameWords = cleanName.split(/[\s_\-,.:!?()]+/).filter(function(w) { return w.length > 3; });
+          var score = 0;
+          for (var j = 0; j < nameWords.length; j++) { if (cap.indexOf(nameWords[j]) !== -1) score += 3; }
+          if (ct === 'funny' && (cap.indexOf('\u{1F602}') !== -1 || cap.indexOf('\u{1F62D}') !== -1 || cap.indexOf('\u{1F480}') !== -1 || cap.indexOf('\u{1F605}') !== -1)) score += 2;
+          if (ct === 'quiz' && (cap.indexOf('quiz') !== -1 || cap.indexOf('?') !== -1 && cap.indexOf('answer') !== -1)) score += 2;
+          if (ct === 'inspirational' && (cap.indexOf('\u2764') !== -1 || cap.indexOf('\u{1F64F}') !== -1 || cap.indexOf('proud') !== -1 || cap.indexOf('future nurse') !== -1 || cap.indexOf('worth it') !== -1)) score += 2;
+          if ((ct === 'product' || ct === 'teaching - product') && (cap.indexOf('link') !== -1 || cap.indexOf('shop') !== -1 || cap.indexOf('bundle') !== -1 || cap.indexOf('flashcard') !== -1 || cap.indexOf('workbook') !== -1 || cap.indexOf('navigator') !== -1 || cap.indexOf('label lab') !== -1)) score += 2;
+          if (ct === 'sim lab' && (cap.indexOf('sim') !== -1 || cap.indexOf('skills') !== -1 || cap.indexOf('clinical') !== -1 || cap.indexOf('patient') !== -1)) score += 2;
+          if ((ct === 'teaching - whiteboard' || ct === 'teaching - poster') && (cap.indexOf('vs') !== -1 || cap.indexOf('difference') !== -1)) score += 2;
+          if (ct === 'demonstration' && (cap.indexOf('how to') !== -1 || cap.indexOf('tip') !== -1 || cap.indexOf('technique') !== -1)) score += 2;
+          pairs.push({ postIdx: pi, taskIdx: ti, score: score, postId: p.id, task: t });
+        }
+      }
+      pairs.sort(function(a, b) { return b.score - a.score; });
+      var usedPosts = {}, usedTasks = {};
+      for (var k = 0; k < pairs.length; k++) {
+        var pair = pairs[k];
+        if (usedPosts[pair.postIdx] || usedTasks[pair.taskIdx]) continue;
+        usedPosts[pair.postIdx] = true;
+        usedTasks[pair.taskIdx] = true;
+        assignments[pair.postId] = {
+          contentType: pair.task.contentType || '',
+          taskId: pair.task.taskId || '',
+          matchConfidence: pair.score > 0 ? 'high' : 'low',
+        };
+      }
+    });
+    return assignments;
+  }, [classified, clickupMap, overrides]);
+
+  const getCls = (post) => {
+    const o = overrides[post.id];
+    const a = post.auto || autoClassify(post);
+    let ct = o?.content_type || post.auto_content_type || '';
+    let matchConfidence = 'exact';
+    if (!ct && cuAssignments[post.id]) {
+      ct = cuAssignments[post.id].contentType || '';
+      matchConfidence = cuAssignments[post.id].matchConfidence || 'low';
+    }
+    var resolvedCt = ct.toLowerCase().trim();
+    var intent = o?.intent || '';
+    if (!intent && resolvedCt) {
+      var intentMap = {
+        'funny':'grow', 'inspirational':'grow', 'collaborations':'grow',
+        'demonstration':'grow', 'giveaway':'grow', 'sim lab':'grow',
+        'product':'sell', 'teaching - product':'sell',
+        'teaching - poster':'sell', 'teaching - whiteboard':'sell',
+      };
+      intent = intentMap[resolvedCt] || '';
+    }
+    if (!intent) intent = a.intent || 'grow';
+    return { content_type: ct, intent: intent, isOverridden: !!(o?.intent||o?.content_type), matchConfidence: matchConfidence };
+  };
+  const setOv = (id, f, v) => setOverrides(p => ({...p,[id]:{...p[id],[f]:v, lastEdited: new Date().toISOString()}}));
+  const dailyMap = useMemo(() => { const m = {}; daily.forEach(d => m[d.date] = d); return m; }, [daily]);
+
+  const attr = useMemo(() => {
+    const nsd = daily.filter(d => !saleDays.includes(d.date));
+    const baseRev = nsd.length ? nsd.reduce((s,d) => s+d.revenue,0)/nsd.length : 0;
+    const norm = (val, cap) => Math.min(val / cap, 1) * 100;
+    const tw = weights.views + weights.saves + weights.shares + weights.likes + weights.eng || 1;
+    const w = { views: weights.views/tw, saves: weights.saves/tw, shares: weights.shares/tw, likes: weights.likes/tw, eng: weights.eng/tw };
+
+    const scored = classified.map(p => {
+      const cls = getCls(p);
+      const score = Math.round(
+        norm(p.views, caps.views) * w.views +
+        norm(p.saves, caps.saves) * w.saves +
+        norm(p.shares, caps.shares) * w.shares +
+        norm(p.likes, caps.likes) * w.likes +
+        norm(p.engagement_rate, caps.eng) * w.eng
+      );
+
+      const d0 = dailyMap[p.date];
+      const nd = new Date(p.date + 'T12:00:00Z'); nd.setDate(nd.getDate()+1);
+      const d1 = dailyMap[nd.toISOString().slice(0,10)];
+      const revW = ((d0?.revenue||0) + (d1?.revenue||0)) / 2;
+      const revAB = baseRev > 0 ? ((revW - baseRev) / baseRev) : 0;
+      const isSW = saleDays.includes(p.date) || saleDays.includes(nd.toISOString().slice(0,10));
+      const ltC = d0?.lt_clicks || 0;
+      const lScore = ltC <= 0 ? 0 : ltC <= ltMid ? Math.round(ltC / ltMid * 50) : Math.round(50 + Math.min((ltC - ltMid) / (ltMax - ltMid), 1) * 50);
+
+      let label = 'normal';
+      if (score >= 70 && revAB > 0.1 && !isSW) label = 'high-performer';
+      else if (score >= 70 && revAB <= 0 && !isSW) label = 'grow-hero';
+      else if (score >= 50) label = 'solid';
+
+      return { ...p, cls, score, lScore, revWindow: Math.round(revW), revAboveBaseline: Math.round(revAB*100), label, isSaleWindow: isSW, ltClicks: ltC };
+    });
+    return { scored, baseRev: Math.round(baseRev) };
+  }, [classified, daily, overrides, saleDays, dailyMap, caps, weights, ltMax]);
+
+  const processSheetFile = function(file) {
+    var name = (file.name || '').toLowerCase();
+    var isXlsx = name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.xlsm');
+    if (isXlsx) {
+      var reader = new FileReader();
+      reader.onload = function(ev) {
+        try {
+          var wb = XLSX.read(new Uint8Array(ev.target.result), {type:'array'});
+          var sheets = [];
+          wb.SheetNames.forEach(function(sn) {
+            var ws = wb.Sheets[sn];
+            var jsonData = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+            if (jsonData.length < 1) return;
+            var headers = jsonData[0].map(function(h){return String(h);});
+            var rows = jsonData.slice(1).map(function(r){return headers.map(function(h,i){return String(r[i]||'');});});
+            sheets.push({name:sn, headers:headers, rows:rows});
+          });
+          if (!sheets.length) { setUploadMsg('\u26a0\ufe0f Empty spreadsheet'); return; }
+          setSheetData(sheets);
+          setSheetTab(0);
+          setSheetName(file.name);
+          var totalRows = sheets.reduce(function(s,sh){return s+sh.rows.length;},0);
+          setUploadMsg('\u2705 Excel loaded: ' + sheets.length + ' sheet' + (sheets.length>1?'s':'') + ', ' + totalRows + ' total rows');
+        } catch(err) { setUploadMsg('\u274c Failed to parse Excel: ' + err.message); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      var reader = new FileReader();
+      reader.onload = function(ev) {
+        try {
+          var rows = parseCSV(ev.target.result);
+          if (rows.length) {
+            var headers = Object.keys(rows[0]);
+            var data = rows.map(function(r){ return headers.map(function(h){return r[h]||'';}); });
+            setSheetData([{name:'Sheet 1', headers:headers, rows:data}]);
+            setSheetTab(0);
+            setSheetName(file.name);
+            setUploadMsg('\u2705 Spreadsheet loaded: ' + rows.length + ' rows, ' + headers.length + ' columns');
+          } else setUploadMsg('\u26a0\ufe0f No data found');
+        } catch(err) { setUploadMsg('\u274c ' + err.message); }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const processUpload = (type, text) => {
+    try {
+        if (type === 'ig') {
+          const newPosts = parseIGCSV(text);
+          if (newPosts.length) {
+            setPosts(prev => {
+              const existing = new Set(prev.map(p => p.date + '|' + (p.caption||'').slice(0,30)));
+              const toAdd = newPosts.filter(p => !existing.has(p.date + '|' + (p.caption||'').slice(0,30)));
+              const maxId = prev.reduce((m, p) => Math.max(m, p.id || 0), 0);
+              const added = toAdd.map((p, i) => ({ ...p, id: maxId + i + 1 }));
+              setUploadMsg(`\u2705 ${newPosts.length} parsed \u2014 ${added.length} new, ${newPosts.length - added.length} already existed`);
+              return [...prev, ...added];
+            });
+          } else setUploadMsg('\u26a0\ufe0f No posts found in CSV');
+        }
+        else if (type === 'shopify') {
+          const newDaily = parseShopifyCSV(text);
+          if (newDaily.length) {
+            setDaily(prev => {
+              const existingDates = new Set(prev.map(d => d.date));
+              const toAdd = newDaily.filter(d => !existingDates.has(d.date)).map(d => ({ ...d, lt_views: 0, lt_clicks: 0 }));
+              setUploadMsg(`\u2705 ${newDaily.length} days parsed \u2014 ${toAdd.length} new, ${newDaily.length - toAdd.length} already existed`);
+              if (toAdd.length === 0) return prev;
+              return [...prev, ...toAdd].sort((a, b) => a.date.localeCompare(b.date));
+            });
+          } else setUploadMsg('\u26a0\ufe0f No Shopify data found');
+        }
+        else if (type === 'lt') {
+          const lt = parseLTCSV(text);
+          const n = Object.keys(lt).length;
+          if (n) {
+            setDaily(prev => {
+              const existingLT = new Set(prev.filter(d => d.lt_clicks > 0).map(d => d.date));
+              const map = {};
+              prev.forEach(d => { map[d.date] = { ...d }; });
+              let added = 0;
+              Object.entries(lt).forEach(function(entry) {
+                var date = entry[0], vals = entry[1];
+                if (existingLT.has(date)) return;
+                if (map[date]) { map[date].lt_views = vals.lt_views; map[date].lt_clicks = vals.lt_clicks; added++; }
+                else { map[date] = { date: date, orders: 0, revenue: 0, lt_views: vals.lt_views, lt_clicks: vals.lt_clicks }; added++; }
+              });
+              setUploadMsg('\u2705 ' + n + ' days parsed \u2014 ' + added + ' new, ' + (n - added) + ' already had LT data');
+              return Object.values(map).sort(function(a, b) { return a.date.localeCompare(b.date); });
+            });
+          } else setUploadMsg('\u26a0\ufe0f No Linktree data found');
+        }
+        else if (type === 'cu') {
+          const cuRows = parseCUCSV(text);
+          if (cuRows.length) {
+            const map = {...clickupMap};
+            cuRows.forEach(r => {
+              if (!map[r.date]) map[r.date] = [];
+              if (!map[r.date].some(t => t.taskId === r.taskId)) {
+                map[r.date].push({ taskId: r.taskId, taskName: r.taskName, contentType: r.contentType });
+              }
+            });
+            setClickupMap(map);
+            setPosts(prev => prev.map(p => {
+              const cuTasks = map[p.date];
+              if (!cuTasks || cuTasks.length === 0 || p.auto_content_type) return p;
+              const match = cuTasks.find(t => t.contentType);
+              return match ? { ...p, auto_content_type: match.contentType } : p;
+            }));
+            setUploadMsg(`\u2705 ${cuRows.length} ClickUp tasks loaded (${Object.keys(map).length} days)`);
+          } else setUploadMsg('\u26a0\ufe0f No ClickUp data found');
+        }
+        else if (type === 'corrections') {
+          var rows = parseCSV(text);
+          if (!rows.length) { setUploadMsg('\u26a0\ufe0f Empty file'); return; }
+          var firstRow = rows[0];
+          var hasDate = 'date' in firstRow;
+          var hasType = 'type' in firstRow;
+          var hasIntent = 'intent' in firstRow;
+          var hasUrl = 'ig_url' in firstRow;
+          if (!hasDate || !hasType || !hasIntent || !hasUrl) {
+            setUploadMsg('\u274c Invalid file. Must have headers: date, type, intent, ig_url (caption optional). Use the exported CSV as your template.');
+            return;
+          }
+          var urlToId = {};
+          posts.forEach(function(p) { if (p.ig_url) urlToId[p.ig_url.trim()] = p.id; });
+          var matched = 0, notFound = 0;
+          var newOverrides = {...overrides};
+          rows.forEach(function(r) {
+            var url = (r['ig_url'] || '').trim();
+            var ct = (r['type'] || '').trim();
+            var intent = (r['intent'] || '').trim().toLowerCase();
+            if (!url) return;
+            var pid = urlToId[url];
+            if (!pid) { notFound++; return; }
+            var ov = {...(newOverrides[pid] || {})};
+            if (ct) ov.content_type = ct;
+            if (intent === 'sell' || intent === 'grow') ov.intent = intent;
+            ov.reviewed = true;
+            ov.lastEdited = new Date().toISOString();
+            newOverrides[pid] = ov;
+            matched++;
+          });
+          setOverrides(newOverrides);
+          setUploadMsg('\u2705 ' + rows.length + ' rows \u2014 ' + matched + ' matched, ' + notFound + ' not found');
+        }
+      } catch(err) { setUploadMsg('\u274c ' + err.message); }
+  };
+
+  const calData = useMemo(() => {
+    const [y,m] = calMonth.split('-').map(Number);
+    const fd = new Date(y,m-1,1).getDay();
+    const dim = new Date(y,m,0).getDate();
+    const isReels = calMediaFilter === 'reels';
+    const isBoth = calMediaFilter === 'both';
+    
+    var buildCell = function(dateStr, day, isOtherMonth) {
+      var dayPosts = attr.scored.filter(function(p) {
+        if (p.date !== dateStr) return false;
+        if (isBoth) return true;
+        var mt = (p.media_type || '').toLowerCase();
+        return isReels ? (mt === 'video' || mt === 'reel') : (mt === 'image' || mt === 'carousel' || mt === 'photo');
+      });
+      return { day: day, date: dateStr, posts: dayPosts, metrics: dailyMap[dateStr], isSale: saleDays.includes(dateStr), isOtherMonth: !!isOtherMonth };
+    };
+    
+    const weeks = []; let wk = [];
+    if (fd > 0) {
+      var prevDim = new Date(y, m-1, 0).getDate();
+      var prevM = m - 1; var prevY = y;
+      if (prevM < 1) { prevM = 12; prevY--; }
+      for (var i = fd - 1; i >= 0; i--) {
+        var pd = prevDim - i;
+        var pds = prevY + '-' + String(prevM).padStart(2,'0') + '-' + String(pd).padStart(2,'0');
+        wk.push(buildCell(pds, pd, true));
+      }
+    }
+    for (let d=1; d<=dim; d++) {
+      const ds = y + '-' + String(m).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+      wk.push(buildCell(ds, d, false));
+      if (wk.length===7) { weeks.push(wk); wk=[]; }
+    }
+    if (wk.length > 0) {
+      var nextM = m + 1; var nextY = y;
+      if (nextM > 12) { nextM = 1; nextY++; }
+      var nd = 1;
+      while (wk.length < 7) {
+        var nds = nextY + '-' + String(nextM).padStart(2,'0') + '-' + String(nd).padStart(2,'0');
+        wk.push(buildCell(nds, nd, true));
+        nd++;
+      }
+      weeks.push(wk);
+    }
+    return weeks;
+  }, [calMonth, calMediaFilter, attr, dailyMap, saleDays]);
+
+  const insights = useMemo(() => {
+    const byType = {};
+    attr.scored.forEach(p => {
+      const ct = p.cls.content_type || 'Unknown';
+      if (!byType[ct]) byType[ct] = { posts:0, views:0, eng:0, saves:0, eScores:[], lScores:[], ltDays:{} };
+      byType[ct].posts++; byType[ct].views += p.views; byType[ct].eng += p.engagement_rate; byType[ct].saves += p.saves;
+      byType[ct].eScores.push(p.score);
+      byType[ct].lScores.push(p.lScore);
+      if (!byType[ct].ltDays[p.date]) byType[ct].ltDays[p.date] = true;
+    });
+    const typeStats = Object.entries(byType).map(([type,v]) => {
+      const days = Object.keys(v.ltDays);
+      const ltSum = days.reduce((s,d) => s+(dailyMap[d]?.lt_clicks||0),0);
+      const ltDaysN = days.filter(d => dailyMap[d]?.lt_clicks>0).length;
+      const avgE = v.eScores.length ? Math.round(v.eScores.reduce((a,b)=>a+b,0)/v.eScores.length) : 0;
+      const avgL = v.lScores.length ? Math.round(v.lScores.reduce((a,b)=>a+b,0)/v.lScores.length) : 0;
+      return { type, posts:v.posts, avgViews:Math.round(v.views/v.posts), avgEng:+(v.eng/v.posts).toFixed(1), avgLtClicks: ltDaysN>0?Math.round(ltSum/ltDaysN):0, avgSaves:Math.round(v.saves/v.posts), avgE, avgL };
+    }).sort((a,b) => b.avgE-a.avgE);
+
+    const typeRev = {};
+    daily.filter(d => !saleDays.includes(d.date)).forEach(d => {
+      const types = new Set(classified.filter(p=>p.date===d.date).map(p=>getCls(p).content_type));
+      types.forEach(ct => { if(!typeRev[ct]) typeRev[ct]={revs:[],days:0}; typeRev[ct].revs.push(d.revenue); typeRev[ct].days++; });
+    });
+    const typeRevStats = Object.entries(typeRev).filter(([_,v])=>v.days>=2).map(([type,v])=>({ type, avgRevenue:Math.round(v.revs.reduce((a,b)=>a+b,0)/v.days), days:v.days })).sort((a,b)=>b.avgRevenue-a.avgRevenue);
+    const nsd = daily.filter(d=>!saleDays.includes(d.date));
+    const baseRev = nsd.length ? Math.round(nsd.reduce((s,d)=>s+d.revenue,0)/nsd.length) : 0;
+    return { typeStats, typeRevStats, baseRev };
+  }, [classified, daily, overrides, saleDays, dailyMap]);
+
+  const fmtR = v => `$${(v/1000).toFixed(1)}K`;
+  const scoreColor = (s) => percentileMode ? (s >= 100 ? '#86efac' : s >= 50 ? C.green : C.red) : (s >= 70 ? C.green : s >= 50 ? C.amber : s >= 20 ? '#6b7280' : C.red);
+  const scoreBg = (s) => percentileMode ? (s >= 100 ? '#86efac40' : s >= 50 ? C.green+'25' : C.red+'15') : (s >= 70 ? C.green+'25' : s >= 50 ? C.amber+'20' : s >= 20 ? '#6b728015' : C.red+'15');
+  const ltHeatColor = (lt) => lt >= 550 ? C.amber : lt >= 450 ? C.amber+'cc' : lt >= 350 ? C.amber+'80' : lt > 0 ? C.amber+'50' : C.muted;
+  const ltHeatBg = (lt) => lt >= 550 ? C.amber+'25' : lt >= 450 ? C.amber+'18' : lt >= 350 ? C.amber+'10' : 'transparent';
+  const Pill = ({label,active,color,onClick,small}) => <button onClick={onClick} style={{padding:small?'3px 10px':'5px 14px',borderRadius:'6px',border:`1px solid ${active?color:C.border}`,background:active?`${color}18`:'transparent',color:active?color:C.dim,fontSize:small?'12px':'13px',fontWeight:active?600:400,cursor:'pointer',whiteSpace:'nowrap'}}>{label}</button>;
+  const eDisplay = function(p) { return percentileMode ? toPercentile(p.score, BENCH_E) : p.score; };
+  const lDisplay = function(p) { return p.lScore; };
+  const lScoreColor = (s) => s >= 50 ? C.green : C.red;
+  const lScoreBg = (s) => s >= 50 ? C.green+'25' : C.red+'15';
+  const Badge = ({p}) => { var s = eDisplay(p); return <span style={{padding:'2px 7px',borderRadius:'4px',fontSize:'11px',fontWeight:700,background:scoreBg(s),color:scoreColor(s)}}>{s}</span>; };
+  const LBadge = ({p}) => { var s = p.lScore; return <span style={{padding:'2px 7px',borderRadius:'4px',fontSize:'11px',fontWeight:700,background:lScoreBg(s),color:lScoreColor(s)}}>{s}</span>; };
+  const safeEncode = (s) => { try { return encodeURIComponent(s.replace(/[^\x20-\x7E]/g, '').trim()); } catch(e) { return ''; } };
+  const getCUUrl = (post) => {
+    if (cuAssignments[post.id]?.taskId) return 'https://app.clickup.com/t/' + cuAssignments[post.id].taskId;
+    var ovType = (overrides[post.id]?.content_type || '').toLowerCase().trim();
+    if (ovType && clickupMap[post.date]) {
+      var matchByType = clickupMap[post.date].find(function(t) { return (t.contentType || '').toLowerCase().trim() === ovType; });
+      if (matchByType) return 'https://app.clickup.com/t/' + matchByType.taskId;
+    }
+    var tasks = clickupMap[post.date];
+    if (tasks && tasks.length === 1) return 'https://app.clickup.com/t/' + tasks[0].taskId;
+    return 'https://app.clickup.com/9017029478/search?q=' + safeEncode(post.caption.slice(0,30));
+  };
+
+  return (
+    <div style={{minHeight:'100vh',background:C.bg,color:C.text,fontFamily:"'DM Sans',-apple-system,sans-serif",padding:'20px 28px'}}>
+      <div style={{maxWidth:'1600px',margin:'0 auto'}}>
+
+        {/* HEADER */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'12px',marginBottom:'20px'}}>
+          <div>
+            <h1 style={{fontSize:'26px',fontWeight:700,margin:0}}>NITM Content Tracker</h1>
+            <p style={{fontSize:'14px',color:C.dim,margin:'4px 0 0'}}>{posts.length} posts · {daily.length} days</p>
+          </div>
+          <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+            {!revUnlocked ? (
+              showPinInput ? (
+                <div style={{display:'flex',gap:'4px',alignItems:'center'}}>
+                  <input type="password" placeholder="PIN" value={pinInput} autoFocus onChange={e=>setPinInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){if(pinInput===REV_PIN){setRevUnlocked(true);setShowCaps(true);setPinInput('');setShowPinInput(false);}else{setPinInput('');}}}} style={{width:'70px',padding:'6px 8px',borderRadius:'6px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'12px'}} />
+                  <button onClick={()=>{if(pinInput===REV_PIN){setRevUnlocked(true);setShowCaps(true);setPinInput('');setShowPinInput(false);}else{setPinInput('');}}} style={{padding:'6px 10px',borderRadius:'6px',border:`1px solid ${C.accent}`,background:'transparent',color:C.accent,fontSize:'11px',cursor:'pointer'}}>Go</button>
+                  <button onClick={()=>{setShowPinInput(false);setPinInput('');}} style={{padding:'6px 8px',borderRadius:'6px',border:'none',background:'transparent',color:C.muted,fontSize:'11px',cursor:'pointer'}}>Cancel</button>
+                </div>
+              ) : (
+                <button onClick={()=>setShowPinInput(true)} style={{padding:'8px 14px',borderRadius:'8px',border:`1px solid ${C.border}`,background:'transparent',color:C.dim,fontSize:'13px',cursor:'pointer'}}>Settings</button>
+              )
+            ) : (
+              <React.Fragment>
+                <button onClick={()=>setShowCaps(!showCaps)} style={{padding:'8px 14px',borderRadius:'8px',border:`1px solid ${C.border}`,background:showCaps?C.amber+'20':'transparent',color:showCaps?C.amber:C.dim,fontSize:'13px',cursor:'pointer'}}>Settings</button>
+                <button onClick={()=>{setRevUnlocked(false);setShowCaps(false);}} style={{padding:'6px 10px',borderRadius:'6px',border:`1px solid ${C.red}40`,background:'transparent',color:C.red,fontSize:'11px',cursor:'pointer'}}>Lock</button>
+              </React.Fragment>
+            )}
+            <button onClick={()=>setShowUpload(!showUpload)} style={{padding:'8px 14px',borderRadius:'8px',border:`1px solid ${C.border}`,background:showUpload?C.accent+'20':'transparent',color:showUpload?C.accent:C.dim,fontSize:'13px',cursor:'pointer'}}>{'\u{1F4E4}'} Upload Data</button>
+          </div>
+        </div>
+
+        {showCaps && (
+          <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'20px',marginBottom:'16px'}}>
+            <h3 style={{fontSize:'14px',fontWeight:600,margin:'0 0 4px'}}>Settings</h3>
+            <p style={{fontSize:'12px',color:C.dim,margin:'0 0 16px'}}>Load a preset or adjust weights and caps manually. Weights auto-normalize to 100%.</p>
+
+            <div style={{marginBottom:'20px',padding:'12px',borderRadius:'8px',border:'1px solid '+(percentileMode?C.green+'60':C.border),background:percentileMode?C.green+'08':'transparent'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>Percentile Mode (2025 Benchmark)</div>
+                  <div style={{fontSize:'11px',color:C.dim,marginTop:'2px'}}>Scores based on 2025 reel performance. 50 = median, 100 = top 25%. Red under 50, green 50+.</div>
+                </div>
+                <button onClick={function(){setPercentileMode(!percentileMode);}} style={{padding:'6px 16px',borderRadius:'6px',border:'1px solid '+(percentileMode?C.green:C.border),background:percentileMode?C.green:C.bg,color:percentileMode?'#fff':C.dim,fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{percentileMode?'ON':'OFF'}</button>
+              </div>
+            </div>
+
+            <div style={{marginBottom:'20px',opacity:percentileMode?0.35:1,pointerEvents:percentileMode?'none':'auto',position:'relative'}}>
+              {percentileMode && <div style={{position:'absolute',top:0,right:0,fontSize:'10px',color:C.amber,fontWeight:600}}>N/A in percentile mode</div>}
+              <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Presets</div>
+              <div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'10px'}}>
+                {presets.map((p, i) => {
+                  const isActive = JSON.stringify(p.weights) === JSON.stringify(weights) && JSON.stringify(p.caps) === JSON.stringify(caps);
+                  return (
+                    <div key={i} style={{display:'flex',alignItems:'center',gap:'0'}}>
+                      <button onClick={() => { setWeights({...p.weights}); setCaps({...p.caps}); }} style={{padding:'6px 12px', borderRadius: p.builtIn ? '6px' : '6px 0 0 6px', fontSize:'12px', cursor:'pointer', border:`1px solid ${isActive ? C.accent : C.border}`, background: isActive ? C.accent+'20' : 'transparent', color: isActive ? C.accent : C.dim, fontWeight: isActive ? 600 : 400}}>{p.name}</button>
+                      {!p.builtIn && (<button onClick={() => setPresets(prev => prev.filter((_, j) => j !== i))} style={{padding:'6px 8px', borderRadius:'0 6px 6px 0', fontSize:'11px', cursor:'pointer', border:`1px solid ${C.border}`, borderLeft:'none', background:'transparent', color:C.red}} title="Delete preset">{'\u2715'}</button>)}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <input type="text" placeholder="New preset name..." value={presetName} onChange={e => setPresetName(e.target.value)} style={{padding:'6px 10px', borderRadius:'6px', border:`1px solid ${C.border}`, background:C.bg, color:C.text, fontSize:'12px', width:'200px'}} />
+                <button onClick={() => { if (!presetName.trim()) return; setPresets(prev => [...prev, { name: presetName.trim(), weights: {...weights}, caps: {...caps}, builtIn: false }]); setPresetName(''); }} style={{padding:'6px 12px', borderRadius:'6px', border:`1px solid ${C.green}40`, background:'transparent', color:C.green, fontSize:'12px', cursor:'pointer', opacity: presetName.trim() ? 1 : 0.4}}>Save current as preset</button>
+              </div>
+            </div>
+
+            <div style={{marginBottom:'20px',opacity:percentileMode?0.35:1,pointerEvents:percentileMode?'none':'auto',position:'relative'}}>
+              {percentileMode && <div style={{position:'absolute',top:0,right:0,fontSize:'10px',color:C.amber,fontWeight:600}}>N/A in percentile mode</div>}
+              <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Weights <span style={{color: totalWeight === 100 ? C.green : C.amber, fontWeight:400}}>({totalWeight}% {'\u2014'} {totalWeight === 100 ? 'balanced' : 'auto-normalizes'})</span></div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:'12px'}}>
+                {[{key:'views',label:'Views'},{key:'saves',label:'Saves'},{key:'shares',label:'Shares'},{key:'likes',label:'Likes'},{key:'eng',label:'Eng Rate'}].map(c => (
+                  <div key={c.key}>
+                    <div style={{display:'flex',justifyContent:'space-between',fontSize:'11px',color:C.dim,marginBottom:'4px'}}><span style={{fontWeight:600}}>{c.label}</span><span style={{color:C.accent,fontWeight:700}}>{weights[c.key]}%</span></div>
+                    <input type="range" min={0} max={80} step={5} value={weights[c.key]} onChange={e => setWeights(prev => ({...prev, [c.key]: parseInt(e.target.value)}))} style={{width:'100%',accentColor:C.accent}} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{opacity:percentileMode?0.35:1,pointerEvents:percentileMode?'none':'auto',position:'relative'}}>
+              {percentileMode && <div style={{position:'absolute',top:0,right:0,fontSize:'10px',color:C.amber,fontWeight:600}}>N/A in percentile mode</div>}
+              <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Caps <span style={{fontWeight:400,color:C.dim}}>{'\u2014'} value where each metric maxes out at 100</span></div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:'12px'}}>
+                {[{key:'views',label:'Views',step:50000,fmt:v=>`${(v/1000).toFixed(0)}K`},{key:'saves',label:'Saves',step:1000,fmt:v=>v.toLocaleString()},{key:'shares',label:'Shares',step:500,fmt:v=>v.toLocaleString()},{key:'likes',label:'Likes',step:2000,fmt:v=>`${(v/1000).toFixed(0)}K`},{key:'eng',label:'Eng Rate',step:1,fmt:v=>v+'%'}].map(c => (
+                  <div key={c.key}>
+                    <div style={{display:'flex',justifyContent:'space-between',fontSize:'11px',color:C.dim,marginBottom:'4px'}}><span style={{fontWeight:600}}>{c.label}</span><span style={{color:C.amber,fontWeight:700}}>{c.fmt(caps[c.key])}</span></div>
+                    <input type="range" min={c.step} max={c.key==='views'?2000000:c.key==='likes'?50000:c.key==='saves'?20000:c.key==='shares'?15000:15} step={c.key==='eng'?0.5:c.step} value={caps[c.key]} onChange={e => setCaps(prev => ({...prev, [c.key]: parseFloat(e.target.value)}))} style={{width:'100%',accentColor:C.amber}} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{marginTop:'20px'}}>
+              <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'10px'}}>L-Score Settings</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px',maxWidth:'500px'}}>
+                <div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:'11px',color:C.dim,marginBottom:'4px'}}><span style={{fontWeight:600}}>L50 Cutoff <span style={{color:C.muted,fontWeight:400}}>(red/green)</span></span><span style={{color:C.green,fontWeight:700}}>{ltMid} clicks</span></div>
+                  <input type="range" min={50} max={2000} step={50} value={ltMid} onChange={e => { var v=parseInt(e.target.value); setLtMid(v); if(v>=ltMax) setLtMax(v+100); }} style={{width:'100%',accentColor:C.green}} />
+                  <div style={{fontSize:'10px',color:C.muted,marginTop:'2px'}}>Clicks at this level = L50 (green)</div>
+                </div>
+                <div>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:'11px',color:C.dim,marginBottom:'4px'}}><span style={{fontWeight:600}}>L100 Cap</span><span style={{color:C.amber,fontWeight:700}}>{ltMax} clicks</span></div>
+                  <input type="range" min={100} max={5000} step={50} value={ltMax} onChange={e => { var v=parseInt(e.target.value); setLtMax(v); if(v<=ltMid) setLtMid(v-50); }} style={{width:'100%',accentColor:C.amber}} />
+                  <div style={{fontSize:'10px',color:C.muted,marginTop:'2px'}}>Clicks at this level = L100 (max)</div>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:'16px',marginTop:'8px',fontSize:'10px',color:C.muted}}>
+                <span><span style={{color:C.red}}>{'\u25cf'}</span> Under {ltMid} clicks = red (L0{'\u2013'}49)</span>
+                <span><span style={{color:C.green}}>{'\u25cf'}</span> {ltMid}+ clicks = green (L50+)</span>
+                <span><span style={{color:C.green}}>{'\u25cf'}</span> {ltMax}+ clicks = L100</span>
+              </div>
+            </div>
+
+            <div style={{marginTop:'20px'}}>
+              <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Weekly Goals</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:'16px'}}>
+                <div>
+                  <div style={{fontSize:'11px',color:C.dim,marginBottom:'4px'}}>Days/week hitting E target</div>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}><input type="range" min={1} max={7} step={1} value={goals.eDays||5} onChange={e=>setGoals(p=>({...p,eDays:parseInt(e.target.value)}))} style={{flex:1,accentColor:C.green}} /><span style={{fontSize:'13px',fontWeight:600,color:C.green,width:'40px'}}>{goals.eDays||5}/7</span></div>
+                </div>
+                <div>
+                  <div style={{fontSize:'11px',color:C.dim,marginBottom:'4px'}}>% posts hitting E target</div>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}><input type="range" min={10} max={100} step={5} value={goals.ePct} onChange={e=>setGoals(p=>({...p,ePct:parseInt(e.target.value)}))} style={{flex:1,accentColor:C.green}} /><span style={{fontSize:'13px',fontWeight:600,color:C.green,width:'40px'}}>{goals.ePct}%</span></div>
+                </div>
+                <div>
+                  <div style={{fontSize:'11px',color:C.dim,marginBottom:'4px'}}>E-Score target</div>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}><input type="range" min={10} max={100} step={5} value={goals.eTarget} onChange={e=>setGoals(p=>({...p,eTarget:parseInt(e.target.value)}))} style={{flex:1,accentColor:C.green}} /><span style={{fontSize:'13px',fontWeight:600,color:C.green,width:'40px'}}>{goals.eTarget}</span></div>
+                  {percentileMode && goals.eTarget !== 50 && (<div style={{fontSize:'10px',color:C.amber,marginTop:'2px',cursor:'pointer'}} onClick={function(){setGoals(function(p){return {...p,eTarget:50};});}}>Suggested: 50 (benchmark median) {'\u2014'} click to apply</div>)}
+                </div>
+                <div>
+                  <div style={{fontSize:'11px',color:C.dim,marginBottom:'4px'}}>Days/week hitting L target</div>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}><input type="range" min={1} max={7} step={1} value={goals.lDays} onChange={e=>setGoals(p=>({...p,lDays:parseInt(e.target.value)}))} style={{flex:1,accentColor:C.amber}} /><span style={{fontSize:'13px',fontWeight:600,color:C.amber,width:'40px'}}>{goals.lDays}/7</span></div>
+                </div>
+                <div>
+                  <div style={{fontSize:'11px',color:C.dim,marginBottom:'4px'}}>L-Score target</div>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}><input type="range" min={10} max={100} step={5} value={goals.lTarget} onChange={e=>setGoals(p=>({...p,lTarget:parseInt(e.target.value)}))} style={{flex:1,accentColor:C.amber}} /><span style={{fontSize:'13px',fontWeight:600,color:C.amber,width:'40px'}}>{goals.lTarget}</span></div>
+                  {goals.lTarget !== 50 && (<div style={{fontSize:'10px',color:C.amber,marginTop:'2px',cursor:'pointer'}} onClick={function(){setGoals(function(p){return {...p,lTarget:50};});}}>Suggested: 50 (L50 cutoff = {ltMid} clicks) {'\u2014'} click to apply</div>)}
+                </div>
+              </div>
+            </div>
+
+            <button onClick={()=>{const d=presets.find(p=>p.builtIn&&p.name.includes('Default'));if(d){setCaps({...d.caps});setWeights({...d.weights});}setLtMax(1000);setGoals({ePct:75,eTarget:100,eDays:5,lDays:5,lTarget:100});}} style={{marginTop:'16px',padding:'6px 12px',borderRadius:'6px',border:`1px solid ${C.border}`,background:'transparent',color:C.dim,fontSize:'12px',cursor:'pointer'}}>Reset to Balanced (Default)</button>
+          </div>
+        )}
+
+        {showUpload && (() => {
+          const makeDrop = function(type, label) {
+            return React.createElement('div', {
+              key: type,
+              onDragOver: function(e) { e.preventDefault(); e.stopPropagation(); e.currentTarget.style.borderColor=C.accent; e.currentTarget.style.background=C.accent+'10'; },
+              onDragLeave: function(e) { e.preventDefault(); e.currentTarget.style.borderColor=C.border; e.currentTarget.style.background='transparent'; },
+              onDrop: function(e) {
+                e.preventDefault(); e.stopPropagation();
+                e.currentTarget.style.borderColor=C.border; e.currentTarget.style.background='transparent';
+                var file = e.dataTransfer.files[0];
+                if (!file) return;
+                if (type === 'sheet') { processSheetFile(file); } else {
+                  var reader = new FileReader();
+                  reader.onload = function(ev) { processUpload(type, ev.target.result); };
+                  reader.readAsText(file);
+                }
+              },
+              style: {padding:'24px',borderRadius:'8px',border:'2px dashed '+C.border,background:'transparent',color:C.dim,cursor:'default',fontSize:'12px',textAlign:'center',transition:'all 0.2s'}
+            },
+              React.createElement('div', {style:{fontSize:'13px',fontWeight:600,marginBottom:'4px',color:C.text}}, label),
+              React.createElement('div', {style:{fontSize:'11px',color:C.muted}}, type==='sheet'?'Drag & drop CSV or Excel':'Drag & drop CSV here')
+            );
+          };
+          return (
+          <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+C.border,padding:'20px',marginBottom:'16px'}}>
+            <h3 style={{fontSize:'14px',fontWeight:600,margin:'0 0 12px'}}>Upload CSV Data {'\u2014'} Drag & Drop</h3>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px'}}>
+              {makeDrop('ig', 'Instagram (Later)')}
+              {makeDrop('shopify', 'Shopify Orders')}
+              {makeDrop('lt', 'Linktree')}
+              {makeDrop('cu', 'ClickUp Tasks')}
+              {makeDrop('corrections', '\u26a0 Step 2: Override Type & Intent')}
+              {makeDrop('sheet', 'Spreadsheet')}
+            </div>
+            {uploadMsg && <p style={{fontSize:'12px',color:uploadMsg.startsWith('\u2705')?C.green:uploadMsg.startsWith('\u26a0')?C.amber:C.red,marginTop:'10px'}}>{uploadMsg}</p>}
+            <div style={{marginTop:'12px',padding:'12px',borderRadius:'8px',background:'rgba(255,255,255,0.02)',border:'1px solid '+C.border}}>
+              <div style={{fontSize:'12px',color:C.text,fontWeight:600,marginBottom:'6px'}}>Override Type & Intent</div>
+              <p style={{fontSize:'11px',color:C.dim,margin:'0 0 8px'}}>1. Export the current data as CSV. 2. Edit type and intent columns in Excel/Sheets. 3. Drop the edited file back on the override zone below.</p>
+              <button onClick={function(){
+                var lines = ['date,type,intent,ig_url,media,caption'];
+                attr.scored.forEach(function(p){
+                  var cap = (p.caption||'').replace(/[^\x20-\x7E]/g,'').replace(/"/g,'""').replace(/\s+/g,' ').trim();
+                  var url = p.ig_url||'';
+                  var media = url.indexOf('/reel/') !== -1 ? 'reel' : 'post';
+                  lines.push(p.date+','+(p.cls.content_type||'')+','+(p.cls.intent||'')+','+url+','+media+',"'+cap+'"');
+                });
+                var blob = new Blob([lines.join('\n')], {type:'text/csv'});
+                var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'nitm-corrections-template.csv'; a.click();
+              }} style={{padding:'8px 16px',borderRadius:'6px',border:'1px solid '+C.accent,background:C.accent+'15',color:C.accent,fontSize:'12px',cursor:'pointer',fontWeight:600}}>Step 1: Download Current Assignments CSV</button>
+              <button onClick={function(){
+                var backup = JSON.stringify({posts:posts,daily:daily,overrides:overrides,saleDays:saleDays,caps:caps,weights:weights,ltMax:ltMax,clickupMap:clickupMap,goals:goals,presets:presets.filter(function(p){return !p.builtIn;})});
+                var blob = new Blob([backup], {type:'application/json'});
+                var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'nitm-full-backup-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+              }} style={{marginLeft:'8px',padding:'8px 16px',borderRadius:'6px',border:'1px solid '+C.border,background:'transparent',color:C.dim,fontSize:'12px',cursor:'pointer'}}>Download Full Backup (JSON)</button>
+            </div>
+          </div>
+          );
+        })()}
+
+        {/* TABS */}
+        <div style={{display:'flex',gap:'4px',background:C.card,borderRadius:'10px',padding:'3px',border:`1px solid ${C.border}`,marginBottom:'20px',overflowX:'auto'}}>
+          {[['calendar','Calendar'],['tag','Review'],['insights','Insights'],['performers','Top Reels'],['topposts','Top Posts'],['timeline','Timeline'],['sheet','Spreadsheet'],['scoring','Scoring']].map(([k,l])=>(
+            <button key={k} onClick={()=>setView(k)} style={{padding:'10px 20px',borderRadius:'8px',border:'none',background:view===k?C.accent:'transparent',color:view===k?'#fff':C.dim,fontSize:'14px',fontWeight:view===k?600:400,cursor:'pointer',whiteSpace:'nowrap'}}>{l}</button>
+          ))}
+        </div>
+
+        {/* CALENDAR */}
+        {view === 'calendar' && (
+          <div>
+            <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'16px',flexWrap:'wrap'}}>
+              <button onClick={()=>{const[y,m]=calMonth.split('-').map(Number);const d=new Date(y,m-2,1);setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);}} style={{background:'none',border:`1px solid ${C.border}`,borderRadius:'6px',color:C.dim,padding:'6px 12px',cursor:'pointer',fontSize:'14px'}}>{'\u2190'}</button>
+              <select value={calMonth.split('-')[1]} onChange={function(e){setCalMonth(calMonth.split('-')[0]+'-'+e.target.value);}} style={{padding:'6px 10px',borderRadius:'6px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'15px',fontWeight:600}}>
+                {[['01','Jan'],['02','Feb'],['03','Mar'],['04','Apr'],['05','May'],['06','Jun'],['07','Jul'],['08','Aug'],['09','Sep'],['10','Oct'],['11','Nov'],['12','Dec']].map(function(m){return <option key={m[0]} value={m[0]}>{m[1]}</option>;})}
+              </select>
+              <select value={calMonth.split('-')[0]} onChange={function(e){setCalMonth(e.target.value+'-'+calMonth.split('-')[1]);}} style={{padding:'6px 10px',borderRadius:'6px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'15px',fontWeight:600}}>
+                {[2024,2025,2026,2027].map(function(y){return <option key={y} value={String(y)}>{y}</option>;})}
+              </select>
+              <button onClick={()=>{const[y,m]=calMonth.split('-').map(Number);const d=new Date(y,m,1);setCalMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);}} style={{background:'none',border:`1px solid ${C.border}`,borderRadius:'6px',color:C.dim,padding:'6px 12px',cursor:'pointer',fontSize:'14px',position:'sticky',right:'16px',zIndex:2}}>{'\u2192'}</button>
+              <div style={{marginLeft:'auto',display:'flex',background:C.card,borderRadius:'8px',padding:'2px',border:`1px solid ${C.border}`}}>
+                {[['reels','Reels'],['posts','Posts'],['both','Both']].map(([k,l])=>(
+                  <button key={k} onClick={()=>setCalMediaFilter(k)} style={{padding:'6px 16px',borderRadius:'6px',border:'none',fontSize:'13px',fontWeight:calMediaFilter===k?600:400,cursor:'pointer',background:calMediaFilter===k?C.accent:'transparent',color:calMediaFilter===k?'#fff':C.dim}}>{l}</button>
+                ))}
+              </div>
+            </div>
+            {/* Monthly Summary Bar */}
+            {(() => {
+              const [cy,cm] = calMonth.split('-').map(Number);
+              const monthPosts = attr.scored.filter(p => { const [py,pm] = p.date.split('-').map(Number); return py === cy && pm === cm; });
+              const totalPosts = monthPosts.length;
+              const avgE = totalPosts > 0 ? Math.round(monthPosts.reduce((s,p) => s + p.score, 0) / totalPosts) : 0;
+              const avgL = totalPosts > 0 ? Math.round(monthPosts.reduce((s,p) => s + p.lScore, 0) / totalPosts) : 0;
+              const dim = new Date(cy,cm,0).getDate();
+              const monthDates = [];
+              for (var d=1; d<=dim; d++) monthDates.push(cy+'-'+String(cm).padStart(2,'0')+'-'+String(d).padStart(2,'0'));
+              const daysWithPosts = monthDates.filter(function(dt){ return monthPosts.some(function(p){ return p.date===dt; }); }).length;
+              const daysWithEHit = monthDates.filter(function(dt){ return monthPosts.filter(function(p){ return p.date===dt; }).some(function(p){ return eDisplay(p) >= goals.eTarget; }); }).length;
+              const postsHittingE = monthPosts.filter(function(p){ return eDisplay(p) >= goals.eTarget; }).length;
+              const daysPct = daysWithPosts > 0 ? Math.round((daysWithEHit / daysWithPosts) * 100) : 0;
+              const postsPct = totalPosts > 0 ? Math.round((postsHittingE / totalPosts) * 100) : 0;
+              const daysGoalMet = daysPct >= goals.ePct;
+              const cs = {padding:'8px 14px',borderRadius:'8px',textAlign:'center',fontSize:'12px',lineHeight:1.4};
+              return (
+              <div style={{display:'flex',gap:'8px',marginBottom:'14px',alignItems:'stretch'}}>
+                <div style={{...cs,background:C.card,border:'1px solid '+C.border,flex:1}}>
+                  <span style={{fontWeight:700,color:C.text,fontSize:'16px'}}>{totalPosts}</span> <span style={{color:C.dim}}>posts</span>
+                </div>
+                <div style={{...cs,background:C.card,border:'1px solid '+C.border,flex:1}}>
+                  <span style={{fontWeight:700,color:scoreColor(percentileMode?toPercentile(avgE,BENCH_E):avgE),fontSize:'16px'}}>{percentileMode?toPercentile(avgE,BENCH_E):avgE}</span> <span style={{color:C.dim}}>avg E</span>
+                </div>
+                <div style={{...cs,background:C.card,border:'1px solid '+C.border,flex:1}}>
+                  <span style={{fontWeight:700,color:lScoreColor(avgL),fontSize:'16px'}}>{avgL}</span> <span style={{color:C.dim}}>avg L</span>
+                </div>
+                <div style={{...cs,background:C.card,border:'1px solid '+(daysGoalMet?C.green+'60':C.red+'60'),flex:1.2}}>
+                  <span style={{fontWeight:700,color:daysGoalMet?C.green:C.red,fontSize:'16px'}}>{daysWithEHit}/{daysWithPosts}</span> <span style={{color:C.dim}}>days E{goals.eTarget}+</span>
+                </div>
+                <div style={{...cs,background:C.card,border:'1px solid '+C.border,flex:1}}>
+                  <span style={{fontWeight:700,color:postsPct>=goals.ePct?C.green:C.red,fontSize:'16px'}}>{postsPct}%</span> <span style={{color:C.dim}}>posts E{goals.eTarget}+</span> <span style={{color:C.muted,fontSize:'10px'}}>({postsHittingE}/{totalPosts})</span>
+                </div>
+              </div>
+              );
+            })()}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr) 180px',gap:'3px',marginBottom:'3px'}}>
+              {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=><div key={d} style={{textAlign:'center',fontSize:'12px',color:C.muted,padding:'6px',fontWeight:600}}>{d}</div>)}
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0'}}>
+                <div style={{textAlign:'center',fontSize:'11px',color:C.green,padding:'6px',fontWeight:700}}>E{goals.eTarget}+</div>
+                <div style={{textAlign:'center',fontSize:'11px',color:C.amber,padding:'6px',fontWeight:700}}>L{goals.lTarget}+</div>
+              </div>
+            </div>
+            {calData.map((wk,wi)=>{
+              var weekPosts = [];
+              var weekDateStrs = [];
+              wk.forEach(function(cell) {
+                if (!cell) return;
+                weekDateStrs.push(cell.date);
+                if (cell.posts) cell.posts.forEach(function(p) { weekPosts.push(p); });
+              });
+              var wkDaysEHit = weekDateStrs.filter(function(dateStr){
+                return weekPosts.filter(function(p){ return p.date === dateStr; }).some(function(p){ return eDisplay(p) >= goals.eTarget; });
+              }).length;
+              var wkLDays = weekDateStrs.filter(function(dateStr){
+                var dm = dailyMap[dateStr];
+                if (!dm || !dm.lt_clicks) return false;
+                var ltC=dm.lt_clicks; var ls = ltC<=0?0:ltC<=ltMid?Math.round(ltC/ltMid*50):Math.round(50+Math.min((ltC-ltMid)/(ltMax-ltMid),1)*50);
+                return ls >= goals.lTarget;
+              }).length;
+              var wkDaysGoalMet = wkDaysEHit >= (goals.eDays || 5);
+              var wkLGoalMet = wkLDays >= goals.lDays;
+
+              return (
+              <div key={wi} style={{display:'grid',gridTemplateColumns:'repeat(7,1fr) 180px',gap:'3px',marginBottom:'3px'}}>
+                {wk.map((cell,di)=>{
+                  const {day,posts:dp,metrics:mt,isSale,isOtherMonth} = cell;
+                  const lt = mt?.lt_clicks || 0;
+                  return (
+                    <div key={di} style={{background:isSale?C.red+'10':C.card,borderRadius:'8px',padding:'8px',minHeight:'140px',border:'1px solid '+(isSale?C.red+'30':C.border),overflow:'hidden',opacity:isOtherMonth?0.35:1}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'5px'}}>
+                        <span style={{fontSize:'13px',fontWeight:600,color:isSale?C.red:C.dim}}>{day}</span>
+                        {isSale && <span style={{fontSize:'9px',background:C.red+'20',color:C.red,padding:'1px 4px',borderRadius:'3px',fontWeight:700}}>SALE</span>}
+                      </div>
+                      {lt > 0 && (() => {
+                        const ls = lt<=0?0:lt<=ltMid?Math.round(lt/ltMid*50):Math.round(50+Math.min((lt-ltMid)/(ltMax-ltMid),1)*50);
+                        return (
+                        <div style={{display:'flex',alignItems:'center',gap:'4px',marginBottom:'5px'}}>
+                          <div style={{flex:1,height:'6px',background:'rgba(255,255,255,0.06)',borderRadius:'3px',overflow:'hidden'}}>
+                            <div style={{height:'100%',width:Math.min(ls,100)+'%',background:lScoreColor(ls),borderRadius:'3px'}} />
+                          </div>
+                          <span style={{fontSize:'10px',color:lScoreColor(ls),fontWeight:700,flexShrink:0}}>L{ls}</span>
+                        </div>
+                        );
+                      })()}
+                      {dp.map((p,pi)=>{
+                        const mt = (p.media_type||'').toLowerCase();
+                        const isReel = mt === 'video' || mt === 'reel';
+                        const mediaColor = isReel ? '#f472b6' : '#38bdf8';
+                        return (
+                        <div key={pi} style={{fontSize:'11px',padding:'4px 6px',marginBottom:'3px',borderRadius:'5px',background:scoreBg(eDisplay(p)),lineHeight:1.3,border:calMediaFilter==='both'?'1.5px solid '+mediaColor:'none'}}>
+                          <div style={{display:'flex',gap:'3px',alignItems:'center',justifyContent:'space-between'}}>
+                            <span style={{color:C.text,fontWeight:700,fontSize:'10px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{p.cls.content_type}</span>
+                            <Badge p={p} />
+                          </div>
+                          <div style={{display:'flex',gap:'4px',alignItems:'center',marginTop:'2px'}}>
+                            <span style={{color:C.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{p.caption.slice(0,35)}{'\u2026'}</span>
+                            <a href={getCUUrl(p)} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{padding:'1px 4px',borderRadius:'3px',fontSize:'8px',fontWeight:700,background:C.purple+'18',color:C.purple,textDecoration:'none',lineHeight:'14px',flexShrink:0}}>CU</a>
+                            <a href={p.ig_url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{padding:'1px 4px',borderRadius:'3px',fontSize:'8px',fontWeight:700,background:'#e1306c18',color:'#e1306c',textDecoration:'none',lineHeight:'14px',flexShrink:0}}>IG</a>
+                          </div>
+                        </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+                {/* Weekly summary cell */}
+                {(() => {
+                  var today = new Date().toISOString().slice(0,10);
+                  var lastDateInWeek = '';
+                  wk.forEach(function(cell){ if(cell && cell.date) lastDateInWeek = cell.date > lastDateInWeek ? cell.date : lastDateInWeek; });
+                  var weekComplete = lastDateInWeek <= today;
+                  var hasAnyData = weekPosts.length > 0;
+                  var isGrey = !weekComplete && !hasAnyData;
+                  var eColor = isGrey ? C.muted : wkDaysGoalMet ? C.green : C.red;
+                  var lColor = isGrey ? C.muted : wkLGoalMet ? C.green : C.red;
+                  var eBg = isGrey ? 'transparent' : wkDaysGoalMet ? C.green+'12' : C.red+'12';
+                  var lBg = isGrey ? 'transparent' : wkLGoalMet ? C.green+'12' : C.red+'12';
+                  return (
+                <div style={{background:C.bg,borderRadius:'8px',minHeight:'140px',border:'2px solid '+C.border,display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0',overflow:'hidden'}}>
+                  <div style={{background:eBg,padding:'14px 8px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',borderRight:'1px solid '+C.border}}>
+                    <div style={{fontSize:'28px',fontWeight:800,color:eColor,lineHeight:1}}>{wkDaysEHit}</div>
+                    <div style={{fontSize:'11px',color:C.muted,marginTop:'6px'}}>/7 days</div>
+                  </div>
+                  <div style={{background:lBg,padding:'14px 8px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+                    <div style={{fontSize:'28px',fontWeight:800,color:lColor,lineHeight:1}}>{wkLDays}</div>
+                    <div style={{fontSize:'11px',color:C.muted,marginTop:'6px'}}>/7 days</div>
+                  </div>
+                </div>
+                  );
+                })()}
+              </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* REVIEW */}
+        {view === 'tag' && (
+          <div>
+            <div style={{display:'flex',gap:'6px',marginBottom:'10px',alignItems:'center'}}>
+              <span style={{fontSize:'13px',color:C.dim,fontWeight:600}}>Show:</span>
+              <div style={{display:'flex',background:C.card,borderRadius:'8px',padding:'2px',border:'1px solid '+C.border}}>
+                {[['all','All'],['reels','Reels'],['posts','Posts']].map(function(item){var k=item[0],l=item[1];return <button key={k} onClick={function(){setCalMediaFilter(k);}} style={{padding:'6px 16px',borderRadius:'6px',border:'none',fontSize:'13px',fontWeight:calMediaFilter===k?600:400,cursor:'pointer',background:calMediaFilter===k?C.accent:'transparent',color:calMediaFilter===k?'#fff':C.dim}}>{l}</button>;})}
+              </div>
+            </div>
+            <div style={{display:'flex',gap:'6px',marginBottom:'16px',flexWrap:'wrap'}}>
+              {(() => {
+                var mediaFilter = function(p) {
+                  if (calMediaFilter === 'reels') { var mt=(p.media_type||'').toLowerCase(); return mt==='video'||mt==='reel'; }
+                  if (calMediaFilter === 'posts') { var mt=(p.media_type||'').toLowerCase(); return mt==='carousel'||mt==='image'; }
+                  return true;
+                };
+                var filtered = attr.scored.filter(mediaFilter);
+                const noTypeCount = filtered.filter(function(p){ return !p.cls.content_type; }).length;
+                const unreviewedCount = filtered.filter(function(p){ return !overrides[p.id]?.reviewed; }).length;
+                const uncertainCount = filtered.filter(function(p){ return p.cls.matchConfidence === 'low'; }).length;
+                const noIntentCount = filtered.filter(function(p){ var ct = (p.cls.content_type||'').toLowerCase().trim(); return (ct === 'quiz' || ct === 'prerequisites' || ct === 'b-roll' || ct === 'b roll') && !overrides[p.id]?.intent; }).length;
+                return [
+                  ['all','All ('+filtered.length+')'],
+                  ['notype','No Type ('+noTypeCount+')',C.red],
+                  ['uncertain','Uncertain Match ('+uncertainCount+')',C.amber],
+                  ['needsintent','Needs Intent ('+noIntentCount+')',C.purple],
+                  ['sell','Sell',C.green],
+                  ['grow','Grow',C.accent],
+                  ['unreviewed','Unreviewed ('+unreviewedCount+')',C.amber],
+                ].map(([k,l,c])=><Pill key={k} label={l} active={filter===k} color={c||C.text} onClick={()=>setFilter(k)} />);
+              })()}
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'8px 16px',fontSize:'11px',color:C.muted,textTransform:'uppercase',letterSpacing:'0.3px',borderBottom:'1px solid '+C.border,marginBottom:'6px'}}>
+              <span style={{width:'7px'}} />
+              <span style={{width:'60px'}}>Date</span>
+              <span style={{width:'110px'}}>Type</span>
+              <span style={{flex:1}}>Caption</span>
+              <span style={{width:'50px',textAlign:'right'}}>Views</span>
+              <span style={{width:'40px',textAlign:'right'}}>E</span>
+              <span style={{width:'55px',textAlign:'center'}}>Intent</span>
+              <span style={{width:'24px',textAlign:'center'}}>{'\u2713'}</span>
+              <span style={{width:'16px'}} />
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:'4px'}}>
+              {attr.scored.filter(function(p){
+                var mt=(p.media_type||'').toLowerCase();
+                if(calMediaFilter==='reels'&&mt!=='video'&&mt!=='reel')return false;
+                if(calMediaFilter==='posts'&&mt!=='carousel'&&mt!=='image')return false;
+                if(recentlyConfirmed[p.id]) return true;
+                if(filter==='sell')return p.cls.intent==='sell';
+                if(filter==='grow')return p.cls.intent==='grow';
+                if(filter==='notype')return !p.cls.content_type;
+                if(filter==='unreviewed')return !overrides[p.id]?.reviewed;
+                if(filter==='uncertain')return p.cls.matchConfidence==='low';
+                if(filter==='needsintent'){var ct=(p.cls.content_type||'').toLowerCase().trim();return (ct==='quiz'||ct==='prerequisites'||ct==='b-roll'||ct==='b roll')&&!overrides[p.id]?.intent;}
+                return true;
+              }).map(post=>{
+                const cls=post.cls, isExp=expandedPost===post.id;
+                const ov = overrides[post.id] || {};
+                const isReviewed = !!ov.reviewed;
+                const isConfirming = !!recentlyConfirmed[post.id];
+                return (
+                  <div key={post.id} style={{background:C.card,borderRadius:'8px',border:'1px solid '+(isReviewed?C.green+'40':cls.content_type?C.border:C.red+'30'),overflow:'hidden',opacity:isConfirming?0.5:1,transition:'opacity 0.3s'}}>
+                    <div onClick={()=>setExpandedPost(isExp?null:post.id)} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 16px',cursor:'pointer'}}>
+                      <div style={{width:'8px',height:'8px',borderRadius:'50%',background:confC[post.auto?.confidence||'low'],flexShrink:0}} />
+                      <span style={{width:'60px',fontSize:'13px',color:C.dim,flexShrink:0}}>{post.date.slice(5)}</span>
+                      <span style={{width:'110px',padding:'3px 8px',borderRadius:'4px',fontSize:'11px',background:cls.content_type?(cls.matchConfidence==='low'?C.amber+'20':'rgba(255,255,255,0.05)'):C.red+'20',color:cls.content_type?(cls.matchConfidence==='low'?C.amber:C.text):C.red,flexShrink:0,fontWeight:cls.content_type?400:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cls.content_type ? (cls.matchConfidence==='low'?'\u26a0 ':'')+cls.content_type : '\u26a0 No Type'}</span>
+                      <span style={{flex:1,fontSize:'13px',color:C.dim,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{post.caption}</span>
+                      <span style={{width:'50px',fontSize:'12px',color:C.dim,flexShrink:0,textAlign:'right'}}>{(post.views/1000).toFixed(0)}K</span>
+                      <span style={{width:'40px',flexShrink:0,textAlign:'right'}}><Badge p={post} /></span>
+                      <span style={{width:'55px',padding:'3px 8px',borderRadius:'4px',fontSize:'11px',background:intentC[cls.intent]+'18',color:intentC[cls.intent],textAlign:'center',flexShrink:0}}>{cls.intent}</span>
+                      <span onClick={function(e){
+                        e.stopPropagation();
+                        var newReviewed = !isReviewed;
+                        if (newReviewed && cls.matchConfidence === 'low' && cls.content_type) {
+                          setOverrides(function(prev){return {...prev,[post.id]:{...prev[post.id],content_type:cls.content_type,reviewed:true,lastEdited:new Date().toISOString()}};});
+                        } else {
+                          setOverrides(function(prev){return {...prev,[post.id]:{...prev[post.id],reviewed:newReviewed,lastEdited:new Date().toISOString()}};});
+                        }
+                        if (newReviewed) {
+                          setRecentlyConfirmed(function(prev){var n={...prev};n[post.id]=true;return n;});
+                          setTimeout(function(){setRecentlyConfirmed(function(prev){var n={...prev};delete n[post.id];return n;});},5000);
+                        }
+                      }} style={{width:'24px',textAlign:'center',fontSize:'16px',cursor:'pointer',color:isReviewed?C.green:C.muted,flexShrink:0}}>{isReviewed?'\u2713':'\u25cb'}</span>
+                      <span style={{color:C.muted,fontSize:'14px',transform:isExp?'rotate(180deg)':'none',flexShrink:0}}>{'\u25be'}</span>
+                    </div>
+                    {isExp && (
+                      <div style={{padding:'0 16px 16px',borderTop:'1px solid '+C.border}}>
+                        <div style={{display:'flex',gap:'20px',paddingTop:'12px',flexWrap:'wrap',fontSize:'13px',alignItems:'flex-end'}}>
+                          <div style={{color:C.muted,minWidth:'180px'}}>
+                            <div style={{fontWeight:600,color:C.dim}}>Auto: {post.auto?.intent} {'\u00b7'} {post.auto?.reason}</div>
+                            <div>Score: {post.score}{revUnlocked ? ' \u00b7 Rev: '+fmtR(post.revWindow)+' ('+(post.revAboveBaseline>0?'+':'')+post.revAboveBaseline+'% vs baseline)' : ''}</div>
+                            {ov.lastEdited && <div style={{marginTop:'4px',fontSize:'11px',color:C.muted}}>Last edited: {new Date(ov.lastEdited).toLocaleString()}</div>}
+                          </div>
+                          <div>
+                            <div style={{fontWeight:600,color:C.dim,marginBottom:'4px'}}>Type</div>
+                            <select value={cls.content_type||''} onChange={function(e){
+                              var val = e.target.value;
+                              setOv(post.id,'content_type',val);
+                              setRecentlyConfirmed(function(prev){var n={...prev};n[post.id]=true;return n;});
+                              setTimeout(function(){setRecentlyConfirmed(function(prev){var n={...prev};delete n[post.id];return n;});},5000);
+                            }} style={{background:C.bg,color:C.text,border:'1px solid '+C.border,borderRadius:'6px',padding:'5px 10px',fontSize:'13px'}}>
+                              <option value="">{'\u2014'} Select {'\u2014'}</option>
+                              {CONTENT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
+                          <div><div style={{fontWeight:600,color:C.dim,marginBottom:'4px'}}>Intent</div><div style={{display:'flex',gap:'4px'}}>{['sell','grow'].map(i=><Pill key={i} label={i} active={cls.intent===i} color={intentC[i]} onClick={function(){
+                            setOv(post.id,'intent',i);
+                            setRecentlyConfirmed(function(prev){var n={...prev};n[post.id]=true;return n;});
+                            setTimeout(function(){setRecentlyConfirmed(function(prev){var n={...prev};delete n[post.id];return n;});},5000);
+                          }} small />)}</div></div>
+                          <a href={post.ig_url} target="_blank" rel="noopener noreferrer" style={{fontSize:'13px',color:C.accent,textDecoration:'none',alignSelf:'flex-end',marginLeft:'auto'}}>View on IG {'\u2192'}</a>
+                        </div>
+                        <div style={{marginTop:'10px',fontSize:'13px',color:C.dim,padding:'8px 12px',background:'rgba(255,255,255,0.02)',borderRadius:'6px'}}>{post.caption}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* INSIGHTS */}
+        {view === 'insights' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'20px',maxWidth:'1200px'}}>
+            <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'20px'}}>
+              <h2 style={{fontSize:'16px',fontWeight:600,margin:'0 0 4px'}}>Performance by Content Type</h2>
+              <p style={{fontSize:'12px',color:C.dim,margin:'0 0 16px'}}>Click a column header to sort</p>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:'13px'}}>
+                <thead><tr style={{borderBottom:`1px solid ${C.border}`}}>
+                  {[['type','Type'],['posts','#'],['avgE','Avg E'],['avgL','Avg L'],['avgViews','Avg Views'],['avgEng','Avg Eng%'],['avgLtClicks','Avg LT Clicks']].map(function(col){
+                    var key = col[0], label = col[1];
+                    var isActive = insightSort === key;
+                    return <th key={key} onClick={function(){setInsightSort(key);}} style={{padding:'10px 8px',textAlign:key==='type'?'left':'right',fontSize:'11px',color:isActive?C.accent:C.muted,fontWeight:600,textTransform:'uppercase',cursor:'pointer',userSelect:'none'}}>{label}{isActive?' \u25bc':''}</th>;
+                  })}
+                </tr></thead>
+                <tbody>{[].concat(insights.typeStats).sort(function(a,b){
+                  if(insightSort==='type') return (a.type||'').localeCompare(b.type||'');
+                  return (b[insightSort]||0)-(a[insightSort]||0);
+                }).map((s,i)=>(
+                  <tr key={s.type} style={{borderBottom:`1px solid ${C.border}`,background:i%2?'rgba(255,255,255,0.015)':'transparent'}}>
+                    <td style={{padding:'10px 8px',fontWeight:600,fontSize:'13px'}}>{s.type || '\u2014'}</td>
+                    <td style={{padding:'10px 8px',textAlign:'right',color:C.muted}}>{s.posts}</td>
+                    <td style={{padding:'10px 8px',textAlign:'right'}}><span style={{padding:'2px 6px',borderRadius:'3px',fontSize:'12px',fontWeight:700,background:scoreBg(s.avgE),color:scoreColor(s.avgE)}}>{s.avgE}</span></td>
+                    <td style={{padding:'10px 8px',textAlign:'right'}}><span style={{padding:'2px 6px',borderRadius:'3px',fontSize:'12px',fontWeight:700,background:scoreBg(s.avgL),color:scoreColor(s.avgL)}}>{s.avgL}</span></td>
+                    <td style={{padding:'10px 8px',textAlign:'right',color:C.dim}}>{s.avgViews>=1000000?`${(s.avgViews/1000000).toFixed(1)}M`:`${(s.avgViews/1000).toFixed(0)}K`}</td>
+                    <td style={{padding:'10px 8px',textAlign:'right',color:C.dim}}>{s.avgEng}%</td>
+                    <td style={{padding:'10px 8px',textAlign:'right',color:C.amber}}>{s.avgLtClicks}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+
+            <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'20px'}}>
+              <h2 style={{fontSize:'16px',fontWeight:600,margin:'0 0 4px'}}>Avg E-Score & L-Score by Content Type</h2>
+              <p style={{fontSize:'12px',color:C.dim,margin:'0 0 16px'}}>Which types drive engagement vs clicks?</p>
+              <ResponsiveContainer width="100%" height={350}>
+                <BarChart data={insights.typeStats} margin={{bottom:60}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="type" angle={-35} textAnchor="end" fontSize={11} stroke={C.muted} interval={0} height={80} />
+                  <YAxis domain={[0,100]} stroke={C.muted} fontSize={11} />
+                  <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:'8px',color:C.text,fontSize:'12px'}} />
+                  <Legend />
+                  <Bar dataKey="avgE" fill={C.accent} radius={[4,4,0,0]} name="Avg E-Score" />
+                  <Bar dataKey="avgL" fill={C.amber} radius={[4,4,0,0]} name="Avg L-Score" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'20px'}}>
+              <h2 style={{fontSize:'16px',fontWeight:600,margin:'0 0 4px'}}>Avg Views & LT Clicks by Content Type</h2>
+              <p style={{fontSize:'12px',color:C.dim,margin:'0 0 16px'}}>Raw volume comparison</p>
+              <ResponsiveContainer width="100%" height={350}>
+                <BarChart data={insights.typeStats} margin={{bottom:60}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="type" angle={-35} textAnchor="end" fontSize={11} stroke={C.muted} interval={0} height={80} />
+                  <YAxis yAxisId="left" tickFormatter={v=>`${(v/1000).toFixed(0)}K`} stroke={C.muted} fontSize={11} />
+                  <YAxis yAxisId="right" orientation="right" stroke={C.muted} fontSize={11} />
+                  <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:'8px',color:C.text,fontSize:'12px'}} formatter={(v,n)=>[n==='avgViews'?`${(v/1000).toFixed(0)}K`:v,n==='avgViews'?'Avg Views':'Avg LT Clicks']} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="avgViews" fill={C.accent} radius={[4,4,0,0]} name="Avg Views" />
+                  <Bar yAxisId="right" dataKey="avgLtClicks" fill={C.amber} radius={[4,4,0,0]} name="Avg LT Clicks" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {revUnlocked && (
+            <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'20px'}}>
+              <h2 style={{fontSize:'16px',fontWeight:600,margin:'0 0 4px'}}>Revenue by Content Type</h2>
+              <p style={{fontSize:'12px',color:C.dim,margin:'0 0 16px'}}>Avg daily revenue on non-sale days when each type was posted</p>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={insights.typeRevStats} layout="vertical" margin={{left:120}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis type="number" tickFormatter={v=>`$${(v/1000).toFixed(0)}K`} stroke={C.muted} fontSize={11} />
+                  <YAxis type="category" dataKey="type" stroke={C.muted} fontSize={11} width={110} />
+                  <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:'8px',color:C.text,fontSize:'12px'}} formatter={v=>[`$${v.toLocaleString()}`,'Avg Revenue']} />
+                  <Bar dataKey="avgRevenue" fill={C.green} radius={[0,4,4,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+              <div style={{fontSize:'11px',color:C.dim,textAlign:'center',marginTop:'6px'}}>Baseline: <span style={{color:C.amber,fontWeight:600}}>{fmtR(insights.baseRev)}</span>/day</div>
+            </div>
+            )}
+          </div>
+        )}
+
+        {/* PERFORMERS */}
+        {view === 'performers' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+            <div style={{background:`linear-gradient(135deg,rgba(34,197,94,0.06),rgba(59,130,246,0.06))`,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'16px'}}>
+              <h3 style={{fontSize:'15px',fontWeight:600,margin:'0 0 8px'}}>Scoring</h3>
+              <p style={{fontSize:'13px',color:C.dim,margin:0,lineHeight:1.6}}>
+                <strong style={{color:C.text}}>E-Score (0-100)</strong> = engagement score per your Settings preset. <strong style={{color:C.text}}>L-Score</strong> = Linktree clicks on that post's day.<br/>
+                <span style={{color:C.accent}}>Grow</span> = reels with grow intent. <span style={{color:C.green}}>Sell</span> = reels with sell intent. L-score shown alongside.<br/>
+                <span style={{color:C.muted,fontStyle:'italic'}}>Click column headers to sort {'\u25bc\u25b2'}</span>
+              </p>
+            </div>
+
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'16px',alignItems:'start'}}>
+              {/* GROW */}
+              <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'16px',maxHeight:'80vh',display:'flex',flexDirection:'column'}}>
+                <h3 style={{fontSize:'15px',fontWeight:600,margin:'0 0 8px',color:C.accent,flexShrink:0}}>Grow</h3>
+                <div style={{display:'flex',gap:'8px',marginBottom:'10px',alignItems:'center',flexShrink:0}}>
+                  <select value={growFilters.type} onChange={e=>setGrowFilters(p=>({...p,type:e.target.value}))} style={{padding:'4px 8px',borderRadius:'4px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'11px'}}>
+                    <option value="">All types</option>
+                    {CONTENT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'6px 10px',fontSize:'11px',color:C.muted,textTransform:'uppercase',letterSpacing:'0.3px',flexShrink:0,borderBottom:`1px solid ${C.border}`,marginBottom:'4px',paddingBottom:'8px'}}>
+                  <span onClick={()=>setGrowFilters(p=>({...p,sort:'score',dir:p.sort==='score'&&p.dir==='desc'?'asc':'desc'}))} style={{width:'44px',textAlign:'right',cursor:'pointer',color:growFilters.sort==='score'?C.accent:C.muted,userSelect:'none'}}>E {growFilters.sort==='score'?(growFilters.dir==='desc'?'\u25bc':'\u25b2'):''}</span>
+                  <span onClick={()=>setGrowFilters(p=>({...p,sort:'views',dir:p.sort==='views'&&p.dir==='desc'?'asc':'desc'}))} style={{width:'55px',textAlign:'right',cursor:'pointer',color:growFilters.sort==='views'?C.accent:C.muted,userSelect:'none'}}>Views {growFilters.sort==='views'?(growFilters.dir==='desc'?'\u25bc':'\u25b2'):''}</span>
+                  <span style={{width:'100px'}}>Type</span>
+                  <span style={{flex:1,maxWidth:'200px'}}>Caption</span>
+                  <span style={{width:'52px'}} />
+                </div>
+                <div style={{overflowY:'auto',flex:1}}>
+                  {attr.scored
+                    .filter(p => p.cls.intent === 'grow' && (p.media_type === 'video' || p.media_type === 'reel') && (!growFilters.type || p.cls.content_type === growFilters.type))
+                    .sort((a,b) => { var m = growFilters.dir==='asc'?1:-1; return growFilters.sort==='views' ? (b.views-a.views)*m : (b.score-a.score)*m; })
+                    .map((p,i) => (
+                    <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 10px',borderRadius:'6px',background:i%2?'rgba(255,255,255,0.015)':'transparent'}}>
+                      <span style={{width:'44px',textAlign:'right',flexShrink:0}}><Badge p={p} /></span>
+                      <span style={{width:'55px',fontSize:'12px',color:C.dim,textAlign:'right',flexShrink:0}}>{p.views>=1000000?`${(p.views/1000000).toFixed(1)}M`:`${(p.views/1000).toFixed(0)}K`}</span>
+                      <span style={{width:'100px',fontSize:'11px',color:C.accent,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flexShrink:0}}>{p.cls.content_type}</span>
+                      <span style={{flex:1,fontSize:'12px',color:C.dim,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'200px'}}>{p.caption}</span>
+                      <span style={{display:'flex',gap:'4px',flexShrink:0}}>
+                        <a href={getCUUrl(p)} target="_blank" rel="noopener noreferrer" style={{padding:'3px 7px',borderRadius:'4px',fontSize:'10px',fontWeight:600,background:C.purple+'18',color:C.purple,textDecoration:'none',whiteSpace:'nowrap'}}>CU</a>
+                        <a href={p.ig_url} target="_blank" rel="noopener noreferrer" style={{padding:'3px 7px',borderRadius:'4px',fontSize:'10px',fontWeight:600,background:'#e1306c18',color:'#e1306c',textDecoration:'none',whiteSpace:'nowrap'}}>IG</a>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* SELL */}
+              <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'16px',maxHeight:'80vh',display:'flex',flexDirection:'column'}}>
+                <h3 style={{fontSize:'15px',fontWeight:600,margin:'0 0 8px',color:C.green,flexShrink:0}}>Sell</h3>
+                <div style={{display:'flex',gap:'8px',marginBottom:'10px',alignItems:'center',flexShrink:0}}>
+                  <select value={sellFilters.type} onChange={e=>setSellFilters(p=>({...p,type:e.target.value}))} style={{padding:'4px 8px',borderRadius:'4px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'11px'}}>
+                    <option value="">All types</option>
+                    {CONTENT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'6px 10px',fontSize:'11px',color:C.muted,textTransform:'uppercase',letterSpacing:'0.3px',flexShrink:0,borderBottom:`1px solid ${C.border}`,marginBottom:'4px',paddingBottom:'8px'}}>
+                  <span onClick={()=>setSellFilters(p=>({...p,sort:'score',dir:p.sort==='score'&&p.dir==='desc'?'asc':'desc'}))} style={{width:'44px',textAlign:'right',cursor:'pointer',color:sellFilters.sort==='score'?C.accent:C.muted,userSelect:'none'}}>E {sellFilters.sort==='score'?(sellFilters.dir==='desc'?'\u25bc':'\u25b2'):''}</span>
+                  <span onClick={()=>setSellFilters(p=>({...p,sort:'lScore',dir:p.sort==='lScore'&&p.dir==='desc'?'asc':'desc'}))} style={{width:'50px',textAlign:'right',cursor:'pointer',color:sellFilters.sort==='lScore'?C.accent:C.muted,userSelect:'none'}}>L {sellFilters.sort==='lScore'?(sellFilters.dir==='desc'?'\u25bc':'\u25b2'):''}</span>
+                  <span onClick={()=>setSellFilters(p=>({...p,sort:'views',dir:p.sort==='views'&&p.dir==='desc'?'asc':'desc'}))} style={{width:'55px',textAlign:'right',cursor:'pointer',color:sellFilters.sort==='views'?C.accent:C.muted,userSelect:'none'}}>Views {sellFilters.sort==='views'?(sellFilters.dir==='desc'?'\u25bc':'\u25b2'):''}</span>
+                  <span style={{width:'100px'}}>Type</span>
+                  <span style={{flex:1,maxWidth:'200px'}}>Caption</span>
+                  <span style={{width:'52px'}} />
+                </div>
+                <div style={{overflowY:'auto',flex:1}}>
+                  {attr.scored
+                    .filter(p => p.cls.intent === 'sell' && (p.media_type === 'video' || p.media_type === 'reel') && (!sellFilters.type || p.cls.content_type === sellFilters.type))
+                    .sort((a,b) => { var m = sellFilters.dir==='asc'?1:-1; return sellFilters.sort==='views' ? (b.views-a.views)*m : sellFilters.sort==='lScore' ? (b.lScore-a.lScore)*m : (b.score-a.score)*m; })
+                    .map((p,i) => (
+                    <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 10px',borderRadius:'6px',background:i%2?'rgba(255,255,255,0.015)':'transparent'}}>
+                      <span style={{width:'44px',textAlign:'right',flexShrink:0}}><Badge p={p} /></span>
+                      <span style={{width:'50px',textAlign:'right',flexShrink:0}}><LBadge p={p} /></span>
+                      <span style={{width:'55px',fontSize:'12px',color:C.dim,textAlign:'right',flexShrink:0}}>{p.views>=1000000?`${(p.views/1000000).toFixed(1)}M`:`${(p.views/1000).toFixed(0)}K`}</span>
+                      <span style={{width:'100px',fontSize:'11px',color:C.green,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flexShrink:0}}>{p.cls.content_type}</span>
+                      <span style={{flex:1,fontSize:'12px',color:C.dim,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'200px'}}>{p.caption}</span>
+                      <span style={{display:'flex',gap:'4px',flexShrink:0}}>
+                        <a href={getCUUrl(p)} target="_blank" rel="noopener noreferrer" style={{padding:'3px 7px',borderRadius:'4px',fontSize:'10px',fontWeight:600,background:C.purple+'18',color:C.purple,textDecoration:'none',whiteSpace:'nowrap'}}>CU</a>
+                        <a href={p.ig_url} target="_blank" rel="noopener noreferrer" style={{padding:'3px 7px',borderRadius:'4px',fontSize:'10px',fontWeight:600,background:'#e1306c18',color:'#e1306c',textDecoration:'none',whiteSpace:'nowrap'}}>IG</a>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TOP POSTS */}
+        {view === 'topposts' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+            <div style={{background:`linear-gradient(135deg,rgba(56,189,248,0.06),rgba(244,114,182,0.06))`,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'16px'}}>
+              <h3 style={{fontSize:'15px',fontWeight:600,margin:'0 0 8px'}}>Top Posts</h3>
+              <p style={{fontSize:'13px',color:C.dim,margin:0,lineHeight:1.6}}>
+                Carousels and images. Reels are in the Top Reels tab.<br/>
+                <span style={{color:C.muted,fontStyle:'italic'}}>Click column headers to sort {'\u25bc\u25b2'}</span>
+              </p>
+            </div>
+
+            <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'16px',maxHeight:'80vh',display:'flex',flexDirection:'column'}}>
+              <div style={{display:'flex',gap:'8px',marginBottom:'10px',alignItems:'center',flexShrink:0}}>
+                <h3 style={{fontSize:'15px',fontWeight:600,margin:0,color:'#38bdf8'}}>Posts</h3>
+                <select value={postFilters.type} onChange={e=>setPostFilters(p=>({...p,type:e.target.value}))} style={{padding:'4px 8px',borderRadius:'4px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'11px'}}>
+                  <option value="">All types</option>
+                  {CONTENT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'6px 10px',fontSize:'11px',color:C.muted,textTransform:'uppercase',letterSpacing:'0.3px',flexShrink:0,borderBottom:`1px solid ${C.border}`,marginBottom:'4px',paddingBottom:'8px'}}>
+                <span onClick={()=>setPostFilters(p=>({...p,sort:'score',dir:p.sort==='score'&&p.dir==='desc'?'asc':'desc'}))} style={{width:'44px',textAlign:'right',cursor:'pointer',color:postFilters.sort==='score'?C.accent:C.muted,userSelect:'none'}}>E {postFilters.sort==='score'?(postFilters.dir==='desc'?'\u25bc':'\u25b2'):''}</span>
+                <span onClick={()=>setPostFilters(p=>({...p,sort:'views',dir:p.sort==='views'&&p.dir==='desc'?'asc':'desc'}))} style={{width:'55px',textAlign:'right',cursor:'pointer',color:postFilters.sort==='views'?C.accent:C.muted,userSelect:'none'}}>Views {postFilters.sort==='views'?(postFilters.dir==='desc'?'\u25bc':'\u25b2'):''}</span>
+                <span style={{width:'100px'}}>Type</span>
+                <span style={{flex:1,maxWidth:'200px'}}>Caption</span>
+                <span style={{width:'52px'}} />
+              </div>
+              <div style={{overflowY:'auto',flex:1}}>
+                {attr.scored
+                  .filter(p => (p.media_type === 'carousel' || p.media_type === 'image') && (!postFilters.type || p.cls.content_type === postFilters.type))
+                  .sort((a,b) => { var m = postFilters.dir==='asc'?1:-1; return postFilters.sort==='views' ? (b.views-a.views)*m : (b.score-a.score)*m; })
+                  .map((p,i) => (
+                  <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 10px',borderRadius:'6px',background:i%2?'rgba(255,255,255,0.015)':'transparent'}}>
+                    <span style={{width:'44px',textAlign:'right',flexShrink:0}}><Badge p={p} /></span>
+                    <span style={{width:'55px',fontSize:'12px',color:C.dim,textAlign:'right',flexShrink:0}}>{p.views>=1000000?`${(p.views/1000000).toFixed(1)}M`:`${(p.views/1000).toFixed(0)}K`}</span>
+                    <span style={{width:'100px',fontSize:'11px',color:'#38bdf8',fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flexShrink:0}}>{p.cls.content_type}</span>
+                    <span style={{flex:1,fontSize:'12px',color:C.dim,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'200px'}}>{p.caption}</span>
+                    <span style={{display:'flex',gap:'4px',flexShrink:0}}>
+                      <a href={getCUUrl(p)} target="_blank" rel="noopener noreferrer" style={{padding:'3px 7px',borderRadius:'4px',fontSize:'10px',fontWeight:600,background:C.purple+'18',color:C.purple,textDecoration:'none',whiteSpace:'nowrap'}}>CU</a>
+                      <a href={p.ig_url} target="_blank" rel="noopener noreferrer" style={{padding:'3px 7px',borderRadius:'4px',fontSize:'10px',fontWeight:600,background:'#e1306c18',color:'#e1306c',textDecoration:'none',whiteSpace:'nowrap'}}>IG</a>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SCORING */}
+        {view === 'scoring' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'20px',maxWidth:'1200px'}}>
+            <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+C.border,padding:'24px'}}>
+              <h2 style={{fontSize:'18px',fontWeight:700,margin:'0 0 16px',color:C.text}}>How the E-Score Works</h2>
+              <p style={{fontSize:'13px',color:C.dim,lineHeight:1.6,margin:'0 0 16px'}}>
+                Every reel gets an <strong style={{color:C.text}}>E-Score from 0 to 100</strong> based on 5 engagement metrics. Each metric is measured against a cap (the maximum expected value), then weighted by importance.
+              </p>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginBottom:'20px'}}>
+                {[{label:'Views',weight:weights.views,cap:caps.views,icon:'\u{1F441}',desc:'How many people saw it'},{label:'Saves',weight:weights.saves,cap:caps.saves,icon:'\u{1F516}',desc:'People saving for later'},{label:'Shares',weight:weights.shares,cap:caps.shares,icon:'\u{1F4E4}',desc:'DM shares and reposts'},{label:'Likes',weight:weights.likes,cap:caps.likes,icon:'\u2764\ufe0f',desc:'Simple engagement'},{label:'Eng Rate',weight:weights.eng,cap:caps.eng+'%',icon:'\u{1F4CA}',desc:'Engagements \u00f7 views'}].map(function(m){
+                  var pct = Math.round(m.weight / (weights.views+weights.saves+weights.shares+weights.likes+weights.eng) * 100);
+                  return (
+                  <div key={m.label} style={{background:C.bg,borderRadius:'8px',padding:'12px',border:'1px solid '+C.border}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+                      <span style={{fontSize:'14px'}}>{m.icon} <strong style={{color:C.text}}>{m.label}</strong></span>
+                      <span style={{fontSize:'12px',color:C.accent,fontWeight:700}}>{pct}%</span>
+                    </div>
+                    <div style={{height:'6px',background:'rgba(255,255,255,0.06)',borderRadius:'3px',overflow:'hidden',marginBottom:'6px'}}>
+                      <div style={{height:'100%',width:pct+'%',background:C.accent,borderRadius:'3px'}} />
+                    </div>
+                    <div style={{fontSize:'11px',color:C.dim}}>{m.desc}</div>
+                    <div style={{fontSize:'10px',color:C.muted,marginTop:'2px'}}>Cap: {typeof m.cap==='number'?m.cap.toLocaleString():m.cap}</div>
+                  </div>
+                  );
+                })}
+              </div>
+              <div style={{background:C.bg,borderRadius:'8px',padding:'16px',border:'1px solid '+C.border}}>
+                <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'8px'}}>Formula</div>
+                <div style={{fontSize:'12px',color:C.dim,lineHeight:1.8,fontFamily:'monospace'}}>
+                  E-Score = (Views {'\u00f7'} {caps.views.toLocaleString()} {'\u00d7'} {weights.views}) + (Saves {'\u00f7'} {caps.saves.toLocaleString()} {'\u00d7'} {weights.saves}) + (Shares {'\u00f7'} {caps.shares.toLocaleString()} {'\u00d7'} {weights.shares}) + (Likes {'\u00f7'} {caps.likes.toLocaleString()} {'\u00d7'} {weights.likes}) + (Eng% {'\u00f7'} {caps.eng}% {'\u00d7'} {weights.eng})
+                </div>
+                <div style={{fontSize:'11px',color:C.muted,marginTop:'8px'}}>Each metric is capped at 100% (reaching the cap = max contribution). Weights are normalized to sum to 100.</div>
+              </div>
+            </div>
+
+            <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+C.border,padding:'24px'}}>
+              <h2 style={{fontSize:'18px',fontWeight:700,margin:'0 0 16px',color:C.text}}>Example: E-Score = 50</h2>
+              <p style={{fontSize:'13px',color:C.dim,lineHeight:1.6,margin:'0 0 12px'}}>
+                A reel with 250K views, 2,500 saves, 1,500 shares, 5,000 likes, and 3.5% engagement:
+              </p>
+              {(() => {
+                var ex = {views:250000,saves:2500,shares:1500,likes:5000,eng:3.5};
+                var tw = weights.views+weights.saves+weights.shares+weights.likes+weights.eng;
+                var parts = [{label:'Views',val:ex.views,cap:caps.views,w:weights.views},{label:'Saves',val:ex.saves,cap:caps.saves,w:weights.saves},{label:'Shares',val:ex.shares,cap:caps.shares,w:weights.shares},{label:'Likes',val:ex.likes,cap:caps.likes,w:weights.likes},{label:'Eng%',val:ex.eng,cap:caps.eng,w:weights.eng}];
+                var total = 0;
+                return (
+                <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+                  {parts.map(function(p){
+                    var norm = Math.min(p.val/p.cap,1);
+                    var contrib = Math.round(norm * 100 * p.w/tw);
+                    total += contrib;
+                    return (
+                    <div key={p.label} style={{display:'flex',alignItems:'center',gap:'10px',fontSize:'12px'}}>
+                      <span style={{width:'60px',color:C.dim,flexShrink:0}}>{p.label}</span>
+                      <span style={{width:'80px',color:C.text,flexShrink:0}}>{typeof p.val==='number'&&p.val>=1000?p.val.toLocaleString():p.val}{p.label==='Eng%'?'%':''}</span>
+                      <span style={{width:'30px',color:C.muted,flexShrink:0}}>{'\u00f7'} {typeof p.cap==='number'&&p.cap>=1000?p.cap.toLocaleString():p.cap}{p.label==='Eng%'?'%':''}</span>
+                      <span style={{width:'40px',color:C.muted,flexShrink:0}}>= {Math.round(norm*100)}%</span>
+                      <span style={{width:'30px',color:C.muted,flexShrink:0}}>{'\u00d7'} {p.w}</span>
+                      <div style={{flex:1,height:'8px',background:'rgba(255,255,255,0.06)',borderRadius:'4px',overflow:'hidden'}}>
+                        <div style={{height:'100%',width:Math.round(norm*100)+'%',background:C.accent,borderRadius:'4px'}} />
+                      </div>
+                      <span style={{width:'30px',color:C.accent,fontWeight:700,textAlign:'right',flexShrink:0}}>+{contrib}</span>
+                    </div>
+                    );
+                  })}
+                  <div style={{display:'flex',alignItems:'center',gap:'10px',fontSize:'14px',fontWeight:700,paddingTop:'8px',borderTop:'1px solid '+C.border,marginTop:'4px'}}>
+                    <span style={{color:C.text}}>Total E-Score</span>
+                    <span style={{marginLeft:'auto',padding:'4px 12px',borderRadius:'6px',background:scoreBg(total),color:scoreColor(total),fontSize:'18px'}}>{total}</span>
+                  </div>
+                </div>
+                );
+              })()}
+            </div>
+
+            <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+(percentileMode?C.green+'60':C.border),padding:'24px'}}>
+              <h2 style={{fontSize:'18px',fontWeight:700,margin:'0 0 16px',color:C.text}}>Percentile Mode {percentileMode && <span style={{fontSize:'12px',color:C.green,fontWeight:600}}>(ON)</span>}</h2>
+              <p style={{fontSize:'13px',color:C.dim,lineHeight:1.6,margin:'0 0 16px'}}>
+                When Percentile Mode is on, scores are measured against <strong style={{color:C.text}}>295 reels from 2025</strong> instead of the raw formula. This tells you how a reel compares to your historical performance.
+              </p>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'12px',marginBottom:'20px'}}>
+                <div style={{background:C.red+'15',borderRadius:'8px',padding:'16px',textAlign:'center',border:'1px solid '+C.red+'30'}}>
+                  <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>0{'\u2013'}49</div>
+                  <div style={{fontSize:'12px',color:C.red,marginTop:'4px',fontWeight:600}}>Below Median</div>
+                  <div style={{fontSize:'11px',color:C.dim,marginTop:'4px'}}>Bottom half of 2025 reels</div>
+                </div>
+                <div style={{background:C.green+'15',borderRadius:'8px',padding:'16px',textAlign:'center',border:'1px solid '+C.green+'30'}}>
+                  <div style={{fontSize:'28px',fontWeight:800,color:C.green}}>50{'\u2013'}99</div>
+                  <div style={{fontSize:'12px',color:C.green,marginTop:'4px',fontWeight:600}}>Above Median</div>
+                  <div style={{fontSize:'11px',color:C.dim,marginTop:'4px'}}>Better than most 2025 reels</div>
+                </div>
+                <div style={{background:'#86efac20',borderRadius:'8px',padding:'16px',textAlign:'center',border:'1px solid #86efac40'}}>
+                  <div style={{fontSize:'28px',fontWeight:800,color:'#86efac'}}>100</div>
+                  <div style={{fontSize:'12px',color:'#86efac',marginTop:'4px',fontWeight:600}}>Top 25%</div>
+                  <div style={{fontSize:'11px',color:C.dim,marginTop:'4px'}}>Best of 2025</div>
+                </div>
+              </div>
+
+              <div style={{background:C.bg,borderRadius:'8px',padding:'16px',border:'1px solid '+C.border}}>
+                <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'12px'}}>2025 E-Score Distribution (295 reels)</div>
+                {(() => {
+                  var buckets = [];
+                  for (var b = 0; b < 10; b++) {
+                    var lo = b * 10; var hi = lo + 9;
+                    var count = BENCH_E.filter(function(s){ return s >= lo && s <= hi; }).length;
+                    buckets.push({range:lo+'-'+hi, count:count});
+                  }
+                  var maxCount = Math.max.apply(null, buckets.map(function(b){return b.count;}));
+                  var p50Bucket = 3;
+                  var p75Bucket = 6;
+                  return (
+                  <div style={{display:'flex',alignItems:'flex-end',gap:'4px',height:'120px'}}>
+                    {buckets.map(function(bk, bi){
+                      var h = maxCount > 0 ? Math.round(bk.count / maxCount * 100) : 0;
+                      var isMedian = bi === p50Bucket;
+                      var isP75 = bi === p75Bucket;
+                      var barColor = bi < 5 ? C.red+'80' : bi < 8 ? C.green+'80' : '#86efac80';
+                      return (
+                      <div key={bi} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px'}}>
+                        <span style={{fontSize:'9px',color:C.dim}}>{bk.count}</span>
+                        <div style={{width:'100%',height:h+'%',minHeight:'2px',background:barColor,borderRadius:'3px 3px 0 0',position:'relative'}}>
+                          {isMedian && <div style={{position:'absolute',top:'-18px',left:'50%',transform:'translateX(-50)',fontSize:'8px',color:C.amber,fontWeight:700,whiteSpace:'nowrap'}}>MEDIAN</div>}
+                          {isP75 && <div style={{position:'absolute',top:'-18px',left:'50%',transform:'translateX(-50)',fontSize:'8px',color:'#86efac',fontWeight:700,whiteSpace:'nowrap'}}>TOP 25%</div>}
+                        </div>
+                        <span style={{fontSize:'9px',color:C.muted}}>{bk.range}</span>
+                      </div>
+                      );
+                    })}
+                  </div>
+                  );
+                })()}
+                <div style={{fontSize:'10px',color:C.muted,marginTop:'8px',textAlign:'center'}}>Raw E-Score ranges {'\u2192'} number of 2025 reels in each range</div>
+              </div>
+
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'12px',marginTop:'16px'}}>
+                {[{label:'Median',val:'34',desc:'50th percentile'},{label:'Top 25%',val:'62+',desc:'75th percentile'},{label:'Top 10%',val:'89+',desc:'90th percentile'},{label:'Mean',val:'42',desc:'Average of all'}].map(function(s){return (
+                  <div key={s.label} style={{background:C.bg,borderRadius:'8px',padding:'12px',textAlign:'center',border:'1px solid '+C.border}}>
+                    <div style={{fontSize:'20px',fontWeight:800,color:C.text}}>{s.val}</div>
+                    <div style={{fontSize:'11px',color:C.accent,fontWeight:600,marginTop:'2px'}}>{s.label}</div>
+                    <div style={{fontSize:'10px',color:C.muted,marginTop:'2px'}}>{s.desc}</div>
+                  </div>
+                );})}
+              </div>
+            </div>
+
+            <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+C.border,padding:'24px'}}>
+              <h2 style={{fontSize:'18px',fontWeight:700,margin:'0 0 16px',color:C.text}}>L-Score (Linktree Clicks)</h2>
+              <p style={{fontSize:'13px',color:C.dim,lineHeight:1.6,margin:'0 0 12px'}}>
+                The L-Score measures Linktree clicks on the day a post goes live. In standard mode, it is a simple ratio: <strong style={{color:C.text}}>clicks {'\u00f7'} {ltMax.toLocaleString()} {'\u00d7'} 100</strong>.
+              </p>
+              <p style={{fontSize:'13px',color:C.dim,lineHeight:1.6,margin:'0 0 16px'}}>
+                In percentile mode, clicks are compared against 2025 data. The 2025 median was <strong style={{color:C.text}}>1,150 clicks</strong> per day (score 50), and top 25% was <strong style={{color:C.text}}>1,450+ clicks</strong> (score 100).
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* SPREADSHEET */}
+        {view === 'sheet' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+            {!sheetData ? (
+              <div
+                onDragOver={function(e){e.preventDefault();e.stopPropagation();e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background=C.accent+'10';}}
+                onDragLeave={function(e){e.preventDefault();e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background='transparent';}}
+                onDrop={function(e){
+                  e.preventDefault();e.stopPropagation();
+                  e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background='transparent';
+                  var file=e.dataTransfer.files[0]; if(!file)return;
+                  processSheetFile(file);
+                }}
+                style={{background:C.card,borderRadius:'12px',border:'2px dashed '+C.border,padding:'60px 40px',textAlign:'center',cursor:'default',transition:'all 0.2s'}}
+              >
+                <div style={{fontSize:'16px',color:C.text,fontWeight:600,marginBottom:'8px'}}>Drop CSV or Excel file here</div>
+                <p style={{fontSize:'12px',color:C.muted}}>Supports .csv, .xlsx, and .xls. Displays as a read-only table.</p>
+              </div>
+            ) : (
+              <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+C.border,padding:'16px',overflow:'auto'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
+                  <div>
+                    <h2 style={{fontSize:'16px',fontWeight:600,margin:0}}>Spreadsheet</h2>
+                    <p style={{fontSize:'11px',color:C.muted,margin:'4px 0 0'}}>{sheetName} {'\u00b7'} {sheetData.length} sheet{sheetData.length>1?'s':''}</p>
+                  </div>
+                  <div style={{display:'flex',gap:'8px'}}>
+                    <div
+                      onDragOver={function(e){e.preventDefault();e.stopPropagation();e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background=C.accent+'10';}}
+                      onDragLeave={function(e){e.preventDefault();e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background='transparent';}}
+                      onDrop={function(e){
+                        e.preventDefault();e.stopPropagation();
+                        e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background='transparent';
+                        var file=e.dataTransfer.files[0]; if(!file)return;
+                        processSheetFile(file);
+                      }}
+                      style={{padding:'6px 12px',borderRadius:'6px',border:'1px dashed '+C.border,background:'transparent',color:C.dim,fontSize:'11px',cursor:'default',transition:'all 0.2s'}}
+                    >Drop file to replace</div>
+                    <button onClick={function(){setSheetData(null);setSheetName('');setSheetTab(0);}} style={{padding:'6px 12px',borderRadius:'6px',border:'1px solid '+C.red+'40',background:'transparent',color:C.red,fontSize:'11px',cursor:'pointer'}}>Remove</button>
+                  </div>
+                </div>
+                {sheetData.length > 1 && (
+                  <div style={{display:'flex',gap:'2px',marginBottom:'12px',background:C.bg,borderRadius:'8px',padding:'2px',border:'1px solid '+C.border,overflowX:'auto'}}>
+                    {sheetData.map(function(sh,si){return (
+                      <button key={si} onClick={function(){setSheetTab(si);}} style={{padding:'6px 14px',borderRadius:'6px',border:'none',fontSize:'12px',fontWeight:sheetTab===si?600:400,cursor:'pointer',background:sheetTab===si?C.accent:'transparent',color:sheetTab===si?'#fff':C.dim,whiteSpace:'nowrap'}}>{sh.name} <span style={{fontSize:'10px',opacity:0.7}}>({sh.rows.length})</span></button>
+                    );})}
+                  </div>
+                )}
+                {(() => {
+                  var active = sheetData[sheetTab] || sheetData[0];
+                  if (!active) return null;
+                  return (
+                  <div style={{overflowX:'auto',maxHeight:'70vh',overflowY:'auto'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
+                      <thead>
+                        <tr style={{position:'sticky',top:0,background:C.card,zIndex:1}}>
+                          {active.headers.map(function(h,i){return <th key={i} style={{padding:'8px 10px',textAlign:'left',fontSize:'11px',color:C.accent,fontWeight:600,textTransform:'uppercase',borderBottom:'2px solid '+C.border,whiteSpace:'nowrap'}}>{h}</th>;})}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {active.rows.map(function(row,ri){return (
+                          <tr key={ri} style={{borderBottom:'1px solid '+C.border,background:ri%2?'rgba(255,255,255,0.015)':'transparent'}}>
+                            {row.map(function(cell,ci){
+                              var str = String(cell);
+                              var isUrl = /^https?:\/\//i.test(str.trim());
+                              return <td key={ci} style={{padding:'6px 10px',color:C.dim,whiteSpace:'pre-wrap',wordBreak:'break-word',maxWidth:'400px',verticalAlign:'top'}}>{isUrl ? React.createElement('a',{href:str.trim(),target:'_blank',rel:'noopener noreferrer',style:{color:C.accent,textDecoration:'none',wordBreak:'break-all'}},str.trim()) : str}</td>;
+                            })}
+                          </tr>
+                        );})}
+                      </tbody>
+                    </table>
+                  </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TIMELINE */}
+        {view === 'timeline' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'20px'}}>
+            <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'16px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'}}>
+                <h3 style={{fontSize:'15px',fontWeight:600,margin:0}}>Sale Periods</h3>
+                <button onClick={()=>setShowSaleAdd(!showSaleAdd)} style={{padding:'6px 12px',borderRadius:'6px',border:`1px solid ${C.red}40`,background:'transparent',color:C.red,fontSize:'12px',cursor:'pointer'}}>{showSaleAdd ? 'Cancel' : '+ Add sale period'}</button>
+              </div>
+              {showSaleAdd && (
+                <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'12px',flexWrap:'wrap'}}>
+                  <label style={{fontSize:'12px',color:C.dim}}>Start <input type="date" value={saleStart} onChange={e=>setSaleStart(e.target.value)} style={{marginLeft:'4px',padding:'5px 8px',borderRadius:'4px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'13px'}} /></label>
+                  <label style={{fontSize:'12px',color:C.dim}}>End <input type="date" value={saleEnd} onChange={e=>setSaleEnd(e.target.value)} style={{marginLeft:'4px',padding:'5px 8px',borderRadius:'4px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'13px'}} /></label>
+                  <button onClick={()=>{
+                    if(!saleStart) return;
+                    const dates = [];
+                    const s = new Date(saleStart+'T12:00:00'); const e = saleEnd ? new Date(saleEnd+'T12:00:00') : s;
+                    for(let d=new Date(s); d<=e; d.setDate(d.getDate()+1)) dates.push(d.toISOString().slice(0,10));
+                    setSaleDays(prev => [...new Set([...prev, ...dates])].sort());
+                    setSaleStart(''); setSaleEnd(''); setShowSaleAdd(false);
+                  }} style={{padding:'6px 12px',borderRadius:'6px',border:`1px solid ${C.green}`,background:'transparent',color:C.green,fontSize:'12px',cursor:'pointer'}}>Add</button>
+                </div>
+              )}
+              {saleDays.length > 0 ? (() => {
+                const sorted = [...saleDays].sort();
+                const ranges = [];
+                let rangeStart = sorted[0], prev = sorted[0];
+                for(let i=1; i<sorted.length; i++) {
+                  const prevD = new Date(prev+'T12:00:00'); prevD.setDate(prevD.getDate()+1);
+                  if(prevD.toISOString().slice(0,10) === sorted[i]) { prev = sorted[i]; }
+                  else { ranges.push([rangeStart, prev]); rangeStart = sorted[i]; prev = sorted[i]; }
+                }
+                ranges.push([rangeStart, prev]);
+                return (
+                  <div style={{display:'flex',flexWrap:'wrap',gap:'8px'}}>
+                    {ranges.map(([s,e],i) => (
+                      <div key={i} style={{display:'flex',alignItems:'center',gap:'6px',padding:'6px 10px',borderRadius:'6px',background:C.red+'10',border:`1px solid ${C.red}30`}}>
+                        <span style={{fontSize:'12px',color:C.red,fontWeight:500}}>{s === e ? s.slice(5) : `${s.slice(5)} \u2192 ${e.slice(5)}`}</span>
+                        <button onClick={()=>{
+                          const toRemove = new Set();
+                          const sd = new Date(s+'T12:00:00'); const ed = new Date(e+'T12:00:00');
+                          for(let d=new Date(sd); d<=ed; d.setDate(d.getDate()+1)) toRemove.add(d.toISOString().slice(0,10));
+                          setSaleDays(prev => prev.filter(x => !toRemove.has(x)));
+                        }} style={{fontSize:'11px',color:C.red,background:'transparent',border:'none',cursor:'pointer',padding:'0 2px'}}>{'\u2715'}</button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })() : (
+                <p style={{fontSize:'12px',color:C.muted}}>No sale periods set. Click "+ Add sale period" to mark promotional dates.</p>
+              )}
+            </div>
+            <div style={{background:C.card,borderRadius:'12px',border:`1px solid ${C.border}`,padding:'12px',display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+              {[['L7','7'],['L14','14'],['L30','30'],['L90','90'],['LY','365']].map(([label,days])=>{
+                const d = parseInt(days);
+                const end = new Date(); const start = new Date(); start.setDate(end.getDate()-d);
+                const sv = start.toISOString().slice(0,10); const ev = end.toISOString().slice(0,10);
+                const isActive = tlStart===sv && tlEnd===ev;
+                return <button key={label} onClick={()=>{setTlStart(sv);setTlEnd(ev);}} style={{padding:'5px 12px',borderRadius:'5px',border:`1px solid ${isActive?C.accent:C.border}`,background:isActive?C.accent+'18':'transparent',color:isActive?C.accent:C.dim,fontSize:'12px',fontWeight:isActive?600:400,cursor:'pointer'}}>{label}</button>;
+              })}
+              <span style={{color:C.muted,fontSize:'12px'}}>|</span>
+              <input type="date" value={tlStart} onChange={e=>setTlStart(e.target.value)} style={{padding:'5px 8px',borderRadius:'4px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'13px'}} />
+              <span style={{color:C.muted}}>to</span>
+              <input type="date" value={tlEnd} onChange={e=>setTlEnd(e.target.value)} style={{padding:'5px 8px',borderRadius:'4px',border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:'13px'}} />
+              {(tlStart||tlEnd) && <button onClick={()=>{setTlStart('');setTlEnd('');}} style={{fontSize:'12px',color:C.red,background:'transparent',border:'none',cursor:'pointer'}}>Clear</button>}
+              <span style={{fontSize:'12px',color:C.muted,marginLeft:'auto'}}>{(() => { const fd = daily.filter(d => (!tlStart || d.date >= tlStart) && (!tlEnd || d.date <= tlEnd)); return `${fd.length} days`; })()}</span>
+            </div>
+            {(() => {
+              var filteredDaily = daily.filter(function(d) { return (!tlStart || d.date >= tlStart) && (!tlEnd || d.date <= tlEnd); });
+              var filteredPosts = attr.scored.filter(function(p) { return (!tlStart || p.date >= tlStart) && (!tlEnd || p.date <= tlEnd); });
+              
+              var scoreData = [];
+              if (tlGroupBy === 'day') {
+                var byDate = {};
+                filteredPosts.forEach(function(p) {
+                  if (!byDate[p.date]) byDate[p.date] = { eScores: [], lScores: [] };
+                  byDate[p.date].eScores.push(p.score);
+                  byDate[p.date].lScores.push(p.lScore);
+                });
+                Object.keys(byDate).sort().forEach(function(d) {
+                  var v = byDate[d];
+                  scoreData.push({ label: d.slice(5), avgE: Math.round(v.eScores.reduce(function(a,b){return a+b;},0) / v.eScores.length), avgL: Math.round(v.lScores.reduce(function(a,b){return a+b;},0) / v.lScores.length), posts: v.eScores.length });
+                });
+              } else if (tlGroupBy === 'week') {
+                var byWeek = {};
+                filteredPosts.forEach(function(p) {
+                  var d = new Date(p.date + 'T12:00:00');
+                  var sun = new Date(d); sun.setDate(d.getDate() - d.getDay());
+                  var wk = sun.toISOString().slice(0, 10);
+                  if (!byWeek[wk]) byWeek[wk] = { eScores: [], lScores: [] };
+                  byWeek[wk].eScores.push(p.score);
+                  byWeek[wk].lScores.push(p.lScore);
+                });
+                Object.keys(byWeek).sort().forEach(function(wk) {
+                  var v = byWeek[wk];
+                  scoreData.push({ label: wk.slice(5), avgE: Math.round(v.eScores.reduce(function(a,b){return a+b;},0) / v.eScores.length), avgL: Math.round(v.lScores.reduce(function(a,b){return a+b;},0) / v.lScores.length), posts: v.eScores.length });
+                });
+              } else {
+                var byMonth = {};
+                filteredPosts.forEach(function(p) {
+                  var mo = p.date.slice(0, 7);
+                  if (!byMonth[mo]) byMonth[mo] = { eScores: [], lScores: [] };
+                  byMonth[mo].eScores.push(p.score);
+                  byMonth[mo].lScores.push(p.lScore);
+                });
+                Object.keys(byMonth).sort().forEach(function(mo) {
+                  var v = byMonth[mo];
+                  var moNames = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                  scoreData.push({ label: moNames[parseInt(mo.slice(5))] + ' ' + mo.slice(2,4), avgE: Math.round(v.eScores.reduce(function(a,b){return a+b;},0) / v.eScores.length), avgL: Math.round(v.lScores.reduce(function(a,b){return a+b;},0) / v.lScores.length), posts: v.eScores.length });
+                });
+              }
+              
+              return (<React.Fragment>
+            <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+C.border,padding:'20px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+                <h2 style={{fontSize:'16px',fontWeight:600,margin:0}}>Avg E-Score & L-Score</h2>
+                <div style={{display:'flex',background:C.bg,borderRadius:'6px',padding:'2px',border:'1px solid '+C.border}}>
+                  {[['day','Day'],['week','Week'],['month','Month']].map(function(item){var k=item[0],l=item[1];return <button key={k} onClick={function(){setTlGroupBy(k);}} style={{padding:'5px 14px',borderRadius:'4px',border:'none',fontSize:'12px',fontWeight:tlGroupBy===k?600:400,cursor:'pointer',background:tlGroupBy===k?C.accent:'transparent',color:tlGroupBy===k?'#fff':C.dim}}>{l}</button>;})}
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={320}>
+                <LineChart data={scoreData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="label" stroke={C.muted} fontSize={11} interval={tlGroupBy==='day'?Math.max(0,Math.floor(scoreData.length/15)):0} angle={tlGroupBy==='day'?-35:0} textAnchor={tlGroupBy==='day'?'end':'middle'} height={tlGroupBy==='day'?60:30} />
+                  <YAxis domain={[0,100]} stroke={C.muted} fontSize={11} />
+                  <Tooltip contentStyle={{background:C.card,border:'1px solid '+C.border,borderRadius:'8px',color:C.text,fontSize:'12px'}} formatter={function(v,n){return [v,n];}} />
+                  <Legend />
+                  <ReferenceLine y={goals.eTarget} stroke={C.green} strokeDasharray="3 3" label={{value:'E Goal',fill:C.green,fontSize:10}} />
+                  <ReferenceLine y={goals.lTarget} stroke={C.amber} strokeDasharray="3 3" label={{value:'L Goal',fill:C.amber,fontSize:10}} />
+                  <Line type="monotone" dataKey="avgE" stroke={C.accent} strokeWidth={2} name="Avg E-Score" dot={scoreData.length<30} />
+                  <Line type="monotone" dataKey="avgL" stroke={C.amber} strokeWidth={2} name="Avg L-Score" dot={scoreData.length<30} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{background:C.card,borderRadius:'12px',border:'1px solid '+C.border,padding:'20px'}}>
+              <h2 style={{fontSize:'16px',fontWeight:600,margin:'0 0 16px'}}>Linktree Clicks vs {revUnlocked ? 'Revenue' : 'Orders'}</h2>
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={filteredDaily.filter(d=>d.lt_clicks>0)}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="date" tickFormatter={d=>d.slice(5)} stroke={C.muted} fontSize={11} />
+                  <YAxis yAxisId="left" stroke={C.muted} fontSize={11} />
+                  <YAxis yAxisId="right" orientation="right" stroke={C.muted} fontSize={11} tickFormatter={revUnlocked ? (v=>`$${(v/1000).toFixed(0)}K`) : undefined} />
+                  <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:'8px',color:C.text,fontSize:'12px'}} formatter={(v,n)=>[revUnlocked && n==='revenue'?`$${v.toLocaleString()}`:v,n]} />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="lt_clicks" stroke={C.amber} strokeWidth={2} name="LT Clicks" dot={false} />
+                  <Line yAxisId="right" type="monotone" dataKey={revUnlocked ? 'revenue' : 'orders'} stroke={revUnlocked ? C.green : C.accent} strokeWidth={2} name={revUnlocked ? 'Revenue' : 'Orders'} dot={false} opacity={0.5} />
+                  {saleDays.map(d=><ReferenceLine key={d} x={d} stroke={C.red} strokeDasharray="3 3" yAxisId="left" />)}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+              </React.Fragment>);
+            })()}
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<NITMContentTracker />);
+  </script>
+</body>
+</html>

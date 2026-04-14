@@ -1,0 +1,1793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Content Calendar</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg-primary: #0a0f1a;
+    --bg-secondary: #111827;
+    --bg-tertiary: #1e293b;
+    --bg-cell: #0f172a;
+    --border: #1e293b;
+    --border-light: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --text-dim: #475569;
+    --accent: #3b82f6;
+    --purple: #7C3AED;
+  }
+  body { background: var(--bg-primary); color: var(--text-primary); font-family: 'DM Sans', sans-serif; min-height: 100vh; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+
+  /* Loading */
+  .loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+  .spinner { width: 40px; height: 40px; border: 3px solid var(--bg-tertiary); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { color: var(--text-muted); margin-top: 16px; font-size: 14px; }
+
+  /* Login */
+  .login-screen { display: flex; align-items: center; justify-content: center; height: 100vh; background: linear-gradient(135deg, #0a0f1a 0%, #1a1f2e 100%); }
+  .login-card { background: var(--bg-secondary); border-radius: 16px; padding: 48px 40px; width: 400px; text-align: center; box-shadow: 0 25px 60px rgba(0,0,0,0.5); border: 1px solid #1f2937; }
+  .login-logo { font-size: 48px; margin-bottom: 8px; }
+  .login-title { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 4px; }
+  .login-subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 32px; }
+  .login-form { text-align: left; }
+  .input-label { color: var(--text-secondary); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 8px; }
+  .token-input { width: 100%; padding: 12px 16px; background: var(--bg-primary); border: 1px solid #1f2937; border-radius: 8px; color: var(--text-primary); font-size: 14px; outline: none; font-family: monospace; }
+  .token-input:focus { border-color: var(--accent); }
+  .connect-btn { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; font-family: inherit; transition: background 0.2s; }
+  .connect-btn:hover { background: #2563eb; }
+  .login-note { color: var(--text-dim); font-size: 11px; margin-top: 20px; }
+
+  /* App Layout */
+  .app { display: none; }
+  .app.active { display: block; }
+
+  /* Sticky toolbar wrapper — sits below the ops nav */
+  .sticky-toolbar { position: sticky; top: 45px; z-index: 20; background: var(--bg-primary); border-bottom: 1px solid var(--border); }
+
+  /* Header */
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px 0; }
+  .header-left { display: flex; align-items: baseline; gap: 12px; }
+  .app-title { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+  .task-count { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+  .refresh-btn { padding: 8px 16px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-light); border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+  .refresh-btn:hover { background: var(--border-light); color: var(--text-primary); }
+  .sync-indicator { font-size: 11px; color: #27AE60; font-weight: 600; display: flex; align-items: center; gap: 4px; }
+  .sync-indicator.syncing { color: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* Filters */
+  .filters-bar { display: flex; gap: 20px; padding: 10px 24px; flex-wrap: wrap; align-items: center; }
+  .filter-group { display: flex; align-items: center; gap: 8px; }
+  .filter-label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 4px; }
+  .toggle-group { display: flex; gap: 4px; flex-wrap: wrap; }
+  .toggle-btn { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-light); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; font-family: inherit; background: transparent; color: var(--text-secondary); white-space: nowrap; }
+  .toggle-btn.active { color: #fff; }
+  .status-select { padding: 6px 12px; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 6px; font-size: 12px; font-family: inherit; cursor: pointer; outline: none; }
+  .view-toggle { display: flex; background: var(--bg-tertiary); border-radius: 8px; overflow: hidden; border: 1px solid var(--border-light); }
+  .view-btn { padding: 6px 16px; background: transparent; color: var(--text-muted); border: none; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+  .view-btn.active { background: var(--border-light); color: var(--text-primary); }
+
+  /* Navigation — merged into a compact row with filters */
+  .nav-bar { display: flex; align-items: center; gap: 10px; padding: 8px 24px 10px; }
+  .nav-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
+  .nav-btn:hover { background: var(--border-light); }
+  .nav-title { font-size: 16px; font-weight: 600; min-width: 200px; }
+  .today-btn { padding: 5px 12px; background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .today-btn:hover { background: rgba(59,130,246,0.1); }
+
+  /* Calendar */
+  .calendar-container { padding: 0 24px 24px; }
+  .day-headers { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; margin-bottom: 0; padding-bottom: 1px; }
+  .day-header { padding: 8px; text-align: center; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .month-section { margin-bottom: 0; }
+  .month-section-header { font-size: 16px; font-weight: 700; color: var(--text-secondary); padding: 16px 4px 8px; letter-spacing: -0.3px; }
+  .month-section:first-child .month-section-header { padding-top: 8px; }
+
+  .month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 2px; }
+  .day-cell { background: var(--bg-cell); min-height: 80px; padding: 8px; position: relative; transition: background 0.1s; display: flex; flex-direction: column; min-width: 0; }
+  .day-cell:hover { background: #131c2e; }
+  .day-cell.today { box-shadow: inset 0 0 0 2px var(--accent); }
+  .day-cell.empty { background: #080c15; }
+  .day-cell.drag-over { background: #1a2744; }
+  .day-number { font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; flex-shrink: 0; }
+  .day-cell.today .day-number { color: var(--accent); }
+  .day-number-label { font-size: 10px; color: var(--text-dim); font-weight: 500; margin-left: 4px; }
+  .task-list { display: flex; flex-direction: column; gap: 2px; }
+
+  .week-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .week-col { background: var(--bg-cell); min-height: 120px; padding: 8px; display: flex; flex-direction: column; min-width: 0; }
+  .week-col.today { box-shadow: inset 0 0 0 2px var(--accent); }
+  .week-col.drag-over { background: #1a2744; }
+  .week-day-num { font-size: 20px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; text-align: center; flex-shrink: 0; }
+  .week-col.today .week-day-num { color: var(--accent); }
+  .week-task-list { display: flex; flex-direction: column; gap: 4px; }
+
+  /* Task Pill */
+  .task-pill { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; color: #fff; cursor: grab; transition: opacity 0.1s; line-height: 1.3; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px; min-width: 0; }
+  .task-pill:hover { opacity: 0.85; }
+  .task-pill:active { cursor: grabbing; }
+  .task-pill-name { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; white-space: normal; }
+  .task-pill-emoji { flex-shrink: 0; font-size: 12px; line-height: 1; margin-top: 1px; }
+  .task-pill-meta { display: block; font-size: 10px; color: rgba(255,255,255,0.7); margin-top: 2px; }
+  .task-pill.expanded .task-pill-name { -webkit-line-clamp: 3; }
+  .task-pill.expanded { flex-wrap: wrap; }
+  .task-pill.expanded .task-pill-meta { width: 100%; }
+  .more-count { font-size: 10px; color: var(--text-muted); padding: 2px 8px; font-weight: 600; }
+  .pill-badges { display: flex; gap: 3px; flex-wrap: wrap; width: 100%; margin-top: 2px; }
+  .pill-badge { padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; color: #fff; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); opacity: 0; visibility: hidden; transition: all 0.2s; }
+  .modal-overlay.active { opacity: 1; visibility: visible; }
+  .modal { background: var(--bg-secondary); border-radius: 16px; padding: 32px; width: 500px; max-width: 90vw; max-height: 80vh; overflow: auto; position: relative; border: 1px solid #1f2937; box-shadow: 0 25px 60px rgba(0,0,0,0.6); transform: translateY(10px); transition: transform 0.2s; }
+  .modal-overlay.active .modal { transform: translateY(0); }
+  .modal-close { position: absolute; top: 16px; right: 16px; background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; padding: 4px; }
+  .modal-close:hover { color: var(--text-primary); }
+  .modal-header { display: flex; gap: 8px; margin-bottom: 12px; }
+  .modal-platform-badge { padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; color: #fff; }
+  .modal-brand-badge { padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; color: var(--text-secondary); background: var(--bg-tertiary); border: 1px solid var(--border-light); }
+  .modal-title { font-size: 20px; font-weight: 700; margin-bottom: 16px; line-height: 1.3; }
+  .modal-meta { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding: 16px; background: var(--bg-primary); border-radius: 10px; }
+  .modal-meta-item { display: flex; justify-content: space-between; align-items: center; }
+  .modal-meta-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .modal-meta-value { font-size: 13px; color: #e2e8f0; }
+  .status-badge { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; color: #fff; }
+  .modal-fields { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+  .field-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .field-value { font-size: 13px; color: #e2e8f0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  .field-link { font-size: 13px; color: var(--accent); text-decoration: none; font-weight: 600; }
+  .field-link:hover { text-decoration: underline; }
+  .field-dropdown { padding: 4px 8px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 6px; font-size: 13px; font-family: inherit; cursor: pointer; outline: none; max-width: 220px; }
+  .field-dropdown:focus { border-color: var(--accent); }
+  .open-clickup { display: block; text-align: center; padding: 12px; background: var(--purple); color: #fff; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; transition: background 0.2s; }
+  .open-clickup:hover { background: #6d28d9; }
+
+  /* Loading overlay */
+  .loading-overlay { position: fixed; inset: 0; background: rgba(10,15,26,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 999; }
+  .loading-overlay .loading-text { color: #fff; margin-top: 12px; }
+
+  /* Error */
+  .error-banner { padding: 12px 24px; background: rgba(231,76,60,0.15); border-bottom: 1px solid rgba(231,76,60,0.3); color: #e74c3c; font-size: 13px; text-align: center; }
+
+  /* Search */
+  .search-box { position: relative; }
+  .search-input { padding: 8px 14px; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 8px; font-size: 13px; font-family: inherit; outline: none; width: 220px; }
+  .search-input:focus { border-color: var(--accent); width: 300px; }
+  .search-results { position: absolute; top: 100%; right: 0; width: 360px; max-height: 400px; overflow-y: auto; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 10px; margin-top: 4px; display: none; z-index: 100; box-shadow: 0 15px 40px rgba(0,0,0,0.5); }
+  .search-results.active { display: block; }
+  .search-result-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  .search-result-item:hover { background: var(--bg-tertiary); }
+  .search-result-item:last-child { border-bottom: none; }
+  .search-result-color { width: 4px; height: 32px; border-radius: 2px; flex-shrink: 0; }
+  .search-result-info { flex: 1; min-width: 0; }
+  .search-result-name { font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .search-result-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .search-no-results { padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+  /* URL field input */
+  .url-input { padding: 4px 8px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-light); border-radius: 6px; font-size: 12px; font-family: inherit; width: 180px; outline: none; transition: border-color 0.2s; }
+  .url-input:focus { border-color: var(--accent); }
+
+  /* Mobile list view */
+  .mobile-list { display: none; }
+  .mobile-list-day { padding: 0 16px; }
+  .mobile-month-header { padding: 20px 16px 8px; font-size: 18px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.3px; position: sticky; top: 0; background: var(--bg-primary); z-index: 10; border-bottom: 1px solid var(--border); }
+  .mobile-month-header:first-child { padding-top: 12px; }
+  .mobile-list-date { padding: 12px 0 6px; font-size: 13px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+  .mobile-list-date.today { color: var(--accent); }
+  .mobile-list-date-num { font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1; }
+  .mobile-list-date.today .mobile-list-date-num { color: var(--accent); }
+  .mobile-list-tasks { padding: 6px 0; display: flex; flex-direction: column; gap: 4px; }
+  .mobile-task { padding: 10px 12px; border-radius: 8px; color: #fff; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .mobile-task:active { opacity: 0.8; }
+  .mobile-task-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-task-time { font-size: 11px; opacity: 0.8; flex-shrink: 0; }
+  .mobile-task-emoji { flex-shrink: 0; }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .sticky-toolbar { position: sticky; z-index: 20; } /* top is set dynamically via JS */
+    .header { flex-direction: column; gap: 8px; padding: 10px 16px 0; align-items: stretch; }
+    .header-left { flex-wrap: wrap; gap: 8px; }
+    .app-title { font-size: 18px; }
+    .search-input { width: 100%; }
+    .search-input:focus { width: 100%; }
+    .search-results { width: 100%; left: 0; right: 0; }
+    .filters-bar { padding: 8px 16px; gap: 8px; }
+    .filter-label { display: none; }
+    .toggle-btn { padding: 4px 8px; font-size: 11px; }
+    .nav-bar { padding: 6px 16px 8px; gap: 8px; }
+    .nav-title { font-size: 14px; min-width: auto; flex: 1; }
+    .nav-btn { width: 28px; height: 28px; font-size: 12px; }
+    .calendar-container { padding: 0 0 16px; }
+    .day-headers { display: none; }
+    .month-grid { display: none; }
+    .week-grid { display: none; }
+    .mobile-list { display: block; }
+    .modal { padding: 24px; width: 95vw; }
+    .refresh-btn { padding: 6px 10px; font-size: 12px; }
+    .url-input { width: 140px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Ops Hub Nav -->
+<nav id="ops-nav" style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #1e293b;font-family:'DM Sans',-apple-system,sans-serif;position:sticky;top:0;z-index:30"><a href="/" style="color:#f1f5f9;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#f1f5f9;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
+
+<!-- Loading Screen -->
+<div id="loading-screen" class="loading-screen">
+  <div class="spinner"></div>
+  <p class="loading-text">Loading config from Google Sheets...</p>
+</div>
+
+<!-- Login Screen -->
+<div id="login-screen" style="display:none">
+  <div class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">📅</div>
+      <h1 class="login-title">Content Calendar</h1>
+      <p class="login-subtitle">Connect your ClickUp workspace</p>
+      <div class="login-form">
+        <label class="input-label">ClickUp API Token</label>
+        <input type="password" id="token-input" class="token-input" placeholder="pk_..." />
+        <button class="connect-btn" id="connect-btn">Connect</button>
+      </div>
+      <p class="login-note">Your token is saved locally in this browser</p>
+    </div>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app" class="app">
+  <div id="error-banner" class="error-banner" style="display:none"></div>
+  
+  <!-- Sticky Toolbar -->
+  <div class="sticky-toolbar">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-left">
+        <h1 class="app-title">Content Calendar</h1>
+        <span class="task-count" id="task-count">0 posts</span>
+        <span class="sync-indicator" id="sync-indicator" title="Auto-syncs every 2 min">● Synced</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="search-box">
+          <input type="text" id="search-input" class="search-input" placeholder="🔍 Search posts..." />
+          <div id="search-results" class="search-results"></div>
+        </div>
+        <button class="refresh-btn" id="refresh-btn">↻ Refresh</button>
+        <button class="refresh-btn" id="logout-btn" style="color:#e74c3c;border-color:#e74c3c33">Logout</button>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters-bar">
+      <div class="filter-group">
+        <span class="filter-label">Brands</span>
+        <div class="toggle-group" id="brand-filters"></div>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">Platforms</span>
+        <div class="toggle-group" id="platform-filters"></div>
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">Stage</span>
+        <select class="status-select" id="stage-filter">
+          <option value="all">All Stages</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <div class="view-toggle">
+          <button class="view-btn" id="view-week" data-view="weekly">Week</button>
+          <button class="view-btn active" id="view-month" data-view="monthly">Month</button>
+        </div>
+      </div>
+      <div class="filter-group">
+        <button class="toggle-btn active" id="toggle-fields" style="background:#7C3AED;border-color:#7C3AED;color:#fff;">Fields ✦</button>
+      </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-bar">
+      <button class="nav-btn" id="nav-prev">←</button>
+      <h2 class="nav-title" id="nav-title"></h2>
+      <button class="nav-btn" id="nav-next">→</button>
+      <button class="today-btn" id="nav-today">Today</button>
+    </div>
+
+    <!-- Day headers (sticky with toolbar) -->
+    <div class="calendar-container" style="padding-bottom:0">
+      <div class="day-headers" id="day-headers"></div>
+    </div>
+  </div>
+
+  <!-- Calendar -->
+  <div class="calendar-container">
+    <div id="calendar-grid"></div>
+    <div class="mobile-list" id="mobile-list"></div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal">
+    <button class="modal-close" id="modal-close">✕</button>
+    <div class="modal-header" id="modal-header"></div>
+    <h2 class="modal-title" id="modal-title"></h2>
+    <div class="modal-meta" id="modal-meta"></div>
+    <div class="modal-fields" id="modal-fields"></div>
+    <div id="modal-footer"></div>
+  </div>
+</div>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loading-overlay" style="display:none">
+  <div class="spinner"></div>
+  <p class="loading-text">Loading tasks from ClickUp...</p>
+</div>
+
+<script>
+// ===== CONFIG =====
+const CLICKUP_API = "/calendar/api";
+
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+// ===== STATE =====
+let config = null;
+let token = "proxy";
+let tasks = [];
+let currentView = "monthly";
+let currentDate = new Date();
+let brandFilters = {};
+let platformFilters = {};
+let stageFilter = "all";
+let dragTask = null;
+let showFields = true;
+
+// ===== CLICKUP API (for writes only — reads come from D1) =====
+async function updateTaskField(taskId, fieldId, value) {
+  try {
+    const res = await fetch(`${CLICKUP_API}/task/${taskId}/field/${fieldId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value })
+    });
+    return res.ok;
+  } catch { return false; }
+}
+
+// ===== DATE HELPERS =====
+function fmtDate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function daysInMonth(y, m) { return new Date(y, m+1, 0).getDate(); }
+function firstDayOfMonth(y, m) { return new Date(y, m, 1).getDay(); }
+function getWeekDates(d) {
+  const start = new Date(d); start.setDate(d.getDate() - d.getDay());
+  return Array.from({length:7}, (_,i) => { const x = new Date(start); x.setDate(start.getDate()+i); return x; });
+}
+
+// ===== INIT =====
+async function init() {
+  try {
+    // Load config from D1 (cached by the Worker cron) — single fast request
+    const configRes = await fetch("/calendar/api/config");
+    if (!configRes.ok) throw new Error("Config API failed");
+    const rawConfig = await configRes.json();
+    
+    const lists = rawConfig.lists || [];
+    const settings = rawConfig.settings || [];
+    const customFields = rawConfig.customFields || [];
+    const statusOptions = rawConfig.statusOptions || [];
+    const brandColors = rawConfig.brandColors || [];
+    
+    const settingsMap = {};
+    settings.forEach(s => { settingsMap[s.Setting] = s.Value; });
+
+    config = {
+      lists: lists.filter(l => (l["Active (TRUE/FALSE)"] || "").toUpperCase() === "TRUE"),
+      settings: settingsMap,
+      customFields: customFields.filter(f => (f["Show in Details (TRUE/FALSE)"] || "").toUpperCase() === "TRUE"),
+      calendarFields: customFields.filter(f => (f["Show on Calendar (TRUE/FALSE)"] || "").toUpperCase() === "TRUE"),
+      allCustomFields: customFields,
+      statusOptions: statusOptions.sort((a,b) => (parseInt(a["Sort Order"])||0) - (parseInt(b["Sort Order"])||0)),
+      brandColors: brandColors
+    };
+
+    if ((config.settings["Default View"] || "").toLowerCase() === "weekly") currentView = "weekly";
+
+    config.lists.forEach(l => { brandFilters[l.Brand] = true; platformFilters[l.Platform] = true; });
+
+    // No login needed — Worker handles auth server-side
+    document.getElementById("loading-screen").style.display = "none";
+    document.getElementById("app").classList.add("active");
+    document.getElementById("logout-btn").style.display = "none";
+    buildFilters();
+    buildDayHeaders();
+    updateViewButtons();
+    
+    // Show loading overlay while fetching tasks
+    document.getElementById("loading-overlay").style.display = "flex";
+    await loadAllTasks(3);
+    document.getElementById("loading-overlay").style.display = "none";
+    
+    // Set sticky toolbar offset based on actual ops nav height
+    const opsNav = document.getElementById('ops-nav');
+    if (opsNav) {
+      document.querySelector('.sticky-toolbar').style.top = opsNav.offsetHeight + 'px';
+    }
+    
+    render();
+    // Scroll to current month section then to today
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const y = currentDate.getFullYear();
+        const m = currentDate.getMonth();
+        const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+        const section = document.querySelector(`.month-section[data-month="${key}"]`);
+        if (section) {
+          scrollToElement(section, "auto", "start");
+        }
+        // Then scroll to today's cell if visible
+        const todayStr = fmtDate(new Date());
+        const todayCell = document.getElementById(`cell-${todayStr}`);
+        if (todayCell) {
+          scrollToElement(todayCell, "auto", "center");
+        }
+      });
+    });
+    
+    // If still no tasks, show a helpful message
+    if (tasks.length === 0) {
+      const banner = document.getElementById("error-banner");
+      if (banner) {
+        banner.textContent = "📅 Calendar is syncing with ClickUp. Tasks will appear shortly. Try refreshing in a moment.";
+        banner.style.display = "block";
+        banner.style.background = "rgba(59,130,246,0.15)";
+        banner.style.borderColor = "rgba(59,130,246,0.3)";
+        banner.style.color = "#3b82f6";
+      }
+    }
+    
+    startAutoRefresh();
+  } catch (e) {
+    document.getElementById("loading-screen").innerHTML = `
+      <div style="font-size:48px">⚠️</div>
+      <h2 style="color:#e74c3c;margin:16px 0 8px;font-size:22px">Configuration Error</h2>
+      <p style="color:#8395a7;font-size:14px;max-width:400px;text-align:center">Failed to load config. ${e.message || ''}</p>`;
+  }
+}
+
+// ===== CONNECT (legacy fallback) =====
+document.getElementById("connect-btn")?.addEventListener("click", () => {});
+document.getElementById("token-input")?.addEventListener("keydown", () => {});
+
+// ===== LOGOUT =====
+document.getElementById("logout-btn")?.addEventListener("click", () => {});
+
+// ===== AUTO REFRESH =====
+let autoRefreshTimer = null;
+function startAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(async () => {
+    const indicator = document.getElementById("sync-indicator");
+    indicator.textContent = "● Syncing...";
+    indicator.className = "sync-indicator syncing";
+    await loadAllTasks();
+    render();
+    indicator.textContent = "● Synced";
+    indicator.className = "sync-indicator";
+  }, 30000); // Check D1 every 30 seconds (D1 reads are instant)
+}
+
+// ===== LOAD TASKS (from D1 — single fast request) =====
+async function loadAllTasks(retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch("/calendar/api/tasks");
+      if (!res.ok) throw new Error(`API returned ${res.status}`);
+      const data = await res.json();
+      
+      const newTasks = (data.tasks || []).map(t => ({
+        id: t.id,
+        name: t.name,
+        status: t.status,
+        postDate: t.post_date ? new Date(t.post_date + "T12:00:00") : null,
+        listId: t.list_id,
+        listName: t.list_name,
+        brand: t.brand,
+        platform: t.platform,
+        color: t.color || "#666",
+        customFields: t.customFields || [],
+        url: t.url
+      }));
+      
+      if (newTasks.length > 0) {
+        tasks = newTasks;
+        // Hide any error banner
+        const banner = document.getElementById("error-banner");
+        if (banner) banner.style.display = "none";
+      } else if (tasks.length === 0) {
+        // D1 might be empty — show a message but don't error
+        console.warn("No tasks returned from API");
+      }
+      return; // Success — exit retry loop
+    } catch (err) {
+      console.error(`Load attempt ${attempt}/${retries} failed:`, err);
+      if (attempt === retries && tasks.length === 0) {
+        // All retries failed and we have no cached data
+        const banner = document.getElementById("error-banner");
+        if (banner) {
+          banner.textContent = "⚠️ Failed to load tasks. Retrying...";
+          banner.style.display = "block";
+        }
+        // Try one more time after a delay
+        setTimeout(async () => {
+          await loadAllTasks(1);
+          render();
+        }, 5000);
+      }
+      // Wait before retry
+      if (attempt < retries) await new Promise(r => setTimeout(r, 1000 * attempt));
+    }
+  }
+}
+
+// ===== FILTERS =====
+function buildFilters() {
+  // Brand toggles
+  const brandContainer = document.getElementById("brand-filters");
+  brandContainer.innerHTML = "";
+  config.brandColors.forEach(b => {
+    const btn = document.createElement("button");
+    btn.className = "toggle-btn active";
+    btn.textContent = b.Brand;
+    btn.style.background = b["Primary Color (Hex)"];
+    btn.style.borderColor = b["Primary Color (Hex)"];
+    btn.style.color = "#fff";
+    btn.addEventListener("click", () => {
+      brandFilters[b.Brand] = !brandFilters[b.Brand];
+      updateToggleBtn(btn, brandFilters[b.Brand], b["Primary Color (Hex)"]);
+      render();
+    });
+    // Double-click to solo
+    btn.addEventListener("dblclick", () => {
+      const onlyThisOn = brandFilters[b.Brand] && Object.entries(brandFilters).filter(([k,v]) => v).length === 1;
+      if (onlyThisOn) {
+        // Already soloed — restore all
+        Object.keys(brandFilters).forEach(k => { brandFilters[k] = true; });
+      } else {
+        // Solo this one
+        Object.keys(brandFilters).forEach(k => { brandFilters[k] = (k === b.Brand); });
+      }
+      rebuildFilterButtons();
+      render();
+    });
+    brandContainer.appendChild(btn);
+  });
+
+  // Platform toggles
+  const platContainer = document.getElementById("platform-filters");
+  platContainer.innerHTML = "";
+  const platforms = [...new Set(config.lists.map(l => l.Platform))];
+  platforms.forEach(p => {
+    const list = config.lists.find(l => l.Platform === p);
+    const color = list?.["Platform Color (Hex)"] || "#666";
+    const btn = document.createElement("button");
+    btn.className = "toggle-btn active";
+    btn.textContent = p;
+    btn.style.background = color;
+    btn.style.borderColor = color;
+    btn.style.color = "#fff";
+    btn.addEventListener("click", () => {
+      platformFilters[p] = !platformFilters[p];
+      updateToggleBtn(btn, platformFilters[p], color);
+      render();
+    });
+    // Double-click to solo
+    btn.addEventListener("dblclick", () => {
+      const onlyThisOn = platformFilters[p] && Object.entries(platformFilters).filter(([k,v]) => v).length === 1;
+      if (onlyThisOn) {
+        // Already soloed — restore all
+        Object.keys(platformFilters).forEach(k => { platformFilters[k] = true; });
+      } else {
+        // Solo this one
+        Object.keys(platformFilters).forEach(k => { platformFilters[k] = (k === p); });
+      }
+      rebuildFilterButtons();
+      render();
+    });
+    platContainer.appendChild(btn);
+  });
+
+  // Stage filter — populate dynamically from calendar dropdown fields
+  const stageSel = document.getElementById("stage-filter");
+  stageSel.addEventListener("change", () => { stageFilter = stageSel.value; render(); });
+  updateStageFilterOptions();
+}
+
+function updateStageFilterOptions() {
+  const stageSel = document.getElementById("stage-filter");
+  const currentVal = stageSel.value;
+  stageSel.innerHTML = '<option value="all">All Stages</option>';
+  
+  // Collect all unique dropdown option names from calendar fields (stage-type fields)
+  const stageOptions = new Set();
+  config.calendarFields.forEach(cf => {
+    if (cf["Field Type"] !== "dropdown") return;
+    // Find any task that has this field to get the options
+    for (const task of tasks) {
+      // Check platform filter for this field
+      const onlyFor = (cf["Only For Platforms"] || "").trim();
+      if (onlyFor) {
+        const platforms = onlyFor.split(";").map(p => p.trim().toLowerCase());
+        const taskPlatform = task.platform.toLowerCase();
+        const taskListName = task.listName.toLowerCase();
+        const matches = platforms.some(p => taskPlatform.includes(p) || p.includes(taskPlatform) || taskListName.includes(p));
+        if (!matches) continue;
+      }
+      // Check if this platform is currently visible
+      if (!platformFilters[task.platform] || !brandFilters[task.brand]) continue;
+      
+      const field = task.customFields.find(f => f.name === cf["Field Name"]);
+      if (field?.type_config?.options) {
+        field.type_config.options.forEach(o => stageOptions.add(o.name));
+        break; // Only need one task to get the options list
+      }
+    }
+  });
+  
+  [...stageOptions].sort().forEach(name => {
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    stageSel.appendChild(opt);
+  });
+  
+  // Restore selection if still valid
+  if ([...stageSel.options].some(o => o.value === currentVal)) {
+    stageSel.value = currentVal;
+  } else {
+    stageSel.value = "all";
+    stageFilter = "all";
+  }
+}
+
+function updateToggleBtn(btn, active, color) {
+  if (active) {
+    btn.classList.add("active");
+    btn.style.background = color; btn.style.borderColor = color; btn.style.color = "#fff";
+  } else {
+    btn.classList.remove("active");
+    btn.style.background = "transparent"; btn.style.borderColor = "#3d4f5f"; btn.style.color = "#8395a7";
+  }
+}
+
+function rebuildFilterButtons() {
+  // Update brand buttons
+  const brandBtns = document.getElementById("brand-filters").querySelectorAll(".toggle-btn");
+  brandBtns.forEach(btn => {
+    const brand = btn.textContent;
+    const bc = config.brandColors.find(b => b.Brand === brand);
+    if (bc) updateToggleBtn(btn, brandFilters[brand], bc["Primary Color (Hex)"]);
+  });
+  // Update platform buttons
+  const platBtns = document.getElementById("platform-filters").querySelectorAll(".toggle-btn");
+  platBtns.forEach(btn => {
+    const plat = btn.textContent;
+    const list = config.lists.find(l => l.Platform === plat);
+    const color = list?.["Platform Color (Hex)"] || "#666";
+    updateToggleBtn(btn, platformFilters[plat], color);
+  });
+}
+
+// ===== VIEW TOGGLE =====
+document.getElementById("view-week").addEventListener("click", () => { currentView = "weekly"; updateViewButtons(); render(); });
+document.getElementById("view-month").addEventListener("click", () => { currentView = "monthly"; updateViewButtons(); render(); });
+
+function updateViewButtons() {
+  document.getElementById("view-week").className = "view-btn" + (currentView === "weekly" ? " active" : "");
+  document.getElementById("view-month").className = "view-btn" + (currentView === "monthly" ? " active" : "");
+}
+
+// ===== FIELDS TOGGLE =====
+document.getElementById("toggle-fields").addEventListener("click", () => {
+  showFields = !showFields;
+  const btn = document.getElementById("toggle-fields");
+  if (showFields) {
+    btn.classList.add("active");
+    btn.style.background = "#7C3AED"; btn.style.borderColor = "#7C3AED"; btn.style.color = "#fff";
+  } else {
+    btn.classList.remove("active");
+    btn.style.background = "transparent"; btn.style.borderColor = "#3d4f5f"; btn.style.color = "#8395a7";
+  }
+  render();
+});
+
+// ===== NAVIGATION =====
+document.getElementById("nav-prev").addEventListener("click", () => { navigate(-1); });
+document.getElementById("nav-next").addEventListener("click", () => { navigate(1); });
+document.getElementById("nav-today").addEventListener("click", () => { 
+  currentDate = new Date();
+  infiniteScrollCooldown = true; // Pause infinite scroll during re-render
+  isScrollJumping = true;
+  render();
+  scrollToToday();
+});
+
+// Get total sticky header height (ops nav + toolbar)
+function getStickyHeight() {
+  const opsNav = document.getElementById('ops-nav');
+  const toolbar = document.querySelector('.sticky-toolbar');
+  return (opsNav?.offsetHeight || 0) + (toolbar?.offsetHeight || 0);
+}
+
+// Scroll to today's date on both desktop and mobile
+function scrollToToday() {
+  // Use double-rAF to ensure DOM is fully laid out after render()
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const todayStr = fmtDate(new Date());
+      
+      // Desktop: scroll to the today cell
+      const desktopCell = document.getElementById(`cell-${todayStr}`);
+      if (desktopCell) {
+        isScrollJumping = true;
+        infiniteScrollCooldown = true; // Pause infinite scroll during jump
+        scrollToElement(desktopCell, "auto", "center");
+        // Brief pause then allow smooth interactions again
+        setTimeout(() => { 
+          isScrollJumping = false; 
+          infiniteScrollCooldown = false;
+        }, 300);
+      }
+      
+      // Mobile: scroll to today's list item  
+      const mobileEl = document.getElementById("mobile-today");
+      if (mobileEl) {
+        scrollToElement(mobileEl, "auto", "start");
+      }
+    });
+  });
+}
+
+// Scroll to an element accounting for all sticky headers
+function scrollToElement(el, behavior, block) {
+  const stickyH = getStickyHeight();
+  const rect = el.getBoundingClientRect();
+  let targetY;
+  if (block === "center") {
+    const viewable = window.innerHeight - stickyH;
+    targetY = window.scrollY + rect.top - stickyH - viewable / 2 + rect.height / 2;
+  } else {
+    // "start" — position element just below sticky headers
+    targetY = window.scrollY + rect.top - stickyH - 8;
+  }
+  window.scrollTo({ top: Math.max(0, targetY), behavior: behavior || "smooth" });
+}
+
+function navigate(dir) {
+  if (currentView === "monthly") {
+    // Calculate target month
+    const targetDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + dir, 1);
+    const targetKey = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
+    
+    // Check if target month is already rendered
+    const targetSection = document.querySelector(`.month-section[data-month="${targetKey}"]`);
+    if (targetSection) {
+      // Already in DOM — just scroll to it
+      isScrollJumping = true;
+      infiniteScrollCooldown = true;
+      scrollToElement(targetSection, "smooth", "start");
+      currentDate = targetDate;
+      document.getElementById("nav-title").textContent = `${MONTHS[targetDate.getMonth()]} ${targetDate.getFullYear()}`;
+      setTimeout(() => { isScrollJumping = false; infiniteScrollCooldown = false; }, 1000);
+    } else {
+      // Not rendered — re-render centered on target
+      currentDate = targetDate;
+      isScrollJumping = true;
+      infiniteScrollCooldown = true;
+      render();
+      // Scroll to the center month after render
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const newSection = document.querySelector(`.month-section[data-month="${targetKey}"]`);
+          if (newSection) {
+            scrollToElement(newSection, "auto", "start");
+          }
+          setTimeout(() => { isScrollJumping = false; infiniteScrollCooldown = false; }, 300);
+        });
+      });
+    }
+  } else {
+    currentDate.setDate(currentDate.getDate() + dir * 7);
+    currentDate = new Date(currentDate);
+    render();
+  }
+}
+document.getElementById("refresh-btn").addEventListener("click", async () => { 
+  const indicator = document.getElementById("sync-indicator");
+  indicator.textContent = "● Syncing...";
+  indicator.className = "sync-indicator syncing";
+  await loadAllTasks(3); 
+  render();
+  indicator.textContent = tasks.length > 0 ? "● Synced" : "● No data";
+  indicator.className = "sync-indicator";
+});
+
+// ===== DAY HEADERS =====
+function buildDayHeaders() {
+  const container = document.getElementById("day-headers");
+  container.innerHTML = DAYS.map(d => `<div class="day-header">${d}</div>`).join("");
+}
+
+// ===== FILTERED TASKS =====
+function getFilteredTasks() {
+  return tasks.filter(t => {
+    if (!t.postDate) return false;
+    if (!brandFilters[t.brand]) return false;
+    if (!platformFilters[t.platform]) return false;
+    
+    // Stage filter — check all calendar dropdown fields for a matching value
+    if (stageFilter !== "all") {
+      let hasMatchingStage = false;
+      for (const cf of config.calendarFields) {
+        if (cf["Field Type"] !== "dropdown") continue;
+        // Check platform scope
+        const onlyFor = (cf["Only For Platforms"] || "").trim();
+        if (onlyFor) {
+          const platforms = onlyFor.split(";").map(p => p.trim().toLowerCase());
+          const tp = t.platform.toLowerCase();
+          const tl = t.listName.toLowerCase();
+          if (!platforms.some(p => tp.includes(p) || p.includes(tp) || tl.includes(p))) continue;
+        }
+        const field = t.customFields.find(f => f.name === cf["Field Name"]);
+        if (field?.type_config?.options && field.value != null) {
+          const opt = field.type_config.options.find(o => o.orderindex === field.value);
+          if (opt && opt.name === stageFilter) { hasMatchingStage = true; break; }
+        }
+      }
+      if (!hasMatchingStage) return false;
+    }
+    
+    return true;
+  });
+}
+
+// Platform display order (consistent across entire calendar)
+const PLATFORM_ORDER = {
+  "ig stories": 0, "ig story": 0, "daily ig story": 0,
+  "ig post": 1, "ig reels": 1, "instagram": 1,
+  "tiktok": 2,
+  "facebook": 3, "fb post": 3, "fb": 3,
+  "email": 4,
+  "youtube": 5,
+  "threads": 6,
+  "blog": 7
+};
+
+function getPlatformSortOrder(task) {
+  const p = task.platform?.toLowerCase() || "";
+  const l = task.listName?.toLowerCase() || "";
+  // Check list name first (more specific), then platform
+  for (const [key, order] of Object.entries(PLATFORM_ORDER)) {
+    if (l.includes(key) || p.includes(key)) return order;
+  }
+  return 99;
+}
+
+function getTasksForDate(dateStr) {
+  return getFilteredTasks()
+    .filter(t => fmtDate(t.postDate) === dateStr)
+    .sort((a, b) => {
+      const orderA = getPlatformSortOrder(a);
+      const orderB = getPlatformSortOrder(b);
+      if (orderA !== orderB) return orderA - orderB;
+      // Within same platform, sort by name
+      return a.name.localeCompare(b.name);
+    });
+}
+
+// ===== RENDER =====
+let pendingRender = false;
+let renderedMonths = []; // track which months are rendered [{y, m}]
+let scrollObserver = null;
+let isScrollJumping = false; // prevent observer updates during programmatic scroll
+
+function render() {
+  // Don't re-render while modal is open — it destroys the modal DOM and causes input glitches
+  if (document.getElementById("modal-overlay").classList.contains("active")) {
+    pendingRender = true;
+    return;
+  }
+  pendingRender = false;
+  
+  // Update stage filter options based on visible platforms
+  if (config) updateStageFilterOptions();
+  
+  const filtered = getFilteredTasks();
+  document.getElementById("task-count").textContent = `${filtered.length} posts`;
+
+  const y = currentDate.getFullYear();
+  const m = currentDate.getMonth();
+
+  if (currentView === "monthly") {
+    renderContinuousMonths(y, m);
+  } else {
+    // Week view stays as-is (single week)
+    const week = getWeekDates(currentDate);
+    document.getElementById("nav-title").textContent =
+      `${MONTHS[week[0].getMonth()]} ${week[0].getDate()} – ${MONTHS[week[6].getMonth()]} ${week[6].getDate()}, ${week[6].getFullYear()}`;
+
+    const grid = document.getElementById("calendar-grid");
+    const today = fmtDate(new Date());
+    let html = '<div class="week-grid">';
+    week.forEach(date => {
+      const dateStr = fmtDate(date);
+      const isToday = dateStr === today;
+      const dayTasks = getTasksForDate(dateStr);
+      html += `<div class="week-col${isToday ? ' today' : ''}" data-date="${dateStr}"
+        ondragover="event.preventDefault();this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleDrop(event,'${dateStr}');this.classList.remove('drag-over')">
+        <div class="week-day-num">${date.getDate()}</div>
+        <div class="week-task-list">`;
+      dayTasks.forEach(t => { html += taskPillHTML(t, true); });
+      html += '</div></div>';
+    });
+    html += '</div>';
+    grid.innerHTML = html;
+  }
+
+  // ===== MOBILE LIST VIEW =====
+  renderMobileList();
+}
+
+// ===== CONTINUOUS MONTH RENDERING =====
+function renderContinuousMonths(centerY, centerM) {
+  const grid = document.getElementById("calendar-grid");
+  
+  // Clean up old observer
+  if (scrollObserver) scrollObserver.disconnect();
+  
+  // Render prev, current, next months
+  renderedMonths = [];
+  let html = '';
+  for (let offset = -1; offset <= 1; offset++) {
+    const d = new Date(centerY, centerM + offset, 1);
+    const my = d.getFullYear();
+    const mm = d.getMonth();
+    renderedMonths.push({ y: my, m: mm });
+    html += renderMonthSection(my, mm);
+  }
+  grid.innerHTML = html;
+  
+  // Update nav title for center month
+  document.getElementById("nav-title").textContent = `${MONTHS[centerM]} ${centerY}`;
+  
+  // Set up IntersectionObserver to update nav title as user scrolls
+  setupScrollObserver();
+  
+  // Set up infinite scroll sentinel detection
+  setupInfiniteScroll();
+}
+
+function renderMonthSection(y, m) {
+  const today = fmtDate(new Date());
+  const days = daysInMonth(y, m);
+  const firstDay = firstDayOfMonth(y, m);
+  const monthKey = `${y}-${String(m + 1).padStart(2, '0')}`;
+  
+  let html = `<div class="month-section" data-month="${monthKey}" data-year="${y}" data-m="${m}">`;
+  html += `<div class="month-section-header">${MONTHS[m]} ${y}</div>`;
+  html += '<div class="month-grid">';
+  
+  // Leading empty cells
+  for (let i = 0; i < firstDay; i++) html += '<div class="day-cell empty"></div>';
+  
+  for (let d = 1; d <= days; d++) {
+    const date = new Date(y, m, d);
+    const dateStr = fmtDate(date);
+    const isToday = dateStr === today;
+    const dayTasks = getTasksForDate(dateStr);
+
+    html += `<div class="day-cell${isToday ? ' today' : ''}" data-date="${dateStr}" id="cell-${dateStr}"
+      ondragover="event.preventDefault();this.classList.add('drag-over')" 
+      ondragleave="this.classList.remove('drag-over')" 
+      ondrop="handleDrop(event,'${dateStr}');this.classList.remove('drag-over')">
+      <div class="day-number">${d}${d === 1 ? `<span class="day-number-label">${MONTHS[m].substring(0, 3)}</span>` : ''}</div>
+      <div class="task-list">`;
+    
+    dayTasks.forEach(t => { html += taskPillHTML(t, false); });
+    
+    html += '</div></div>';
+  }
+  
+  // Trailing empty cells to complete the last row
+  const totalCells = firstDay + days;
+  const remainder = totalCells % 7;
+  if (remainder > 0) {
+    for (let i = 0; i < 7 - remainder; i++) html += '<div class="day-cell empty"></div>';
+  }
+  
+  html += '</div></div>';
+  return html;
+}
+
+function setupScrollObserver() {
+  if (scrollObserver) scrollObserver.disconnect();
+  
+  const headers = document.querySelectorAll('.month-section-header');
+  if (headers.length === 0) return;
+  
+  scrollObserver = new IntersectionObserver((entries) => {
+    if (isScrollJumping) return;
+    
+    // Find the topmost visible month section (accounting for sticky toolbar)
+    const stickyH = getStickyHeight();
+    const sections = document.querySelectorAll('.month-section');
+    let topSection = null;
+    for (const section of sections) {
+      const rect = section.getBoundingClientRect();
+      // The section whose top is closest to below the toolbar (or above it but bottom is visible)
+      if (rect.bottom > stickyH + 50) {
+        topSection = section;
+        break;
+      }
+    }
+    
+    if (topSection) {
+      const sy = parseInt(topSection.dataset.year);
+      const sm = parseInt(topSection.dataset.m);
+      document.getElementById("nav-title").textContent = `${MONTHS[sm]} ${sy}`;
+      // Update currentDate to match (without re-rendering)
+      currentDate = new Date(sy, sm, 1);
+    }
+  }, { threshold: 0, rootMargin: '-160px 0px -70% 0px' });
+  
+  headers.forEach(h => scrollObserver.observe(h));
+}
+
+function setupInfiniteScroll() {
+  // Use scroll event on window to detect when near top or bottom
+  window.removeEventListener('scroll', handleInfiniteScroll);
+  window.addEventListener('scroll', handleInfiniteScroll, { passive: true });
+}
+
+let infiniteScrollCooldown = false;
+
+function handleInfiniteScroll() {
+  if (currentView !== "monthly" || infiniteScrollCooldown) return;
+  
+  const scrollTop = window.scrollY;
+  const scrollHeight = document.documentElement.scrollHeight;
+  const clientHeight = window.innerHeight;
+  
+  // Near bottom — append next month
+  if (scrollTop + clientHeight > scrollHeight - 300) {
+    infiniteScrollCooldown = true;
+    const last = renderedMonths[renderedMonths.length - 1];
+    const next = new Date(last.y, last.m + 1, 1);
+    appendMonth(next.getFullYear(), next.getMonth());
+    setTimeout(() => { infiniteScrollCooldown = false; }, 200);
+  }
+  
+  // Near top — prepend previous month
+  if (scrollTop < 200) {
+    infiniteScrollCooldown = true;
+    const first = renderedMonths[0];
+    const prev = new Date(first.y, first.m - 1, 1);
+    prependMonth(prev.getFullYear(), prev.getMonth());
+    setTimeout(() => { infiniteScrollCooldown = false; }, 200);
+  }
+}
+
+function appendMonth(y, m) {
+  // Don't duplicate
+  const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+  if (renderedMonths.some(rm => rm.y === y && rm.m === m)) return;
+  
+  const grid = document.getElementById("calendar-grid");
+  const fragment = document.createElement('div');
+  fragment.innerHTML = renderMonthSection(y, m);
+  grid.appendChild(fragment.firstElementChild);
+  renderedMonths.push({ y, m });
+  
+  // Re-observe the new header
+  const newHeader = grid.querySelector(`.month-section[data-month="${key}"] .month-section-header`);
+  if (newHeader && scrollObserver) scrollObserver.observe(newHeader);
+  
+  // Trim old months if too many (keep max 5)
+  while (renderedMonths.length > 5) {
+    const removed = renderedMonths.shift();
+    const rKey = `${removed.y}-${String(removed.m + 1).padStart(2, '0')}`;
+    const el = grid.querySelector(`.month-section[data-month="${rKey}"]`);
+    if (el) el.remove();
+  }
+}
+
+function prependMonth(y, m) {
+  // Don't duplicate
+  const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+  if (renderedMonths.some(rm => rm.y === y && rm.m === m)) return;
+  
+  const grid = document.getElementById("calendar-grid");
+  const scrollBefore = document.documentElement.scrollHeight;
+  
+  const fragment = document.createElement('div');
+  fragment.innerHTML = renderMonthSection(y, m);
+  grid.insertBefore(fragment.firstElementChild, grid.firstElementChild);
+  renderedMonths.unshift({ y, m });
+  
+  // Maintain scroll position so content doesn't jump
+  const scrollAfter = document.documentElement.scrollHeight;
+  window.scrollBy(0, scrollAfter - scrollBefore);
+  
+  // Re-observe the new header
+  const newHeader = grid.querySelector(`.month-section[data-month="${key}"] .month-section-header`);
+  if (newHeader && scrollObserver) scrollObserver.observe(newHeader);
+  
+  // Trim old months if too many (keep max 5)
+  while (renderedMonths.length > 5) {
+    const removed = renderedMonths.pop();
+    const rKey = `${removed.y}-${String(removed.m + 1).padStart(2, '0')}`;
+    const el = grid.querySelector(`.month-section[data-month="${rKey}"]`);
+    if (el) el.remove();
+  }
+}
+
+// ===== MOBILE LIST (continuous scroll) =====
+function renderMobileList() {
+  const mobileList = document.getElementById("mobile-list");
+  if (!mobileList) return;
+  
+  const today = fmtDate(new Date());
+  const y = currentDate.getFullYear();
+  const m = currentDate.getMonth();
+  
+  let html = '';
+  
+  if (currentView === "monthly") {
+    // Render 3 months continuously
+    for (let offset = -1; offset <= 1; offset++) {
+      const d = new Date(y, m + offset, 1);
+      const my = d.getFullYear();
+      const mm = d.getMonth();
+      const monthKey = `${my}-${String(mm + 1).padStart(2, '0')}`;
+      const days = daysInMonth(my, mm);
+      
+      html += `<div class="mobile-month-header" data-month="${monthKey}">${MONTHS[mm]} ${my}</div>`;
+      
+      for (let day = 1; day <= days; day++) {
+        const date = new Date(my, mm, day);
+        const dateStr = fmtDate(date);
+        const isToday = dateStr === today;
+        const dayTasks = getTasksForDate(dateStr);
+        if (dayTasks.length === 0 && !isToday) continue;
+        
+        const dayName = DAYS[date.getDay()];
+        html += `<div class="mobile-list-day" data-date="${dateStr}"${isToday ? ' id="mobile-today"' : ''}>
+          <div class="mobile-list-date${isToday ? ' today' : ''}">
+            <span>${dayName}</span>
+            <span class="mobile-list-date-num">${date.getDate()}</span>
+          </div>
+          <div class="mobile-list-tasks">`;
+        
+        dayTasks.forEach(t => {
+          const emoji = t.brand === "NITM" ? "👩‍⚕️" : t.brand === "HITM" ? "🫀" : "";
+          const postTimeField = t.customFields.find(f => f.name && f.name.toLowerCase().includes("post time"));
+          const timeStr = postTimeField?.value ? postTimeField.value : "";
+          const captionField = t.customFields.find(f => f.name && f.name.toLowerCase().includes("caption") && (f.type === "checkbox" || f.type_config));
+          const hasStar = t.name.includes("⭐") || t.name.includes("★") || t.name.includes("🌟");
+          const showStar = (captionField && (captionField.value === "true" || captionField.value === true)) || hasStar;
+          const isStory = t.listName?.toLowerCase().includes("ig stor") || t.listName?.toLowerCase().includes("story");
+          const qotdField = isStory ? t.customFields.find(f => f.name && f.name.toLowerCase().includes("qotd") && (f.type === "checkbox" || f.type_config)) : null;
+          const showQotd = qotdField && (qotdField.value === "true" || qotdField.value === true);
+          
+          html += `<div class="mobile-task" style="background:${t.color}" onclick="showModal('${t.id}')">
+            ${timeStr ? `<span class="mobile-task-time">${escHTML(timeStr)}</span>` : ''}
+            <span class="mobile-task-name">${escHTML(t.name)}</span>
+            ${showStar ? '<span style="font-size:11px">⭐</span>' : ''}
+            ${showQotd ? '<span style="font-size:11px">📅</span>' : ''}
+            <span class="mobile-task-emoji">${emoji}</span>
+          </div>`;
+        });
+        
+        if (dayTasks.length === 0) {
+          html += `<div style="padding:8px 0;font-size:12px;color:var(--text-dim)">No posts</div>`;
+        }
+        
+        html += '</div></div>';
+      }
+    }
+  } else {
+    // Week view — single week
+    const dates = getWeekDates(currentDate);
+    dates.forEach(date => {
+      const dateStr = fmtDate(date);
+      const isToday = dateStr === today;
+      const dayTasks = getTasksForDate(dateStr);
+      if (dayTasks.length === 0 && !isToday) return;
+      
+      const dayName = DAYS[date.getDay()];
+      html += `<div class="mobile-list-day" data-date="${dateStr}"${isToday ? ' id="mobile-today"' : ''}>
+        <div class="mobile-list-date${isToday ? ' today' : ''}">
+          <span>${dayName}</span>
+          <span class="mobile-list-date-num">${date.getDate()}</span>
+        </div>
+        <div class="mobile-list-tasks">`;
+      
+      dayTasks.forEach(t => {
+        const emoji = t.brand === "NITM" ? "👩‍⚕️" : t.brand === "HITM" ? "🫀" : "";
+        const postTimeField = t.customFields.find(f => f.name && f.name.toLowerCase().includes("post time"));
+        const timeStr = postTimeField?.value ? postTimeField.value : "";
+        
+        html += `<div class="mobile-task" style="background:${t.color}" onclick="showModal('${t.id}')">
+          ${timeStr ? `<span class="mobile-task-time">${escHTML(timeStr)}</span>` : ''}
+          <span class="mobile-task-name">${escHTML(t.name)}</span>
+          <span class="mobile-task-emoji">${emoji}</span>
+        </div>`;
+      });
+      
+      if (dayTasks.length === 0) {
+        html += `<div style="padding:8px 0;font-size:12px;color:var(--text-dim)">No posts</div>`;
+      }
+      
+      html += '</div></div>';
+    });
+  }
+  
+  mobileList.innerHTML = html;
+}
+
+function taskPillHTML(task, expanded) {
+  const emoji = task.brand === "NITM" ? "👩‍⚕️" : task.brand === "HITM" ? "🫀" : "";
+  
+  // Check for caption written star - look for checkbox field named in config
+  // Checks for any field with "caption" in the name that's a checkbox, or a star in the task name
+  let starHTML = "";
+  const captionField = task.customFields.find(f => 
+    f.name && f.name.toLowerCase().includes("caption") && (f.type === "checkbox" || f.type_config)
+  );
+  const hasStar = task.name.includes("⭐") || task.name.includes("★") || task.name.includes("🌟");
+  if ((captionField && (captionField.value === "true" || captionField.value === true)) || hasStar) {
+    starHTML = `<span class="task-pill-emoji" style="font-size:10px">⭐</span>`;
+  }
+  
+  // Check for QOTD Scheduled — shows 📅 on IG Stories
+  let qotdHTML = "";
+  const isIGStory = task.listName?.toLowerCase().includes("ig stor") || task.listName?.toLowerCase().includes("story");
+  if (isIGStory) {
+    const qotdField = task.customFields.find(f => 
+      f.name && f.name.toLowerCase().includes("qotd") && (f.type === "checkbox" || f.type_config)
+    );
+    if (qotdField && (qotdField.value === "true" || qotdField.value === true)) {
+      qotdHTML = `<span class="task-pill-emoji" style="font-size:10px">📅</span>`;
+    }
+  }
+  
+  let badgesHTML = "";
+  if (showFields && config.calendarFields.length > 0) {
+    let badges = [];
+    config.calendarFields.forEach(cf => {
+      // Check platform filter
+      const onlyFor = (cf["Only For Platforms"] || "").trim();
+      if (onlyFor) {
+        const platforms = onlyFor.split(";").map(p => p.trim().toLowerCase());
+        const taskPlatform = task.platform.toLowerCase();
+        const taskListName = task.listName.toLowerCase();
+        // Match if any entry is contained in the platform name or list name
+        const matches = platforms.some(p => taskPlatform.includes(p) || p.includes(taskPlatform) || taskListName.includes(p));
+        if (!matches) return;
+      }
+      
+      const field = task.customFields.find(f => f.name === cf["Field Name"]);
+      if (!field) return;
+      
+      let displayValue = "";
+      if (field.type_config?.options && field.value != null) {
+        // Dropdown field — find the selected option
+        const opt = field.type_config.options.find(o => o.orderindex === field.value);
+        if (opt) {
+          displayValue = opt.name;
+          // ClickUp options have a color property - use it directly
+          const ckColor = opt.color;
+          const statusOpt = config.statusOptions.find(s => s["Status Name"] === opt.name);
+          const badgeColor = ckColor || statusOpt?.["Status Color (Hex)"] || "#6c757d";
+          badges.push(`<span class="pill-badge" style="background:${badgeColor}">${escHTML(displayValue)}</span>`);
+        }
+      } else if (field.value != null && field.value !== "") {
+        displayValue = String(field.value);
+        const statusOpt = config.statusOptions.find(s => s["Status Name"] === displayValue);
+        const badgeColor = statusOpt?.["Status Color (Hex)"] || "#6c757d";
+        badges.push(`<span class="pill-badge" style="background:${badgeColor}">${escHTML(displayValue)}</span>`);
+      }
+    });
+    if (badges.length > 0) {
+      badgesHTML = `<div class="pill-badges">${badges.join("")}</div>`;
+    }
+  }
+
+  // Get post time if available — check config for platform filtering
+  let timeHTML = "";
+  const postTimeCfg = config.allCustomFields?.find(f => f["Field Name"] && f["Field Name"].toLowerCase().includes("post time"));
+  const postTimeField = task.customFields.find(f => f.name && f.name.toLowerCase().includes("post time"));
+  if (postTimeField && postTimeField.value) {
+    // Check platform filter from config
+    let showTime = true;
+    if (postTimeCfg) {
+      const onlyFor = (postTimeCfg["Only For Platforms"] || "").trim();
+      if (onlyFor) {
+        const platforms = onlyFor.split(";").map(p => p.trim().toLowerCase());
+        const tp = task.platform.toLowerCase();
+        const tl = task.listName.toLowerCase();
+        showTime = platforms.some(p => tp.includes(p) || p.includes(tp) || tl.includes(p));
+      }
+    }
+    if (showTime) {
+      timeHTML = `<span style="font-size:9px;opacity:0.85;font-weight:700;flex-shrink:0">🕐 ${escHTML(String(postTimeField.value))}</span>`;
+    }
+  }
+
+  return `<div class="task-pill${expanded ? ' expanded' : ''}" draggable="true" data-task-id="${task.id}" 
+    style="background:${task.color}" 
+    onclick="showModal('${task.id}')" 
+    ondragstart="startDrag(event,'${task.id}')"
+    title="${task.name} (${task.platform} · ${task.brand})">
+    ${timeHTML}
+    <span class="task-pill-name">${escHTML(task.name)}</span>
+    ${starHTML}
+    ${qotdHTML}
+    <span class="task-pill-emoji">${emoji}</span>
+    ${badgesHTML}
+    ${expanded ? `<span class="task-pill-meta">${task.brand} · ${task.platform}</span>` : ''}
+  </div>`;
+}
+
+function escHTML(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ===== DRAG & DROP =====
+function startDrag(e, taskId) {
+  dragTask = tasks.find(t => t.id === taskId);
+  e.dataTransfer.effectAllowed = "move";
+}
+
+window.startDrag = startDrag;
+
+async function handleDrop(e, dateStr) {
+  e.preventDefault();
+  if (!dragTask) return;
+  
+  const postDateFieldName = config.settings["Post Date Field Name"] || "Post Date";
+  const cf = dragTask.customFields.find(f => f.name === postDateFieldName);
+  if (!cf) { dragTask = null; return; }
+
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const newDate = new Date(y, m-1, d, 12, 0, 0);
+  const newVal = newDate.getTime().toString();
+
+  const ok = await updateTaskField(dragTask.id, cf.id, newVal);
+  if (ok) {
+    const t = tasks.find(t => t.id === dragTask.id);
+    if (t) t.postDate = newDate;
+    render();
+  }
+  dragTask = null;
+}
+
+window.handleDrop = handleDrop;
+
+// ===== MODAL =====
+function showModal(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const statusOpt = config.statusOptions.find(s => s["Status Name"] === task.status);
+  const statusColor = statusOpt?.["Status Color (Hex)"] || "#95A5A6";
+  const postDateFieldName = config.settings["Post Date Field Name"] || "Post Date";
+
+  document.getElementById("modal-header").innerHTML = 
+    `<div class="modal-platform-badge" style="background:${task.color}">${task.platform}</div>
+     <div class="modal-brand-badge">${task.brand}</div>`;
+
+  document.getElementById("modal-title").textContent = task.name;
+
+  document.getElementById("modal-meta").innerHTML = `
+    <div class="modal-meta-item">
+      <span class="modal-meta-label">List</span>
+      <span class="modal-meta-value">${escHTML(task.listName)}</span>
+    </div>
+    <div class="modal-meta-item">
+      <span class="modal-meta-label">Post Date</span>
+      <span class="modal-meta-value">${task.postDate ? task.postDate.toLocaleDateString("en-US", {weekday:"short",month:"short",day:"numeric",year:"numeric"}) : "Not set"}</span>
+    </div>
+    ${(() => {
+      const ptField = task.customFields.find(f => f.name && f.name.toLowerCase().includes("post time"));
+      if (!ptField) return "";
+      // Check platform filter from config
+      const ptCfg = config.allCustomFields?.find(f => f["Field Name"] && f["Field Name"].toLowerCase().includes("post time"));
+      if (ptCfg) {
+        const onlyFor = (ptCfg["Only For Platforms"] || "").trim();
+        if (onlyFor) {
+          const platforms = onlyFor.split(";").map(p => p.trim().toLowerCase());
+          const tp = task.platform.toLowerCase();
+          const tl = task.listName.toLowerCase();
+          if (!platforms.some(p => tp.includes(p) || p.includes(tp) || tl.includes(p))) return "";
+        }
+      }
+      const ptVal = ptField.value || "";
+      return `<div class="modal-meta-item" style="flex-wrap:wrap;gap:6px">
+        <span class="modal-meta-label">Post Time</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="text" value="${escHTML(String(ptVal))}" placeholder="e.g. 3:00 PM" 
+            data-task-id="${task.id}" data-field-id="${ptField.id}"
+            id="time-input-${task.id}"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();updateTimeFromModal(this)}"
+            style="padding:4px 8px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-light);border-radius:6px;font-size:13px;font-family:inherit;width:100px;text-align:right;outline:none" />
+          <button onclick="updateTimeFromModal(document.getElementById('time-input-${task.id}'))" 
+            style="padding:4px 10px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap">Save</button>
+        </div>
+        <span class="time-save-indicator" style="font-size:11px;width:100%;text-align:right"></span>
+      </div>`;
+    })()}`;
+
+  const visibleFields = config.customFields.filter(cf => cf["Field Name"] !== postDateFieldName);
+  let fieldsHTML = "";
+  visibleFields.forEach(cf => {
+    const field = task.customFields.find(f => f.name === cf["Field Name"]);
+    if (!field) return;
+    
+    let display = "";
+    let hasValue = false;
+    
+    const fieldType = (cf["Field Type"] || "").toLowerCase();
+    const isUrlType = ["url", "website", "link"].includes(fieldType);
+    
+    // Also check if the ClickUp field itself is a url type
+    const isClickUpUrl = field.type === "url";
+    
+    if (isUrlType || isClickUpUrl) {
+      // Always render as editable input + open link if a URL is saved
+      let rawVal = field.value ? String(field.value) : "";
+      const urlMatch = rawVal.match(/(https?:\/\/[^\s"'<>]+)/);
+      let cleanUrl = urlMatch ? urlMatch[1] : rawVal.trim();
+      const hasUrl = cleanUrl && cleanUrl.startsWith("http");
+
+      display = `<div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+        ${hasUrl ? `<a href="${escHTML(cleanUrl)}" target="_blank" rel="noopener" class="field-link">Open ↗</a>` : ''}
+        <input type="url" value="${escHTML(rawVal)}" placeholder="Paste link..."
+          data-task-id="${task.id}" data-field-id="${field.id}"
+          id="url-input-${field.id}"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}"
+          onblur="updateUrlFromModal(this)"
+          class="url-input" />
+      </div>`;
+      hasValue = true;
+    } else if (cf["Field Type"] === "dropdown" && field.type_config?.options) {
+      // Render as editable dropdown
+      const currentVal = field.value;
+      const currentOpt = field.type_config.options.find(o => o.orderindex === currentVal);
+      
+      // Only show if it has a value set OR if the field is explicitly configured to show
+      if (currentVal == null && cf["Show on Calendar (TRUE/FALSE)"]?.toUpperCase() !== "TRUE") return;
+      
+      // Get color for the current selection
+      const optColor = currentOpt?.color || "#6c757d";
+      const bgStyle = currentVal != null && currentOpt ? `background:${optColor};color:#fff;border-color:${optColor}` : "";
+      
+      let selectHTML = `<select class="field-dropdown" data-task-id="${task.id}" data-field-id="${field.id}" style="${bgStyle}" onchange="updateFieldFromModal(this, this.options[this.selectedIndex].dataset.color)">`;
+      selectHTML += `<option value="" data-color="">— None —</option>`;
+      field.type_config.options.forEach(o => {
+        const selected = o.orderindex === currentVal ? " selected" : "";
+        const oColor = o.color || "#6c757d";
+        selectHTML += `<option value="${o.orderindex}" data-color="${oColor}"${selected}>${escHTML(o.name)}</option>`;
+      });
+      selectHTML += `</select>`;
+      display = selectHTML;
+      hasValue = currentVal != null; // Only true if actually has a value
+    } else if ((cf["Field Type"] || "").toLowerCase() === "checkbox" || field.type === "checkbox") {
+      // Check platform filter for checkbox fields
+      const onlyFor = (cf["Only For Platforms"] || "").trim();
+      if (onlyFor) {
+        const cfPlatforms = onlyFor.split(";").map(p => p.trim().toLowerCase());
+        const taskPlat = task.platform.toLowerCase();
+        const taskLN = task.listName.toLowerCase();
+        const cfMatches = cfPlatforms.some(p => taskPlat.includes(p) || p.includes(taskPlat) || taskLN.includes(p));
+        if (!cfMatches) return;
+      }
+      
+      const isChecked = field.value === "true" || field.value === true;
+      display = `<label style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        <input type="checkbox" ${isChecked ? "checked" : ""} 
+          data-task-id="${task.id}" data-field-id="${field.id}"
+          onchange="updateCheckboxFromModal(this)"
+          style="width:18px;height:18px;cursor:pointer;accent-color:#27AE60" />
+        <span style="font-size:13px;color:${isChecked ? '#27AE60' : '#8395a7'}">${isChecked ? '✓ Done' : 'Not yet'}</span>
+      </label>`;
+      hasValue = true;
+    } else if (field.value != null && field.value !== "") {
+      const strVal = String(field.value);
+      // Check if the value looks like a URL
+      const urlInText = strVal.match(/(https?:\/\/[^\s"'<>]+)/);
+      if (urlInText) {
+        display = `<a href="${escHTML(urlInText[1])}" target="_blank" rel="noopener" class="field-link">Open Link ↗</a>`;
+      } else {
+        display = escHTML(strVal);
+      }
+      hasValue = true;
+    }
+    
+    if (!hasValue && cf["Field Type"] !== "dropdown" && (cf["Field Type"] || "").toLowerCase() !== "checkbox" && field.type !== "checkbox") return;
+    if (!hasValue && cf["Field Type"] === "dropdown") return;
+    
+    fieldsHTML += `<div class="field-row">
+      <span class="field-label">${escHTML(cf["Field Name"])}</span>
+      <span class="field-value">${display}</span>
+    </div>`;
+  });
+  document.getElementById("modal-fields").innerHTML = fieldsHTML;
+
+  // Use web URL instead of app URL
+  let clickupUrl = task.url || "";
+  if (clickupUrl) {
+    // Convert app:// or clickup:// URLs to web URLs
+    clickupUrl = clickupUrl.replace(/^(clickup|app):\/\//, "https://app.clickup.com/");
+    // Ensure it's the web version
+    if (!clickupUrl.startsWith("http")) clickupUrl = "https://app.clickup.com/t/" + task.id;
+  }
+  document.getElementById("modal-footer").innerHTML = clickupUrl
+    ? `<a href="${clickupUrl}" target="_blank" rel="noopener" class="open-clickup">Open in ClickUp ↗</a>` : "";
+
+  document.getElementById("modal-overlay").classList.add("active");
+}
+
+window.showModal = showModal;
+
+document.getElementById("modal-close").addEventListener("click", closeModal);
+document.getElementById("modal-overlay").addEventListener("click", e => { if (e.target === e.currentTarget) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+function closeModal() { 
+  document.getElementById("modal-overlay").classList.remove("active"); 
+  // Flush any pending render that was deferred while modal was open
+  if (pendingRender) {
+    requestAnimationFrame(() => render());
+  }
+}
+
+// ===== FIELD UPDATE FROM MODAL =====
+async function updateFieldFromModal(selectEl, color) {
+  const taskId = selectEl.dataset.taskId;
+  const fieldId = selectEl.dataset.fieldId;
+  const newValue = selectEl.value ? parseInt(selectEl.value) : null;
+  
+  // Update dropdown color
+  if (color && selectEl.value) {
+    selectEl.style.background = color;
+    selectEl.style.color = "#fff";
+    selectEl.style.borderColor = color;
+  } else {
+    selectEl.style.background = "";
+    selectEl.style.color = "";
+    selectEl.style.borderColor = "";
+  }
+  
+  selectEl.style.opacity = "0.5";
+  const ok = await updateTaskField(taskId, fieldId, newValue);
+  selectEl.style.opacity = "1";
+  
+  if (ok) {
+    // Update local task data
+    const task = tasks.find(t => t.id === taskId);
+    if (task) {
+      const cf = task.customFields.find(f => f.id === fieldId);
+      if (cf) cf.value = newValue;
+    }
+    render(); // Re-render calendar to update badges (deferred if modal open)
+  } else {
+    alert("Failed to update field. Check your connection.");
+  }
+}
+window.updateFieldFromModal = updateFieldFromModal;
+
+// ===== CHECKBOX UPDATE FROM MODAL =====
+async function updateCheckboxFromModal(checkboxEl) {
+  const taskId = checkboxEl.dataset.taskId;
+  const fieldId = checkboxEl.dataset.fieldId;
+  const newValue = checkboxEl.checked;
+  
+  const label = checkboxEl.parentElement.querySelector("span");
+  label.textContent = newValue ? "✓ Done" : "Not yet";
+  label.style.color = newValue ? "#27AE60" : "#8395a7";
+  
+  checkboxEl.style.opacity = "0.5";
+  const ok = await updateTaskField(taskId, fieldId, newValue);
+  checkboxEl.style.opacity = "1";
+  
+  if (ok) {
+    const task = tasks.find(t => t.id === taskId);
+    if (task) {
+      const cf = task.customFields.find(f => f.id === fieldId);
+      if (cf) cf.value = newValue;
+    }
+    render();
+  } else {
+    // Revert on failure
+    checkboxEl.checked = !newValue;
+    label.textContent = !newValue ? "✓ Done" : "Not yet";
+    label.style.color = !newValue ? "#27AE60" : "#8395a7";
+    alert("Failed to update. Check your connection.");
+  }
+}
+window.updateCheckboxFromModal = updateCheckboxFromModal;
+
+// ===== TIME UPDATE FROM MODAL =====
+async function updateTimeFromModal(inputEl) {
+  const taskId = inputEl.dataset.taskId;
+  const fieldId = inputEl.dataset.fieldId;
+  const newValue = inputEl.value.trim();
+  
+  // Skip if empty and was already empty
+  const task = tasks.find(t => t.id === taskId);
+  const currentVal = task ? (task.customFields.find(f => f.id === fieldId)?.value ?? "") : "";
+  if (String(currentVal) === newValue) {
+    // No change — just show neutral border
+    return;
+  }
+  
+  // Visual feedback — saving
+  inputEl.style.opacity = "0.5";
+  inputEl.style.borderColor = "var(--accent)";
+  
+  // Find the save indicator next to the input
+  const indicator = inputEl.closest('.modal-meta-item')?.querySelector('.time-save-indicator');
+  if (indicator) { indicator.textContent = "Saving..."; indicator.style.color = "var(--accent)"; }
+  
+  try {
+    const ok = await updateTaskField(taskId, fieldId, newValue);
+    
+    inputEl.style.opacity = "1";
+    
+    if (ok) {
+      // Update local task data
+      if (task) {
+        const cf = task.customFields.find(f => f.id === fieldId);
+        if (cf) cf.value = newValue;
+      }
+      pendingRender = true;
+      inputEl.style.borderColor = "#27AE60";
+      if (indicator) { indicator.textContent = "✓ Saved"; indicator.style.color = "#27AE60"; }
+      setTimeout(() => { 
+        if (inputEl) inputEl.style.borderColor = ""; 
+        if (indicator) indicator.textContent = "";
+      }, 2000);
+    } else {
+      inputEl.style.borderColor = "#e74c3c";
+      if (indicator) { indicator.textContent = "✗ Failed to save"; indicator.style.color = "#e74c3c"; }
+      setTimeout(() => { 
+        if (inputEl) inputEl.style.borderColor = ""; 
+        if (indicator) indicator.textContent = "";
+      }, 3000);
+    }
+  } catch (err) {
+    console.error("Time update error:", err);
+    inputEl.style.opacity = "1";
+    inputEl.style.borderColor = "#e74c3c";
+    if (indicator) { indicator.textContent = "✗ Error"; indicator.style.color = "#e74c3c"; }
+    setTimeout(() => { 
+      if (inputEl) inputEl.style.borderColor = ""; 
+      if (indicator) indicator.textContent = "";
+    }, 3000);
+  }
+}
+window.updateTimeFromModal = updateTimeFromModal;
+
+// ===== URL UPDATE FROM MODAL =====
+async function updateUrlFromModal(inputEl) {
+  const taskId = inputEl.dataset.taskId;
+  const fieldId = inputEl.dataset.fieldId;
+  const newValue = inputEl.value.trim();
+
+  const task = tasks.find(t => t.id === taskId);
+  const currentVal = task ? (task.customFields.find(f => f.id === fieldId)?.value ?? "") : "";
+  if (String(currentVal) === newValue) return;
+
+  inputEl.style.opacity = "0.5";
+  inputEl.style.borderColor = "var(--accent)";
+
+  const ok = await updateTaskField(taskId, fieldId, newValue);
+  inputEl.style.opacity = "1";
+
+  if (ok) {
+    if (task) {
+      const cf = task.customFields.find(f => f.id === fieldId);
+      if (cf) cf.value = newValue;
+    }
+    inputEl.style.borderColor = "#27AE60";
+    pendingRender = true;
+    // Re-open modal so the "Open ↗" link appears/updates
+    setTimeout(() => { showModal(taskId); }, 400);
+  } else {
+    inputEl.style.borderColor = "#e74c3c";
+    setTimeout(() => { if (inputEl) inputEl.style.borderColor = ""; }, 3000);
+  }
+}
+window.updateUrlFromModal = updateUrlFromModal;
+
+// ===== SEARCH =====
+const searchInput = document.getElementById("search-input");
+const searchResults = document.getElementById("search-results");
+let searchTimeout = null;
+
+searchInput.addEventListener("input", () => {
+  clearTimeout(searchTimeout);
+  const q = searchInput.value.trim().toLowerCase();
+  if (q.length < 2) { searchResults.classList.remove("active"); return; }
+  searchTimeout = setTimeout(() => performSearch(q), 200);
+});
+
+searchInput.addEventListener("focus", () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (q.length >= 2) performSearch(q);
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".search-box")) searchResults.classList.remove("active");
+});
+
+function performSearch(query) {
+  const results = tasks.filter(t => 
+    t.name.toLowerCase().includes(query) || 
+    t.listName.toLowerCase().includes(query) ||
+    t.platform.toLowerCase().includes(query) ||
+    t.brand.toLowerCase().includes(query)
+  ).slice(0, 15);
+  
+  if (results.length === 0) {
+    searchResults.innerHTML = '<div class="search-no-results">No posts found</div>';
+  } else {
+    searchResults.innerHTML = results.map(t => {
+      const dateStr = t.postDate ? t.postDate.toLocaleDateString("en-US", {month:"short", day:"numeric"}) : "No date";
+      return `<div class="search-result-item" onclick="jumpToTask('${t.id}')">
+        <div class="search-result-color" style="background:${t.color}"></div>
+        <div class="search-result-info">
+          <div class="search-result-name">${escHTML(t.name)}</div>
+          <div class="search-result-meta">${t.platform} · ${t.brand} · ${dateStr}</div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  searchResults.classList.add("active");
+}
+
+function jumpToTask(taskId) {
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  searchResults.classList.remove("active");
+  searchInput.value = "";
+  
+  if (task.postDate) {
+    // Navigate to the task's date
+    currentDate = new Date(task.postDate);
+    render();
+  }
+  // Open the modal
+  showModal(taskId);
+}
+window.jumpToTask = jumpToTask;
+
+// ===== START =====
+init();
+</script>
+</body>
+</html>

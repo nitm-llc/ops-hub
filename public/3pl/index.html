@@ -1,0 +1,1182 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>3PL Analytics | NITM Ops Hub</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0a0b;
+            --bg-secondary: #111113;
+            --bg-card: #18181b;
+            --bg-card-hover: #1f1f23;
+            --border: #27272a;
+            --border-subtle: #1e1e21;
+            --text-primary: #fafafa;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent-blue: #3b82f6;
+            --accent-blue-dim: #1d4ed8;
+            --accent-green: #22c55e;
+            --accent-green-dim: rgba(34, 197, 94, 0.15);
+            --accent-amber: #f59e0b;
+            --accent-amber-dim: rgba(245, 158, 11, 0.15);
+            --accent-red: #ef4444;
+            --accent-red-dim: rgba(239, 68, 68, 0.15);
+            --accent-purple: #a855f7;
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        /* Password Gate Styles */
+        .password-gate {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        .password-gate.hidden { display: none; }
+        .password-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 40px;
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        .password-box h2 {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        .password-box p {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+        .password-box input {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 16px;
+            font-family: inherit;
+            margin-bottom: 16px;
+        }
+        .password-box input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+        .password-box button {
+            width: 100%;
+            padding: 12px 24px;
+            background: var(--accent-blue);
+            border: none;
+            border-radius: var(--radius-sm);
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .password-box button:hover {
+            background: var(--accent-blue-dim);
+        }
+        .password-error {
+            color: var(--accent-red);
+            font-size: 14px;
+            margin-top: 12px;
+            display: none;
+        }
+        .password-error.visible { display: block; }
+
+        .main-app { display: none; }
+        .main-app.visible { display: block; }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 32px 24px; }
+
+        .header { margin-bottom: 32px; }
+        .header h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 4px; }
+        .header p { color: var(--text-muted); font-size: 14px; }
+
+        .data-status {
+            display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+            background: var(--bg-card); border-radius: 20px; font-size: 13px;
+            color: var(--text-secondary); margin-top: 12px;
+        }
+        .data-status .dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--accent-green); animation: pulse 2s infinite;
+        }
+        .data-status.empty .dot { background: var(--text-muted); animation: none; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        .tab-nav { display: flex; gap: 8px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+        .tab-btn {
+            padding: 10px 20px; background: transparent; border: 1px solid var(--border);
+            border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 14px;
+            font-weight: 500; cursor: pointer; transition: all 0.2s; font-family: inherit;
+        }
+        .tab-btn:hover { background: var(--bg-card); color: var(--text-primary); }
+        .tab-btn.active { background: var(--accent-blue); border-color: var(--accent-blue); color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .upload-zone {
+            border: 2px dashed var(--border); border-radius: var(--radius); padding: 40px;
+            text-align: center; cursor: pointer; transition: all 0.2s ease;
+            background: var(--bg-secondary); margin-bottom: 32px;
+        }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--accent-blue); background: rgba(59, 130, 246, 0.05); }
+        .upload-zone svg { width: 48px; height: 48px; color: var(--text-muted); margin-bottom: 16px; }
+        .upload-zone h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+        .upload-zone p { color: var(--text-muted); font-size: 14px; }
+        .upload-zone input { display: none; }
+
+        .controls-bar { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; align-items: center; }
+        .control-group { display: flex; flex-direction: column; gap: 6px; }
+        .control-group label { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+        .control-group input, .control-group select {
+            padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); color: var(--text-primary); font-size: 14px;
+            font-family: inherit; min-width: 150px;
+        }
+        .control-group input:focus, .control-group select:focus { outline: none; border-color: var(--accent-blue); }
+
+        .toggle-compare {
+            display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); cursor: pointer; transition: all 0.2s; margin-top: auto;
+        }
+        .toggle-compare:hover { background: var(--bg-card-hover); }
+        .toggle-compare.active { background: var(--accent-blue-dim); border-color: var(--accent-blue); }
+        .toggle-compare span { font-size: 14px; color: var(--text-secondary); }
+
+        .compare-fields { display: none; gap: 16px; }
+        .compare-fields.visible { display: flex; }
+
+        .btn-clear {
+            padding: 10px 16px; background: transparent; border: 1px solid var(--border);
+            border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 14px;
+            cursor: pointer; margin-top: auto; transition: all 0.2s;
+        }
+        .btn-clear:hover { background: var(--accent-red-dim); border-color: var(--accent-red); color: var(--accent-red); }
+
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 32px; }
+        .metric-card {
+            background: var(--bg-card); border: 1px solid var(--border-subtle);
+            border-radius: var(--radius); padding: 24px; transition: all 0.2s;
+        }
+        .metric-card:hover { background: var(--bg-card-hover); border-color: var(--border); }
+        .metric-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+        .metric-label { font-size: 13px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-icon { width: 36px; height: 36px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; }
+        .metric-icon.blue { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); }
+        .metric-icon.green { background: var(--accent-green-dim); color: var(--accent-green); }
+        .metric-icon.amber { background: var(--accent-amber-dim); color: var(--accent-amber); }
+        .metric-icon.purple { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
+        .metric-value { font-size: 32px; font-weight: 700; letter-spacing: -1px; margin-bottom: 8px; font-family: 'JetBrains Mono', monospace; }
+
+        .metric-comparison { font-size: 13px; margin-top: 4px; }
+        .metric-comparison .compare-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border-subtle); margin-top: 8px; }
+        .metric-comparison .compare-values { display: flex; flex-direction: column; gap: 4px; }
+        .metric-comparison .period-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-comparison .period-value { font-family: 'JetBrains Mono', monospace; font-weight: 500; color: var(--text-secondary); }
+        .metric-comparison .change { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 14px; }
+        .metric-comparison .change.positive { background: var(--accent-green-dim); color: var(--accent-green); }
+        .metric-comparison .change.negative { background: var(--accent-red-dim); color: var(--accent-red); }
+        .metric-comparison .change.neutral { background: rgba(161, 161, 170, 0.15); color: var(--text-secondary); }
+
+        .carrier-breakdown, .cost-breakdown {
+            background: var(--bg-card); border: 1px solid var(--border-subtle);
+            border-radius: var(--radius); padding: 24px; margin-bottom: 32px;
+        }
+        .carrier-breakdown h3, .cost-breakdown h3 { font-size: 16px; font-weight: 600; margin-bottom: 20px; }
+
+        .carrier-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+        .carrier-card { background: var(--bg-secondary); border-radius: var(--radius-sm); padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+        .carrier-card-header { display: flex; justify-content: space-between; align-items: center; }
+        .carrier-name { font-weight: 600; font-size: 15px; }
+        .carrier-percent { font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--accent-blue); background: rgba(59, 130, 246, 0.15); padding: 4px 10px; border-radius: 4px; }
+        .carrier-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+        .carrier-bar-fill { height: 100%; background: var(--accent-blue); border-radius: 3px; transition: width 0.3s ease; }
+        .carrier-stats { display: flex; justify-content: space-between; font-size: 13px; }
+        .carrier-stat-label { color: var(--text-muted); }
+        .carrier-stat-value { font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); }
+
+        .cost-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+        .cost-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--bg-secondary); border-radius: var(--radius-sm); }
+        .cost-item-label { color: var(--text-secondary); font-size: 14px; }
+        .cost-item-value { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--text-primary); }
+
+        .charts-section { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px; margin-bottom: 32px; }
+        .chart-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 24px; }
+        .chart-card h3 { font-size: 16px; font-weight: 600; margin-bottom: 20px; color: var(--text-primary); }
+        .chart-container { height: 280px; position: relative; }
+
+        .empty-state { text-align: center; padding: 80px 24px; color: var(--text-muted); }
+        .empty-state svg { width: 64px; height: 64px; margin-bottom: 16px; opacity: 0.5; }
+        .empty-state h3 { font-size: 18px; color: var(--text-secondary); margin-bottom: 8px; }
+
+        .dashboard-content { display: none; }
+        .dashboard-content.visible { display: block; }
+
+        .analysis-header { margin-bottom: 24px; }
+        .analysis-header h2 { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+        .analysis-header p { color: var(--text-muted); font-size: 14px; }
+
+        .analysis-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 32px; }
+        .summary-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 20px; display: flex; flex-direction: column; gap: 8px; }
+        .summary-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .summary-value { font-size: 28px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+        .summary-value.good { color: var(--accent-green); }
+        .summary-value.bad { color: var(--accent-red); }
+
+        .analysis-section { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 24px; margin-bottom: 24px; }
+        .analysis-section h3 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+        .section-desc { color: var(--text-muted); font-size: 13px; margin-bottom: 16px; }
+
+        .analysis-table-wrapper { overflow-x: auto; }
+        .analysis-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .analysis-table th { text-align: left; padding: 10px 12px; background: var(--bg-secondary); color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+        .analysis-table td { padding: 12px; border-bottom: 1px solid var(--border-subtle); }
+        .analysis-table tr:hover td { background: var(--bg-secondary); }
+        .analysis-table .mono { font-family: 'JetBrains Mono', monospace; }
+
+        .performance-bar { width: 100px; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+        .performance-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+        .performance-bar-fill.good { background: var(--accent-green); }
+        .performance-bar-fill.ok { background: var(--accent-amber); }
+        .performance-bar-fill.bad { background: var(--accent-red); }
+
+        .highlight-row { background: rgba(239, 68, 68, 0.05); }
+        .highlight-row td { color: var(--accent-red); }
+
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(10, 10, 11, 0.9); display: flex; align-items: center;
+            justify-content: center; z-index: 1000; flex-direction: column; gap: 16px;
+        }
+        .loading-overlay.hidden { display: none; }
+        .spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent-blue); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .upload-progress { margin-top: 16px; display: none; }
+        .upload-progress.visible { display: block; }
+        .progress-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: var(--accent-blue); transition: width 0.3s; }
+        .progress-text { font-size: 13px; color: var(--text-secondary); margin-top: 8px; }
+
+        .multi-period-section { margin-bottom: 32px; }
+        .multi-period-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 16px; }
+        .multi-period-header h3 { margin: 0; }
+        .period-controls { display: flex; gap: 12px; }
+        .period-controls select {
+            padding: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px;
+            font-family: inherit; cursor: pointer;
+        }
+        .table-wrapper { overflow-x: auto; }
+        .comparison-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .comparison-table th { text-align: left; padding: 12px 16px; background: var(--bg-secondary); color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+        .comparison-table td { padding: 14px 16px; border-bottom: 1px solid var(--border-subtle); font-family: 'JetBrains Mono', monospace; }
+        .comparison-table tr:hover td { background: var(--bg-secondary); }
+        .comparison-table .period-name { font-family: 'DM Sans', sans-serif; font-weight: 500; color: var(--text-primary); }
+        .comparison-table .trend { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; margin-left: 8px; padding: 2px 6px; border-radius: 4px; }
+        .comparison-table .trend.up { color: var(--accent-green); background: var(--accent-green-dim); }
+        .comparison-table .trend.down { color: var(--accent-red); background: var(--accent-red-dim); }
+        .comparison-table .trend.up-bad { color: var(--accent-red); background: var(--accent-red-dim); }
+        .comparison-table .trend.down-good { color: var(--accent-green); background: var(--accent-green-dim); }
+
+        @media (max-width: 768px) {
+            .container { padding: 16px; }
+            .charts-section { grid-template-columns: 1fr; }
+            .metric-value { font-size: 28px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Ops Hub Nav -->
+<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #1e293b;font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:#f1f5f9;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#f1f5f9;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
+
+    <!-- Main App -->
+    <div class="main-app visible" id="mainApp">
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <p style="color: var(--text-secondary);" id="loadingText">Loading data...</p>
+    </div>
+
+    <div class="container">
+        <header class="header">
+            <div class="header-left">
+                <h1>3PL Analytics</h1>
+                <p>ShipFusion fulfillment metrics & cost analysis</p>
+                <div class="data-status empty" id="dataStatus">
+                    <span class="dot"></span>
+                    <span id="statusText">No data loaded</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="tab-nav">
+            <button class="tab-btn active" data-tab="overview">Overview</button>
+            <button class="tab-btn" data-tab="delivery-analysis">Click to Delivery Analysis</button>
+        </div>
+
+        <div class="upload-zone" id="uploadZone">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <h3>Upload 3PL Export CSV</h3>
+            <p>Drag & drop or click to select • Data syncs to cloud for all users</p>
+            <input type="file" id="fileInput" accept=".csv" multiple>
+            <div class="upload-progress" id="uploadProgress">
+                <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+                <div class="progress-text" id="progressText">Uploading...</div>
+            </div>
+        </div>
+
+        <div class="controls-bar">
+            <div class="control-group">
+                <label>From Date</label>
+                <input type="date" id="dateFrom">
+            </div>
+            <div class="control-group">
+                <label>To Date</label>
+                <input type="date" id="dateTo">
+            </div>
+            <button class="toggle-compare" id="toggleInternational">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>Include International</span>
+            </button>
+            <button class="toggle-compare" id="toggleCompare">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                <span>Compare periods</span>
+            </button>
+            <div class="compare-fields" id="compareFields">
+                <div class="control-group">
+                    <label>Compare From</label>
+                    <input type="date" id="compareDateFrom">
+                </div>
+                <div class="control-group">
+                    <label>Compare To</label>
+                    <input type="date" id="compareDateTo">
+                </div>
+            </div>
+            <button class="toggle-compare" id="toggleMultiCompare">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+                <span>Multi-period table</span>
+            </button>
+            <button class="btn-clear" id="clearData">Clear All Data</button>
+        </div>
+
+        <div class="empty-state" id="emptyState">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <h3>No data yet</h3>
+            <p>Upload your ShipFusion CSV exports to get started</p>
+        </div>
+
+        <div class="dashboard-content" id="dashboardContent">
+            <div class="tab-content active" id="tab-overview">
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Orders</span>
+                            <div class="metric-icon blue"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricOrders">—</div>
+                        <div class="metric-comparison" id="compOrders"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Units Shipped</span>
+                            <div class="metric-icon blue"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricUnits">—</div>
+                        <div class="metric-comparison" id="compUnits"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Units per Order</span>
+                            <div class="metric-icon purple"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricUnitsPerOrder">—</div>
+                        <div class="metric-comparison" id="compUnitsPerOrder"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Avg Zone</span>
+                            <div class="metric-icon amber"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricAvgZone">—</div>
+                        <div class="metric-comparison" id="compAvgZone"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Avg Shipping Cost</span>
+                            <div class="metric-icon green"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricAvgCost">—</div>
+                        <div class="metric-comparison" id="compAvgCost"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Click to Delivery</span>
+                            <div class="metric-icon amber"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricClickToDelivery">—</div>
+                        <div class="metric-comparison" id="compClickToDelivery"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Delivery Rate</span>
+                            <div class="metric-icon green"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricDeliveryRate">—</div>
+                        <div class="metric-comparison" id="compDeliveryRate"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Undelivered Orders</span>
+                            <div class="metric-icon" style="background: var(--accent-red-dim); color: var(--accent-red);"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="metricUndelivered">—</div>
+                        <div class="metric-comparison" id="compUndelivered"></div>
+                    </div>
+                </div>
+
+                <div class="carrier-breakdown">
+                    <h3>Orders by Carrier</h3>
+                    <div class="carrier-cards" id="carrierCards"></div>
+                </div>
+
+                <div class="charts-section">
+                    <div class="chart-card">
+                        <h3>Orders by Day</h3>
+                        <div class="chart-container"><canvas id="ordersChart"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>Carrier Mix</h3>
+                        <div class="chart-container"><canvas id="carrierChart"></canvas></div>
+                    </div>
+                </div>
+
+                <div class="cost-breakdown">
+                    <h3>Cost Breakdown (Selected Period)</h3>
+                    <div class="cost-items" id="costBreakdown"></div>
+                </div>
+
+                <div class="multi-period-section" id="multiPeriodSection" style="display: none;">
+                    <div class="chart-card">
+                        <div class="multi-period-header">
+                            <h3>Multi-Period Comparison</h3>
+                            <div class="period-controls">
+                                <select id="periodType">
+                                    <option value="week">Weekly</option>
+                                    <option value="month">Monthly</option>
+                                </select>
+                                <select id="numPeriods">
+                                    <option value="4">Last 4 periods</option>
+                                    <option value="6">Last 6 periods</option>
+                                    <option value="8">Last 8 periods</option>
+                                    <option value="12">Last 12 periods</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="comparison-table" id="comparisonTable">
+                                <thead>
+                                    <tr>
+                                        <th>Period</th>
+                                        <th>Orders</th>
+                                        <th>Units</th>
+                                        <th>Units/Order</th>
+                                        <th>Avg Zone</th>
+                                        <th>Avg Cost</th>
+                                        <th>Click→Delivery</th>
+                                        <th>Delivery Rate</th>
+                                        <th>Undelivered</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="comparisonTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-content" id="tab-delivery-analysis">
+                <div class="analysis-header">
+                    <h2>Click to Delivery Analysis</h2>
+                    <p>Identify where delays are happening by zone, carrier, and region</p>
+                </div>
+
+                <div class="analysis-summary">
+                    <div class="summary-card"><span class="summary-label">Overall Avg</span><span class="summary-value" id="analysisOverallAvg">—</span></div>
+                    <div class="summary-card"><span class="summary-label">Fastest</span><span class="summary-value good" id="analysisFastest">—</span></div>
+                    <div class="summary-card"><span class="summary-label">Slowest</span><span class="summary-value bad" id="analysisSlowest">—</span></div>
+                    <div class="summary-card"><span class="summary-label">Orders Analyzed</span><span class="summary-value" id="analysisCount">—</span></div>
+                </div>
+
+                <div class="analysis-section">
+                    <h3>By Zone</h3>
+                    <p class="section-desc">Lower zones = closer to warehouse</p>
+                    <div class="analysis-table-wrapper">
+                        <table class="analysis-table"><thead><tr><th>Zone</th><th>Orders</th><th>Avg Days</th><th>Min</th><th>Max</th><th>Avg Cost</th><th></th></tr></thead><tbody id="zoneTableBody"></tbody></table>
+                    </div>
+                </div>
+
+                <div class="analysis-section">
+                    <h3>By Carrier & Service</h3>
+                    <p class="section-desc">Compare performance across shipping methods</p>
+                    <div class="analysis-table-wrapper">
+                        <table class="analysis-table"><thead><tr><th>Carrier</th><th>Service</th><th>Orders</th><th>Avg Days</th><th>Min</th><th>Max</th><th>Avg Cost</th><th></th></tr></thead><tbody id="carrierServiceTableBody"></tbody></table>
+                    </div>
+                </div>
+
+                <div class="analysis-section">
+                    <h3>By State (Top 15)</h3>
+                    <p class="section-desc">Regional hotspots</p>
+                    <div class="analysis-table-wrapper">
+                        <table class="analysis-table"><thead><tr><th>State</th><th>Orders</th><th>Avg Days</th><th>Avg Zone</th><th></th></tr></thead><tbody id="stateTableBody"></tbody></table>
+                    </div>
+                </div>
+
+                <div class="analysis-section">
+                    <h3>Slowest Orders</h3>
+                    <p class="section-desc">Outliers to investigate</p>
+                    <div class="analysis-table-wrapper">
+                        <table class="analysis-table"><thead><tr><th>Order #</th><th>Days</th><th>Order Date</th><th>Delivered</th><th>Carrier/Service</th><th>Zone</th><th>State</th></tr></thead><tbody id="slowestTableBody"></tbody></table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Cloudflare API URL
+        const API_URL = '/3pl/api';
+
+        let masterData = [];
+        let ordersChart = null;
+        let carrierChart = null;
+
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput = document.getElementById('fileInput');
+        const dateFrom = document.getElementById('dateFrom');
+        const dateTo = document.getElementById('dateTo');
+        const compareDateFrom = document.getElementById('compareDateFrom');
+        const compareDateTo = document.getElementById('compareDateTo');
+        const toggleCompare = document.getElementById('toggleCompare');
+        const toggleInternational = document.getElementById('toggleInternational');
+        const compareFields = document.getElementById('compareFields');
+        const emptyState = document.getElementById('emptyState');
+        const dashboardContent = document.getElementById('dashboardContent');
+        const dataStatus = document.getElementById('dataStatus');
+        const statusText = document.getElementById('statusText');
+        const clearData = document.getElementById('clearData');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const loadingText = document.getElementById('loadingText');
+        const uploadProgress = document.getElementById('uploadProgress');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+
+        function showLoading(text = 'Loading data...') { 
+            loadingText.textContent = text;
+            loadingOverlay.classList.remove('hidden'); 
+        }
+        function hideLoading() { loadingOverlay.classList.add('hidden'); }
+
+        function parseCurrency(str) {
+            if (!str || str === '') return 0;
+            return parseFloat(String(str).replace(/[$,\s]/g, '')) || 0;
+        }
+
+        function parseCSV(text) {
+            const lines = text.split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            const rows = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                const values = [];
+                let current = '';
+                let inQuotes = false;
+                for (let char of lines[i]) {
+                    if (char === '"') inQuotes = !inQuotes;
+                    else if (char === ',' && !inQuotes) { values.push(current.trim()); current = ''; }
+                    else current += char;
+                }
+                values.push(current.trim());
+                if (values.length === headers.length) {
+                    const row = {};
+                    headers.forEach((h, idx) => row[h] = values[idx]);
+                    rows.push(row);
+                }
+            }
+            return rows;
+        }
+
+        function processData(rows) {
+            const seen = new Set();
+            const uniqueOrders = [];
+            
+            const getVal = (row, ...keys) => {
+                for (const key of keys) {
+                    if (row[key] !== undefined && row[key] !== '') return row[key];
+                }
+                return '';
+            };
+            
+            rows.forEach(row => {
+                const shipmentId = getVal(row, 'Shipment Id', 'Shipment ID', 'shipment id', 'shipment_id');
+                if (!shipmentId || seen.has(shipmentId)) return;
+                seen.add(shipmentId);
+                uniqueOrders.push({
+                    shipmentId,
+                    orderNumber: getVal(row, 'ORDER NUMBER', 'Order Number', 'order number', 'Order_Number'),
+                    shipDate: getVal(row, 'SHIP DATE', 'Ship Date', 'ship date', 'Ship_Date'),
+                    orderDate: getVal(row, 'ORDER DATE', 'Order Date', 'order date', 'Order_Date'),
+                    carrierDeliveryDate: getVal(row, 'Carrier Delivery Date', 'Carrier Delivery', 'CARRIER DELIVERY DATE', 'carrier delivery date', 'Delivery Date', 'Delivery_Date'),
+                    carrier: getVal(row, 'CARRIER', 'Carrier', 'carrier'),
+                    service: getVal(row, 'SERVICE', 'Service', 'service', 'Carrier Service', 'carrier service'),
+                    carrierStatus: getVal(row, 'Carrier Status', 'CARRIER STATUS', 'carrier status', 'Status', 'Shipment Status'),
+                    zone: getVal(row, 'ZONE', 'Zone', 'zone', 'Shipping Zone', 'shipping zone'),
+                    state: getVal(row, 'STATE/PROVINCE', 'State / Province', 'State/Province', 'State', 'state'),
+                    country: getVal(row, 'COUNTRY', 'Country', 'country'),
+                    numProducts: parseInt(getVal(row, 'NUMBER OF PRODUCTS', 'Number of Products', 'number of products', 'Quantity', 'Qty', 'qty')) || 0,
+                    shippingCost: parseCurrency(getVal(row, 'SHIPPING COST', 'Shipping Cost', 'shipping cost', 'Shipping_Cost')),
+                    basePrice: parseCurrency(getVal(row, 'Base Price', 'BASE PRICE', 'base price')),
+                    residentialFee: parseCurrency(getVal(row, 'Residential Fee', 'RESIDENTIAL FEE', 'residential fee')),
+                    dasFee: parseCurrency(getVal(row, 'DAS Fee', 'DAS FEE', 'das fee')),
+                    peakFee: parseCurrency(getVal(row, 'Peak Fee', 'PEAK FEE', 'peak fee')),
+                    fuelFee: parseCurrency(getVal(row, 'Fuel Fee', 'FUEL FEE', 'fuel fee')),
+                    servicesCost: parseCurrency(getVal(row, 'SERVICES COST', 'Services Cost', 'services cost')),
+                    packagingCost: parseCurrency(getVal(row, 'PACKAGING COST', 'Packaging Cost', 'packaging cost')),
+                    firstPickFee: parseCurrency(getVal(row, 'First Pick Fee', 'FIRST PICK FEE', 'first pick fee')),
+                    additionalPickFee: parseCurrency(getVal(row, 'Additional Pick Fee', 'ADDITIONAL PICK FEE', 'additional pick fee')),
+                    insertPickFee: parseCurrency(getVal(row, 'Insert Pick Fee', 'INSERT PICK FEE', 'insert pick fee')),
+                });
+            });
+            return uniqueOrders;
+        }
+
+        // Load data from Cloudflare API
+        async function loadData() {
+            showLoading('Loading data...');
+            try {
+                const response = await fetch(`${API_URL}/orders`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    masterData = result.data.map(row => ({
+                        shipmentId: row.shipment_id,
+                        orderNumber: row.order_number,
+                        shipDate: row.ship_date,
+                        orderDate: row.order_date,
+                        carrierDeliveryDate: row.carrier_delivery_date,
+                        carrier: row.carrier,
+                        service: row.service,
+                        carrierStatus: row.carrier_status,
+                        zone: row.zone,
+                        state: row.state,
+                        country: row.country,
+                        numProducts: row.num_products || 0,
+                        shippingCost: row.shipping_cost || 0,
+                        basePrice: row.base_price || 0,
+                        residentialFee: row.residential_fee || 0,
+                        dasFee: row.das_fee || 0,
+                        peakFee: row.peak_fee || 0,
+                        fuelFee: row.fuel_fee || 0,
+                        servicesCost: row.services_cost || 0,
+                        packagingCost: row.packaging_cost || 0,
+                        firstPickFee: row.first_pick_fee || 0,
+                        additionalPickFee: row.additional_pick_fee || 0,
+                        insertPickFee: row.insert_pick_fee || 0,
+                    }));
+                    
+                    masterData.sort((a, b) => new Date(a.shipDate) - new Date(b.shipDate));
+                    
+                    if (masterData.length > 0) {
+                        const dates = masterData.map(d => d.shipDate).filter(d => d);
+                        if (dates.length > 0 && !dateFrom.value) {
+                            dateFrom.value = dates[0];
+                            dateTo.value = dates[dates.length - 1];
+                        }
+                    }
+                }
+                hideLoading();
+                updateUI();
+            } catch (error) {
+                console.error('Error loading data:', error);
+                statusText.textContent = 'Error loading data';
+                hideLoading();
+            }
+        }
+
+        // Save orders to Cloudflare API
+        async function saveOrders(orders) {
+            if (orders.length === 0) {
+                statusText.textContent = 'No orders in file';
+                return;
+            }
+
+            uploadProgress.classList.add('visible');
+            progressFill.style.width = '0%';
+            progressText.textContent = `Uploading ${orders.length} orders...`;
+
+            try {
+                // Send in batches of 100
+                const batchSize = 100;
+                let processed = 0;
+                let totalAdded = 0;
+                let totalUpdated = 0;
+                
+                for (let i = 0; i < orders.length; i += batchSize) {
+                    const batch = orders.slice(i, i + batchSize);
+                    
+                    const response = await fetch(`${API_URL}/orders`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ orders: batch })
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                        totalAdded += result.added || 0;
+                        totalUpdated += result.updated || 0;
+                    }
+                    
+                    processed += batch.length;
+                    const percent = Math.round((processed / orders.length) * 100);
+                    progressFill.style.width = percent + '%';
+                    progressText.textContent = `Processed ${processed} of ${orders.length} orders...`;
+                }
+
+                let message = '';
+                if (totalAdded > 0 && totalUpdated > 0) {
+                    message = `Done! Added ${totalAdded} new, updated ${totalUpdated} existing.`;
+                } else if (totalAdded > 0) {
+                    message = `Done! Added ${totalAdded} new orders.`;
+                } else if (totalUpdated > 0) {
+                    message = `Done! Updated ${totalUpdated} existing orders.`;
+                } else {
+                    message = 'No changes made.';
+                }
+                
+                progressText.textContent = message;
+                setTimeout(() => {
+                    uploadProgress.classList.remove('visible');
+                }, 3000);
+                
+                await loadData();
+            } catch (error) {
+                console.error('Error saving orders:', error);
+                progressText.textContent = 'Error uploading: ' + error.message;
+            }
+        }
+
+        // Clear all data
+        async function clearAllData() {
+            if (!confirm('Clear ALL data? This affects all users and cannot be undone.')) return;
+            
+            showLoading('Deleting all data...');
+            try {
+                await fetch(`${API_URL}/orders`, { method: 'DELETE' });
+                masterData = [];
+                dateFrom.value = '';
+                dateTo.value = '';
+                hideLoading();
+                updateUI();
+            } catch (error) {
+                console.error('Error clearing data:', error);
+                hideLoading();
+            }
+        }
+
+        function filterByDateRange(data, from, to) {
+            const includeInternational = toggleInternational.classList.contains('active');
+            return data.filter(d => {
+                const date = new Date(d.shipDate);
+                const fromDate = from ? new Date(from) : null;
+                const toDate = to ? new Date(to) : null;
+                if (fromDate && date < fromDate) return false;
+                if (toDate && date > toDate) return false;
+                if (!includeInternational) {
+                    const country = (d.country || '').trim().toUpperCase();
+                    if (country !== 'UNITED STATES' && country !== 'US' && country !== 'USA') return false;
+                }
+                return true;
+            });
+        }
+
+        function calculateMetrics(data) {
+            if (data.length === 0) return { orders: 0, units: 0, unitsPerOrder: 0, avgZone: 0, avgShippingCost: 0, clickToDelivery: 0, deliveryRate: 0, undelivered: 0, carrierBreakdown: {}, costBreakdown: {} };
+            
+            const units = data.reduce((sum, d) => sum + (d.numProducts || 0), 0);
+            const totalShippingCost = data.reduce((sum, d) => sum + (d.shippingCost || 0), 0);
+            const zonesWithData = data.filter(d => d.zone && !isNaN(parseInt(d.zone)));
+            const avgZone = zonesWithData.length > 0 ? zonesWithData.reduce((sum, d) => sum + parseInt(d.zone), 0) / zonesWithData.length : 0;
+            
+            let clickToDeliverySum = 0, clickToDeliveryCount = 0;
+            data.forEach(d => {
+                if (d.orderDate && d.carrierDeliveryDate) {
+                    const days = (new Date(d.carrierDeliveryDate) - new Date(d.orderDate)) / (1000 * 60 * 60 * 24);
+                    if (days >= 0 && days < 60) { clickToDeliverySum += days; clickToDeliveryCount++; }
+                }
+            });
+            
+            const delivered = data.filter(d => d.carrierStatus && d.carrierStatus.toLowerCase().includes('delivered')).length;
+            const undelivered = data.length - delivered;
+            
+            const carrierBreakdown = {};
+            data.forEach(d => {
+                if (d.carrier) {
+                    if (!carrierBreakdown[d.carrier]) carrierBreakdown[d.carrier] = { count: 0, cost: 0 };
+                    carrierBreakdown[d.carrier].count++;
+                    carrierBreakdown[d.carrier].cost += d.shippingCost || 0;
+                }
+            });
+            Object.keys(carrierBreakdown).forEach(carrier => {
+                carrierBreakdown[carrier].percent = (carrierBreakdown[carrier].count / data.length) * 100;
+            });
+            
+            const costBreakdown = {
+                'Base Shipping': data.reduce((s, d) => s + (d.basePrice || 0), 0),
+                'Residential Fee': data.reduce((s, d) => s + (d.residentialFee || 0), 0),
+                'Fuel Fee': data.reduce((s, d) => s + (d.fuelFee || 0), 0),
+                'DAS Fee': data.reduce((s, d) => s + (d.dasFee || 0), 0),
+                'Peak Fee': data.reduce((s, d) => s + (d.peakFee || 0), 0),
+                'Pick Fees': data.reduce((s, d) => s + (d.firstPickFee || 0) + (d.additionalPickFee || 0) + (d.insertPickFee || 0), 0),
+                'Packaging': data.reduce((s, d) => s + (d.packagingCost || 0), 0),
+            };
+            
+            return {
+                orders: data.length,
+                units,
+                unitsPerOrder: data.length > 0 ? units / data.length : 0,
+                avgZone,
+                avgShippingCost: data.length > 0 ? totalShippingCost / data.length : 0,
+                clickToDelivery: clickToDeliveryCount > 0 ? clickToDeliverySum / clickToDeliveryCount : 0,
+                deliveryRate: data.length > 0 ? (delivered / data.length) * 100 : 0,
+                undelivered,
+                carrierBreakdown,
+                costBreakdown
+            };
+        }
+
+        function formatComparison(current, previous, formatFn, lowerIsBetter = false) {
+            if (previous === null || previous === undefined) return '';
+            const change = previous === 0 ? 0 : ((current - previous) / previous) * 100;
+            const isPositive = lowerIsBetter ? change < 0 : change > 0;
+            const isNeutral = Math.abs(change) < 0.1;
+            const arrow = change > 0 ? '↑' : change < 0 ? '↓' : '→';
+            const absChange = Math.abs(change).toFixed(1);
+            const changeClass = isNeutral ? 'neutral' : (isPositive ? 'positive' : 'negative');
+            return `<div class="compare-row"><div class="compare-values"><span class="period-label">Compare</span><span class="period-value">${formatFn(previous)}</span></div><span class="change ${changeClass}">${arrow} ${absChange}%</span></div>`;
+        }
+
+        const formatNumber = (n) => n.toLocaleString();
+        const formatCurrency = (n) => '$' + n.toFixed(2);
+        const formatDays = (n) => n.toFixed(1) + ' days';
+        const formatPercent = (n) => n.toFixed(1) + '%';
+
+        function updateUI() {
+            const hasData = masterData.length > 0;
+            emptyState.style.display = hasData ? 'none' : 'block';
+            dashboardContent.classList.toggle('visible', hasData);
+            dataStatus.classList.toggle('empty', !hasData);
+            statusText.textContent = hasData ? `${masterData.length} orders loaded` : 'No data loaded';
+            if (!hasData) return;
+
+            const filteredData = filterByDateRange(masterData, dateFrom.value, dateTo.value);
+            const metrics = calculateMetrics(filteredData);
+
+            document.getElementById('metricOrders').textContent = metrics.orders.toLocaleString();
+            document.getElementById('metricUnits').textContent = metrics.units.toLocaleString();
+            document.getElementById('metricUnitsPerOrder').textContent = metrics.unitsPerOrder.toFixed(2);
+            document.getElementById('metricAvgZone').textContent = metrics.avgZone.toFixed(1);
+            document.getElementById('metricAvgCost').textContent = '$' + metrics.avgShippingCost.toFixed(2);
+            document.getElementById('metricClickToDelivery').textContent = metrics.clickToDelivery.toFixed(1) + ' days';
+            document.getElementById('metricDeliveryRate').textContent = metrics.deliveryRate.toFixed(1) + '%';
+            document.getElementById('metricUndelivered').textContent = metrics.undelivered.toLocaleString();
+
+            const carrierCardsHTML = Object.entries(metrics.carrierBreakdown).sort((a, b) => b[1].count - a[1].count).map(([carrier, data]) => `<div class="carrier-card"><div class="carrier-card-header"><span class="carrier-name">${carrier}</span><span class="carrier-percent">${data.percent.toFixed(1)}%</span></div><div class="carrier-bar"><div class="carrier-bar-fill" style="width: ${data.percent}%"></div></div><div class="carrier-stats"><div><span class="carrier-stat-label">Orders</span> <span class="carrier-stat-value">${data.count.toLocaleString()}</span></div><div><span class="carrier-stat-label">Avg Cost</span> <span class="carrier-stat-value">$${(data.cost / data.count).toFixed(2)}</span></div></div></div>`).join('');
+            document.getElementById('carrierCards').innerHTML = carrierCardsHTML || '<p style="color: var(--text-muted);">No carrier data</p>';
+
+            const isComparing = toggleCompare.classList.contains('active');
+            if (isComparing && compareDateFrom.value && compareDateTo.value) {
+                const compareData = filterByDateRange(masterData, compareDateFrom.value, compareDateTo.value);
+                const compareMetrics = calculateMetrics(compareData);
+                document.getElementById('compOrders').innerHTML = formatComparison(metrics.orders, compareMetrics.orders, formatNumber, false);
+                document.getElementById('compUnits').innerHTML = formatComparison(metrics.units, compareMetrics.units, formatNumber, false);
+                document.getElementById('compUnitsPerOrder').innerHTML = formatComparison(metrics.unitsPerOrder, compareMetrics.unitsPerOrder, n => n.toFixed(2), false);
+                document.getElementById('compAvgZone').innerHTML = formatComparison(metrics.avgZone, compareMetrics.avgZone, n => n.toFixed(1), true);
+                document.getElementById('compAvgCost').innerHTML = formatComparison(metrics.avgShippingCost, compareMetrics.avgShippingCost, formatCurrency, true);
+                document.getElementById('compClickToDelivery').innerHTML = formatComparison(metrics.clickToDelivery, compareMetrics.clickToDelivery, formatDays, true);
+                document.getElementById('compDeliveryRate').innerHTML = formatComparison(metrics.deliveryRate, compareMetrics.deliveryRate, formatPercent, false);
+                document.getElementById('compUndelivered').innerHTML = formatComparison(metrics.undelivered, compareMetrics.undelivered, formatNumber, true);
+            } else {
+                document.querySelectorAll('.metric-comparison').forEach(el => el.innerHTML = '');
+            }
+
+            const breakdownHTML = Object.entries(metrics.costBreakdown).filter(([_, val]) => val > 0).map(([label, val]) => `<div class="cost-item"><span class="cost-item-label">${label}</span><span class="cost-item-value">$${val.toFixed(2)}</span></div>`).join('');
+            document.getElementById('costBreakdown').innerHTML = breakdownHTML;
+
+            updateCharts(filteredData);
+            
+            if (document.getElementById('toggleMultiCompare').classList.contains('active')) {
+                updateMultiPeriodTable();
+            }
+        }
+
+        function updateCharts(data) {
+            const ordersByDay = {};
+            data.forEach(d => { if (d.shipDate) ordersByDay[d.shipDate] = (ordersByDay[d.shipDate] || 0) + 1; });
+            const sortedDates = Object.keys(ordersByDay).sort();
+            
+            if (ordersChart) ordersChart.destroy();
+            ordersChart = new Chart(document.getElementById('ordersChart'), { 
+                type: 'bar', 
+                data: { labels: sortedDates, datasets: [{ label: 'Orders', data: sortedDates.map(d => ordersByDay[d]), backgroundColor: 'rgba(59, 130, 246, 0.8)', borderRadius: 4 }] }, 
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#71717a' } }, y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#71717a' } } } } 
+            });
+            
+            const carrierCounts = {};
+            data.forEach(d => { if (d.carrier) carrierCounts[d.carrier] = (carrierCounts[d.carrier] || 0) + 1; });
+            
+            if (carrierChart) carrierChart.destroy();
+            carrierChart = new Chart(document.getElementById('carrierChart'), { 
+                type: 'doughnut', 
+                data: { labels: Object.keys(carrierCounts), datasets: [{ data: Object.values(carrierCounts), backgroundColor: ['#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#ef4444'], borderWidth: 0 }] }, 
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#a1a1aa', padding: 16 } } } } 
+            });
+        }
+
+        function updateDeliveryAnalysis() {
+            const filteredData = filterByDateRange(masterData, dateFrom.value, dateTo.value);
+            const deliveredOrders = filteredData.filter(d => d.orderDate && d.carrierDeliveryDate).map(d => {
+                const days = (new Date(d.carrierDeliveryDate) - new Date(d.orderDate)) / (1000 * 60 * 60 * 24);
+                return { ...d, deliveryDays: days };
+            }).filter(d => d.deliveryDays >= 0 && d.deliveryDays < 60);
+
+            if (deliveredOrders.length === 0) {
+                document.getElementById('analysisOverallAvg').textContent = '—';
+                document.getElementById('analysisFastest').textContent = '—';
+                document.getElementById('analysisSlowest').textContent = '—';
+                document.getElementById('analysisCount').textContent = '0';
+                return;
+            }
+
+            const allDays = deliveredOrders.map(d => d.deliveryDays);
+            const avgDays = allDays.reduce((a, b) => a + b, 0) / allDays.length;
+
+            document.getElementById('analysisOverallAvg').textContent = avgDays.toFixed(1) + ' days';
+            document.getElementById('analysisFastest').textContent = Math.min(...allDays).toFixed(0) + ' days';
+            document.getElementById('analysisSlowest').textContent = Math.max(...allDays).toFixed(0) + ' days';
+            document.getElementById('analysisCount').textContent = deliveredOrders.length.toLocaleString();
+
+            const byZone = {};
+            deliveredOrders.forEach(d => {
+                const zone = d.zone || 'Unknown';
+                if (!byZone[zone]) byZone[zone] = { days: [], costs: [] };
+                byZone[zone].days.push(d.deliveryDays);
+                byZone[zone].costs.push(d.shippingCost);
+            });
+            document.getElementById('zoneTableBody').innerHTML = Object.entries(byZone).map(([zone, data]) => ({ zone, count: data.days.length, avg: data.days.reduce((a,b)=>a+b,0)/data.days.length, min: Math.min(...data.days), max: Math.max(...data.days), avgCost: data.costs.reduce((a,b)=>a+b,0)/data.costs.length })).sort((a,b) => (parseInt(a.zone)||999) - (parseInt(b.zone)||999)).map(r => `<tr><td class="mono">${r.zone}</td><td class="mono">${r.count}</td><td class="mono">${r.avg.toFixed(1)}</td><td class="mono">${r.min.toFixed(0)}</td><td class="mono">${r.max.toFixed(0)}</td><td class="mono">$${r.avgCost.toFixed(2)}</td><td>${getPerformanceBar(r.avg, avgDays)}</td></tr>`).join('');
+
+            const byCS = {};
+            deliveredOrders.forEach(d => {
+                const key = `${d.carrier}|||${d.service}`;
+                if (!byCS[key]) byCS[key] = { days: [], costs: [] };
+                byCS[key].days.push(d.deliveryDays);
+                byCS[key].costs.push(d.shippingCost);
+            });
+            document.getElementById('carrierServiceTableBody').innerHTML = Object.entries(byCS).map(([key, data]) => { const [carrier, service] = key.split('|||'); return { carrier, service, count: data.days.length, avg: data.days.reduce((a,b)=>a+b,0)/data.days.length, min: Math.min(...data.days), max: Math.max(...data.days), avgCost: data.costs.reduce((a,b)=>a+b,0)/data.costs.length }; }).sort((a,b) => a.avg - b.avg).map(r => `<tr><td>${r.carrier}</td><td>${r.service}</td><td class="mono">${r.count}</td><td class="mono">${r.avg.toFixed(1)}</td><td class="mono">${r.min.toFixed(0)}</td><td class="mono">${r.max.toFixed(0)}</td><td class="mono">$${r.avgCost.toFixed(2)}</td><td>${getPerformanceBar(r.avg, avgDays)}</td></tr>`).join('');
+
+            const byState = {};
+            deliveredOrders.forEach(d => {
+                const state = d.state || 'Unknown';
+                if (!byState[state]) byState[state] = { days: [], zones: [] };
+                byState[state].days.push(d.deliveryDays);
+                if (d.zone && !isNaN(parseInt(d.zone))) byState[state].zones.push(parseInt(d.zone));
+            });
+            document.getElementById('stateTableBody').innerHTML = Object.entries(byState).map(([state, data]) => ({ state, count: data.days.length, avg: data.days.reduce((a,b)=>a+b,0)/data.days.length, avgZone: data.zones.length > 0 ? data.zones.reduce((a,b)=>a+b,0)/data.zones.length : null })).sort((a,b) => b.count - a.count).slice(0, 15).map(r => `<tr class="${r.avg > avgDays * 1.2 ? 'highlight-row' : ''}"><td>${r.state}</td><td class="mono">${r.count}</td><td class="mono">${r.avg.toFixed(1)}</td><td class="mono">${r.avgZone ? r.avgZone.toFixed(1) : '—'}</td><td>${getPerformanceBar(r.avg, avgDays)}</td></tr>`).join('');
+
+            document.getElementById('slowestTableBody').innerHTML = [...deliveredOrders].sort((a,b) => b.deliveryDays - a.deliveryDays).slice(0, 20).map(d => `<tr><td class="mono">${d.orderNumber || d.shipmentId}</td><td class="mono" style="color: var(--accent-red); font-weight: 600;">${d.deliveryDays.toFixed(0)}</td><td class="mono">${d.orderDate}</td><td class="mono">${d.carrierDeliveryDate}</td><td>${d.carrier} / ${d.service}</td><td class="mono">${d.zone || '—'}</td><td>${d.state || '—'}</td></tr>`).join('');
+        }
+
+        function getPerformanceBar(value, baseline) {
+            const ratio = value / baseline;
+            let cls = 'good';
+            if (ratio > 1.2) cls = 'bad';
+            else if (ratio > 1.0) cls = 'ok';
+            const width = Math.min(100, (value / (baseline * 2)) * 100);
+            return `<div class="performance-bar"><div class="performance-bar-fill ${cls}" style="width: ${width}%"></div></div>`;
+        }
+
+        // Multi-period table functions
+        const toggleMultiCompare = document.getElementById('toggleMultiCompare');
+        const multiPeriodSection = document.getElementById('multiPeriodSection');
+        const periodType = document.getElementById('periodType');
+        const numPeriods = document.getElementById('numPeriods');
+
+        toggleMultiCompare.addEventListener('click', () => {
+            toggleMultiCompare.classList.toggle('active');
+            multiPeriodSection.style.display = toggleMultiCompare.classList.contains('active') ? 'block' : 'none';
+            if (toggleMultiCompare.classList.contains('active')) updateMultiPeriodTable();
+        });
+
+        periodType.addEventListener('change', updateMultiPeriodTable);
+        numPeriods.addEventListener('change', updateMultiPeriodTable);
+
+        function getPeriods(type, count) {
+            if (masterData.length === 0) return [];
+            const dates = masterData.map(d => new Date(d.shipDate)).filter(d => !isNaN(d));
+            if (dates.length === 0) return [];
+            const maxDate = new Date(Math.max(...dates));
+            const periods = [];
+            for (let i = 0; i < count; i++) {
+                let start, end;
+                if (type === 'week') {
+                    end = new Date(maxDate);
+                    end.setDate(end.getDate() - (i * 7));
+                    start = new Date(end);
+                    start.setDate(start.getDate() - 6);
+                } else {
+                    end = new Date(maxDate.getFullYear(), maxDate.getMonth() - i + 1, 0);
+                    start = new Date(maxDate.getFullYear(), maxDate.getMonth() - i, 1);
+                }
+                periods.push({
+                    start: start.toISOString().split('T')[0],
+                    end: end.toISOString().split('T')[0],
+                    label: type === 'week' 
+                        ? `${start.getMonth() + 1}/${start.getDate()} - ${end.getMonth() + 1}/${end.getDate()}`
+                        : `${start.toLocaleString('default', { month: 'short' })} ${start.getFullYear()}`
+                });
+            }
+            return periods.reverse();
+        }
+
+        function updateMultiPeriodTable() {
+            const type = periodType.value;
+            const count = parseInt(numPeriods.value);
+            const periods = getPeriods(type, count);
+            const tbody = document.getElementById('comparisonTableBody');
+            
+            if (periods.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Not enough data</td></tr>';
+                return;
+            }
+            
+            const periodMetrics = periods.map(p => ({
+                ...p,
+                metrics: calculateMetrics(filterByDateRange(masterData, p.start, p.end))
+            }));
+            
+            tbody.innerHTML = periodMetrics.map((p, idx) => {
+                const prev = idx > 0 ? periodMetrics[idx - 1].metrics : null;
+                const m = p.metrics;
+                return `<tr>
+                    <td class="period-name">${p.label}</td>
+                    <td>${m.orders.toLocaleString()}${getTrend(m.orders, prev?.orders, false)}</td>
+                    <td>${m.units.toLocaleString()}${getTrend(m.units, prev?.units, false)}</td>
+                    <td>${m.unitsPerOrder.toFixed(2)}${getTrend(m.unitsPerOrder, prev?.unitsPerOrder, false)}</td>
+                    <td>${m.avgZone.toFixed(1)}${getTrend(m.avgZone, prev?.avgZone, true)}</td>
+                    <td>$${m.avgShippingCost.toFixed(2)}${getTrend(m.avgShippingCost, prev?.avgShippingCost, true)}</td>
+                    <td>${m.clickToDelivery.toFixed(1)}d${getTrend(m.clickToDelivery, prev?.clickToDelivery, true)}</td>
+                    <td>${m.deliveryRate.toFixed(1)}%${getTrend(m.deliveryRate, prev?.deliveryRate, false)}</td>
+                    <td>${m.undelivered.toLocaleString()}${getTrend(m.undelivered, prev?.undelivered, true)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function getTrend(current, previous, lowerIsBetter) {
+            if (previous === null || previous === undefined || previous === 0) return '';
+            const change = ((current - previous) / previous) * 100;
+            if (Math.abs(change) < 0.5) return '';
+            const isUp = change > 0;
+            const isGood = lowerIsBetter ? !isUp : isUp;
+            const arrow = isUp ? '↑' : '↓';
+            const cls = isGood ? (isUp ? 'up' : 'down-good') : (isUp ? 'up-bad' : 'down');
+            return `<span class="trend ${cls}">${arrow}${Math.abs(change).toFixed(0)}%</span>`;
+        }
+
+        // Event Listeners
+        uploadZone.addEventListener('click', () => fileInput.click());
+        uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+        uploadZone.addEventListener('drop', (e) => { e.preventDefault(); uploadZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        function handleFiles(files) {
+            Array.from(files).forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const rows = parseCSV(e.target.result);
+                    const processed = processData(rows);
+                    saveOrders(processed);
+                };
+                reader.readAsText(file);
+            });
+        }
+
+        toggleInternational.addEventListener('click', () => { toggleInternational.classList.toggle('active'); updateUI(); if (document.getElementById('tab-delivery-analysis').classList.contains('active')) updateDeliveryAnalysis(); });
+        toggleCompare.addEventListener('click', () => { toggleCompare.classList.toggle('active'); compareFields.classList.toggle('visible'); updateUI(); });
+        dateFrom.addEventListener('change', updateUI);
+        dateTo.addEventListener('change', updateUI);
+        compareDateFrom.addEventListener('change', updateUI);
+        compareDateTo.addEventListener('change', updateUI);
+        clearData.addEventListener('click', clearAllData);
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+                if (btn.dataset.tab === 'delivery-analysis') updateDeliveryAnalysis();
+            });
+        });
+
+        // Load data on start
+        loadData();
+    </script>
+    </div><!-- end main-app -->
+
+    <script>
+        // No password gate — accessed through ops hub
+        let userRole = 'admin';
+    </script>
+</body>
+</html>
