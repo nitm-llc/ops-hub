@@ -1478,9 +1478,6 @@ function showModal(taskId) {
       const currentVal = field.value;
       const currentOpt = field.type_config.options.find(o => o.orderindex === currentVal);
       
-      // Only show if it has a value set OR if the field is explicitly configured to show
-      if (currentVal == null && cf["Show on Calendar (TRUE/FALSE)"]?.toUpperCase() !== "TRUE") return;
-      
       // Get color for the current selection
       const optColor = currentOpt?.color || "#6c757d";
       const bgStyle = currentVal != null && currentOpt ? `background:${optColor};color:#fff;border-color:${optColor}` : "";
@@ -1494,7 +1491,7 @@ function showModal(taskId) {
       });
       selectHTML += `</select>`;
       display = selectHTML;
-      hasValue = currentVal != null; // Only true if actually has a value
+      hasValue = true; // Always show dropdown fields in modal
     } else if ((cf["Field Type"] || "").toLowerCase() === "checkbox" || field.type === "checkbox") {
       // Check platform filter for checkbox fields
       const onlyFor = (cf["Only For Platforms"] || "").trim();
@@ -1527,8 +1524,7 @@ function showModal(taskId) {
       hasValue = true;
     }
     
-    if (!hasValue && cf["Field Type"] !== "dropdown" && (cf["Field Type"] || "").toLowerCase() !== "checkbox" && field.type !== "checkbox") return;
-    if (!hasValue && cf["Field Type"] === "dropdown") return;
+    if (!hasValue) return;
     
     fieldsHTML += `<div class="field-row">
       <span class="field-label">${escHTML(cf["Field Name"])}</span>
