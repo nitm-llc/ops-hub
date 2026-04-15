@@ -192,8 +192,11 @@ const parseStoryCSV = (text) => {
       var ampm = m[7];
       if (ampm === 'PM' && hr !== 12) hr += 12;
       if (ampm === 'AM' && hr === 12) hr = 0;
-      var time = String(hr).padStart(2,'0') + ':' + min;
-      var date = yr + '-' + mo + '-' + day;
+      // Later exports in ET, Meta exports in PT (3hr difference). Shift Later back 3hrs to align.
+      var utcDate = new Date(parseInt(yr), parseInt(mo)-1, parseInt(day), hr, parseInt(min));
+      utcDate.setHours(utcDate.getHours() - 3);
+      var date = utcDate.getFullYear() + '-' + String(utcDate.getMonth()+1).padStart(2,'0') + '-' + String(utcDate.getDate()).padStart(2,'0');
+      var time = String(utcDate.getHours()).padStart(2,'0') + ':' + String(utcDate.getMinutes()).padStart(2,'0');
       var compStr = (r['Completion Rate'] || '0').replace('%','').trim();
       return {
         id: 'st-later-' + i,
@@ -312,6 +315,7 @@ const NITMContentTracker = () => {
   const [showPinInput, setShowPinInput] = useState(false);
   const REV_PIN = '1234';
   const [loaded, setLoaded] = useState(false);
+  const loadedCounts = useRef({ posts: 0, daily: 0, stories: 0 });
   const [caps, setCaps] = useState({ views: 500000, saves: 5000, shares: 3000, likes: 10000, eng: 7 });
   const [weights, setWeights] = useState({ views: 35, saves: 25, shares: 15, likes: 15, eng: 10 });
   const [showCaps, setShowCaps] = useState(false);
@@ -325,8 +329,8 @@ const NITMContentTracker = () => {
   const igRef = useRef(null), shopRef = useRef(null), ltRef = useRef(null), cuRef = useRef(null);
   const totalWeight = weights.views + weights.saves + weights.shares + weights.likes + weights.eng;
 
-  useEffect(() => { (async () => { const s = await store.load(); if (s) { if(s.posts?.length) setPosts(s.posts); if(s.daily?.length) setDaily(s.daily); if(s.overrides) setOverrides(s.overrides); if(s.saleDays) setSaleDays(s.saleDays); if(s.caps) setCaps(s.caps); if(s.weights) setWeights(s.weights); if(s.ltMax) setLtMax(s.ltMax); if(s.ltMid) setLtMid(s.ltMid); if(s.clickupMap) setClickupMap(s.clickupMap); if(s.goals) setGoals(s.goals); if(s.sheetData) setSheetData(s.sheetData); if(s.sheetName) setSheetName(s.sheetName); if(s.percentileMode) setPercentileMode(s.percentileMode); if(s.presets) setPresets(prev => { const builtIns = prev.filter(p=>p.builtIn); const custom = s.presets.filter(p=>!p.builtIn); return [...builtIns, ...custom]; }); if(s.stories?.length) setStories(s.stories); } setLoaded(true); })(); }, []);
-  useEffect(() => { if (!loaded) return; const customPresets = presets.filter(p=>!p.builtIn); const t = setTimeout(() => store.save({ posts, daily, overrides, saleDays, caps, weights, ltMax, ltMid, clickupMap, goals, sheetData, sheetName, percentileMode, presets: customPresets, stories }), 500); return () => clearTimeout(t); }, [posts, daily, overrides, saleDays, caps, weights, ltMax, ltMid, clickupMap, goals, sheetData, sheetName, percentileMode, presets, stories, loaded]);
+  useEffect(() => { (async () => { const s = await store.load(); if (s) { if(s.posts?.length) setPosts(s.posts); if(s.daily?.length) setDaily(s.daily); if(s.overrides) setOverrides(s.overrides); if(s.saleDays) setSaleDays(s.saleDays); if(s.caps) setCaps(s.caps); if(s.weights) setWeights(s.weights); if(s.ltMax) setLtMax(s.ltMax); if(s.ltMid) setLtMid(s.ltMid); if(s.clickupMap) setClickupMap(s.clickupMap); if(s.goals) setGoals(s.goals); if(s.sheetData) setSheetData(s.sheetData); if(s.sheetName) setSheetName(s.sheetName); if(s.percentileMode) setPercentileMode(s.percentileMode); if(s.presets) setPresets(prev => { const builtIns = prev.filter(p=>p.builtIn); const custom = s.presets.filter(p=>!p.builtIn); return [...builtIns, ...custom]; }); if(s.stories?.length) setStories(s.stories); loadedCounts.current = { posts: s.posts?.length || 0, daily: s.daily?.length || 0, stories: s.stories?.length || 0 }; } setLoaded(true); })(); }, []);
+  useEffect(() => { if (!loaded) return; var lc = loadedCounts.current; if ((lc.posts > 0 && posts.length === 0) || (lc.daily > 0 && daily.length === 0)) { console.warn('Save blocked: would wipe ' + lc.posts + ' posts and ' + lc.daily + ' days'); return; } const customPresets = presets.filter(p=>!p.builtIn); const t = setTimeout(() => store.save({ posts, daily, overrides, saleDays, caps, weights, ltMax, ltMid, clickupMap, goals, sheetData, sheetName, percentileMode, presets: customPresets, stories }), 500); return () => clearTimeout(t); }, [posts, daily, overrides, saleDays, caps, weights, ltMax, ltMid, clickupMap, goals, sheetData, sheetName, percentileMode, presets, stories, loaded]);
 
   const classified = useMemo(() => posts.map(p => ({ ...p, auto: autoClassify(p) })), [posts]);
   const cuAssignments = useMemo(() => {
@@ -568,29 +572,40 @@ const NITMContentTracker = () => {
           const newStories = parseStoryCSV(text);
           if (newStories.length) {
             setStories(prev => {
-              // Build lookup of existing stories by date+time for merging
-              var existingByDT = {};
-              prev.forEach(function(s) { existingByDT[s.date + '|' + s.time] = s; });
               var added = 0, merged = 0, skipped = 0;
               var result = prev.slice();
+              // Helper: convert date+time to minutes for proximity matching
+              var toMin = function(d, t) { var p = t.split(':'); return (new Date(d+'T00:00:00')).getTime()/60000 + parseInt(p[0])*60 + parseInt(p[1]); };
+
               newStories.forEach(function(ns) {
-                var key = ns.date + '|' + ns.time;
-                var existing = existingByDT[key];
-                if (existing) {
-                  // Merge: add imageUrl if the new one has it and existing doesn't
+                // Find best match: same date, closest time, within 15 min
+                var bestIdx = -1, bestDiff = Infinity;
+                result.forEach(function(s, idx) {
+                  if (s.date !== ns.date) return;
+                  var diff = Math.abs(toMin(s.date, s.time) - toMin(ns.date, ns.time));
+                  if (diff < bestDiff) { bestDiff = diff; bestIdx = idx; }
+                });
+                if (bestIdx >= 0 && bestDiff <= 15) {
+                  // Merge: add imageUrl and Later-specific fields if new has them
+                  var existing = result[bestIdx];
                   if (ns.imageUrl && !existing.imageUrl) {
-                    var idx = result.findIndex(function(s){ return s.date === existing.date && s.time === existing.time; });
-                    if (idx !== -1) { result[idx] = {...result[idx], imageUrl: ns.imageUrl, completionRate: ns.completionRate || result[idx].completionRate || 0, back: ns.back || 0, forward: ns.forward || 0, exited: ns.exited || 0}; merged++; }
-                    else skipped++;
+                    result[bestIdx] = {...existing, imageUrl: ns.imageUrl, completionRate: ns.completionRate || existing.completionRate || 0, back: ns.back || 0, forward: ns.forward || 0, exited: ns.exited || 0};
+                    merged++;
+                  } else if (!ns.imageUrl && existing.imageUrl) {
+                    // Meta data merging into Later: add link clicks, permalink, etc
+                    if (ns.linkClicks > 0 || ns.permalink) {
+                      result[bestIdx] = {...existing, linkClicks: ns.linkClicks || existing.linkClicks, permalink: ns.permalink || existing.permalink, duration: ns.duration || existing.duration, shares: ns.shares || existing.shares};
+                      merged++;
+                    } else skipped++;
                   } else skipped++;
                 } else {
-                  // Check by postId too
-                  if (prev.some(function(s){ return s.postId === ns.postId; })) { skipped++; }
-                  else { result.push(ns); existingByDT[key] = ns; added++; }
+                  // No close match — add as new
+                  result.push(ns);
+                  added++;
                 }
               });
               result.sort(function(a,b) { return (a.date + ' ' + a.time).localeCompare(b.date + ' ' + b.time); });
-              setUploadMsg('\u2705 ' + newStories.length + ' stories parsed \u2014 ' + added + ' new, ' + merged + ' enriched with images, ' + skipped + ' unchanged');
+              setUploadMsg('\u2705 ' + newStories.length + ' stories parsed \u2014 ' + added + ' new, ' + merged + ' enriched, ' + skipped + ' unchanged');
               return result;
             });
           } else setUploadMsg('\u26a0\ufe0f No story data found');
