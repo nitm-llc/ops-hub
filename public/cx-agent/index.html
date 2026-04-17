@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CX Agent | NITM Ops Hub</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  *{margin:0;padding:0;box-sizing:border-box;}
+
+  :root{
+    --bg:#0a0e17;--surface:#111827;--surface2:#1a2235;--border:#1e2d44;
+    --text:#e2e8f0;--text-muted:#64748b;--text-dim:#475569;
+    --accent:#3b82f6;--accent-dim:#1e3a5f;
+    --green:#10b981;--green-dim:#064e3b;
+    --red:#ef4444;--red-dim:#7f1d1d;
+    --amber:#f59e0b;--amber-dim:#78350f;
+    --purple:#8b5cf6;--cyan:#06b6d4;--pink:#ec4899;
+  }
+
+  body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
+
+  .nav{display:flex;align-items:center;gap:24px;padding:16px 32px;background:var(--surface);border-bottom:1px solid var(--border);font-size:13px;font-weight:500;overflow-x:auto;}
+  .nav a{color:var(--text-muted);text-decoration:none;white-space:nowrap;transition:color .2s;}
+  .nav a:hover{color:var(--text);}
+  .nav a.active{color:var(--accent);}
+  .nav-brand{font-weight:700;font-size:14px;color:var(--text)!important;margin-right:8px;}
+
+  .container{max-width:1400px;margin:0 auto;padding:32px 24px;}
+
+  .page-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;flex-wrap:wrap;gap:16px;}
+  .page-header h1{font-size:28px;font-weight:700;letter-spacing:-.5px;}
+  .page-header p{color:var(--text-muted);font-size:14px;margin-top:4px;}
+
+  .tabs{display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid var(--border);}
+  .tab{padding:10px 20px;background:none;border:none;color:var(--text-muted);cursor:pointer;font-family:inherit;font-size:14px;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .2s;}
+  .tab:hover{color:var(--text);}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+
+  .tab-panel{display:none;}
+  .tab-panel.active{display:block;}
+
+  .kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px;}
+  .kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;}
+  .kpi-card .label{font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;font-weight:500;margin-bottom:6px;}
+  .kpi-card .value{font-size:24px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:-.5px;}
+  .kpi-card .sub{font-size:12px;color:var(--text-muted);margin-top:4px;}
+
+  .filter-bar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .filter-bar label{font-size:12px;color:var(--text-muted);font-weight:500;}
+  .filter-bar select,.filter-bar input{padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:inherit;}
+
+  .table-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:24px;overflow-x:auto;}
+  .table-card h3{font-size:15px;font-weight:600;margin-bottom:16px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;padding:10px 14px;color:var(--text-muted);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:10px 14px;border-bottom:1px solid var(--border);font-size:13px;}
+  tr:last-child td{border-bottom:none;}
+  tr.clickable{cursor:pointer;}
+  tr.clickable:hover td{background:var(--surface2);}
+
+  .pill{display:inline-block;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;font-family:'DM Sans',sans-serif;}
+  .pill-success{background:var(--green-dim);color:var(--green);}
+  .pill-error{background:var(--red-dim);color:var(--red);}
+  .pill-warn{background:var(--amber-dim);color:var(--amber);}
+  .pill-info{background:var(--accent-dim);color:var(--accent);}
+  .pill-neutral{background:var(--surface2);color:var(--text-muted);}
+
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* MODAL */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:none;align-items:flex-start;justify-content:center;z-index:1000;padding:40px 20px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px;width:100%;max-width:900px;max-height:90vh;overflow-y:auto;}
+  .modal h2{font-size:18px;font-weight:700;margin-bottom:8px;}
+  .modal h3{font-size:14px;font-weight:600;margin:20px 0 10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;}
+  .modal .meta-row{display:grid;grid-template-columns:120px 1fr;gap:12px 16px;font-size:13px;margin-bottom:8px;}
+  .modal .meta-row .key{color:var(--text-muted);font-weight:500;}
+  .modal .meta-row .val{font-family:'JetBrains Mono',monospace;word-break:break-word;}
+  .modal .close-btn{position:absolute;top:20px;right:24px;background:none;border:none;color:var(--text-muted);font-size:24px;cursor:pointer;}
+  .modal .close-btn:hover{color:var(--text);}
+
+  .trace-step{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:8px;}
+  .trace-step .head{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+  .trace-step .step-num{background:var(--accent-dim);color:var(--accent);width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;}
+  .trace-step .step-name{font-weight:600;font-size:13px;flex:1;}
+  .trace-step .step-time{font-size:11px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;}
+  .trace-step .reasoning{font-size:12px;color:var(--text-muted);font-style:italic;margin-top:4px;}
+  .trace-step pre{font-size:11px;color:var(--text-dim);background:var(--bg);padding:10px;border-radius:6px;overflow-x:auto;margin-top:8px;max-height:200px;font-family:'JetBrains Mono',monospace;}
+  .trace-step.error{border-color:var(--red);background:var(--red-dim);}
+
+  .response-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px;}
+  .response-card .response-body{white-space:pre-wrap;font-family:'DM Sans',sans-serif;font-size:13px;line-height:1.5;background:var(--bg);padding:12px;border-radius:6px;margin-top:8px;}
+
+  /* CONFIG */
+  .config-item{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 18px;margin-bottom:8px;display:grid;grid-template-columns:1fr 2fr auto;gap:16px;align-items:center;}
+  .config-item .key{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;}
+  .config-item .desc{font-size:12px;color:var(--text-muted);display:block;margin-top:2px;font-family:'DM Sans',sans-serif;font-weight:400;}
+  .config-item .value-input{padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;width:100%;}
+  .config-item .value-input:focus{outline:none;border-color:var(--accent);}
+  .config-item .save-btn{padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;}
+  .config-item .save-btn:hover{background:#2563eb;}
+  .config-item .save-btn:disabled{background:var(--text-dim);cursor:default;}
+
+  /* TEMPLATE */
+  .template-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;}
+  .template-card h4{font-size:14px;font-weight:600;margin-bottom:4px;}
+  .template-card .intent-label{font-size:11px;color:var(--accent);font-family:'JetBrains Mono',monospace;margin-bottom:12px;}
+  .template-card textarea{width:100%;min-height:200px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.5;resize:vertical;}
+  .template-card textarea:focus{outline:none;border-color:var(--accent);}
+  .template-card .actions{display:flex;gap:10px;margin-top:12px;justify-content:flex-end;}
+  .template-card .actions button{padding:8px 18px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;border:none;}
+  .template-card .save-btn{background:var(--accent);color:#fff;}
+  .template-card .save-btn:hover{background:#2563eb;}
+  .template-card .saved-msg{font-size:12px;color:var(--green);align-self:center;}
+
+  .loading{text-align:center;padding:40px;color:var(--text-muted);}
+  .empty{text-align:center;padding:40px;color:var(--text-muted);}
+
+  .toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:13px;z-index:2000;box-shadow:0 10px 30px rgba(0,0,0,.5);display:none;}
+  .toast.show{display:block;}
+  .toast.success{border-color:var(--green);}
+  .toast.error{border-color:var(--red);}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <a href="/" class="nav-brand">NITM Ops</a>
+  <a href="/">Hub</a>
+  <a href="/calendar/">Calendar</a>
+  <a href="/inventory/">Inventory</a>
+  <a href="/3pl/">3PL</a>
+  <a href="/tracker/">Tracker</a>
+  <a href="/ambassadors/">Ambassadors</a>
+  <a href="/cx-agent/" class="active">CX Agent</a>
+</nav>
+
+<div class="container">
+
+<div class="page-header">
+  <div>
+    <h1>CX Agent</h1>
+    <p>AI customer support automation — Zendesk ticket classification, drafting, and escalation</p>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" data-tab="tickets">Activity Feed</button>
+  <button class="tab" data-tab="config">Configuration</button>
+  <button class="tab" data-tab="templates">Response Templates</button>
+</div>
+
+<!-- TICKETS TAB -->
+<div class="tab-panel active" id="tab-tickets">
+  <div class="kpi-row" id="kpi-row">
+    <div class="loading">Loading stats...</div>
+  </div>
+
+  <div class="filter-bar">
+    <label>Status:</label>
+    <select id="filter-status">
+      <option value="">All</option>
+      <option value="drafted">Drafted</option>
+      <option value="escalated">Escalated</option>
+      <option value="error">Error</option>
+      <option value="processing">Processing</option>
+    </select>
+    <label>Limit:</label>
+    <select id="filter-limit">
+      <option value="50">50</option>
+      <option value="100">100</option>
+      <option value="200">200</option>
+    </select>
+    <button class="save-btn" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;" onclick="loadTickets()">Refresh</button>
+  </div>
+
+  <div class="table-card">
+    <table id="tickets-table">
+      <thead>
+        <tr>
+          <th>Received</th>
+          <th>Zendesk ID</th>
+          <th>Email</th>
+          <th>Subject</th>
+          <th>Intent</th>
+          <th>Confidence</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="tickets-body">
+        <tr><td colspan="8" class="loading">Loading tickets...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- CONFIG TAB -->
+<div class="tab-panel" id="tab-config">
+  <div id="config-list">
+    <div class="loading">Loading configuration...</div>
+  </div>
+</div>
+
+<!-- TEMPLATES TAB -->
+<div class="tab-panel" id="tab-templates">
+  <div id="templates-list">
+    <div class="loading">Loading templates...</div>
+  </div>
+</div>
+
+</div>
+
+<!-- TICKET DETAIL MODAL -->
+<div class="modal-overlay" id="ticket-modal">
+  <div class="modal" style="position:relative;">
+    <button class="close-btn" onclick="closeModal()">×</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const api = (path, opts = {}) => fetch('/cx-agent/api' + path, {
+  ...opts,
+  headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+}).then(r => r.json());
+
+// Tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'config') loadConfig();
+    if (tab.dataset.tab === 'templates') loadTemplates();
+    if (tab.dataset.tab === 'tickets') { loadStats(); loadTickets(); }
+  });
+});
+
+// ============ TICKETS ============
+
+async function loadStats() {
+  try {
+    const data = await api('/stats');
+    const kpis = [
+      { label: 'Total Tickets', value: data.total || 0 },
+      { label: 'Last 24h', value: data.last_24h || 0 },
+      { label: 'Cost (30d)', value: '$' + (data.cost_30d || 0).toFixed(3), sub: (data.tokens_30d || 0).toLocaleString() + ' tokens' },
+      { label: 'Drafted', value: (data.by_status || []).find(s => s.status === 'drafted')?.c || 0 },
+      { label: 'Escalated', value: (data.by_status || []).find(s => s.status === 'escalated')?.c || 0 },
+    ];
+    document.getElementById('kpi-row').innerHTML = kpis.map(k =>
+      `<div class="kpi-card"><div class="label">${k.label}</div><div class="value">${k.value}</div>${k.sub ? `<div class="sub">${k.sub}</div>` : ''}</div>`
+    ).join('');
+  } catch (e) {
+    document.getElementById('kpi-row').innerHTML = '<div class="empty">Failed to load stats: ' + e.message + '</div>';
+  }
+}
+
+async function loadTickets() {
+  const status = document.getElementById('filter-status').value;
+  const limit = document.getElementById('filter-limit').value;
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (limit) params.set('limit', limit);
+
+  try {
+    const data = await api('/tickets?' + params.toString());
+    const tickets = data.tickets || [];
+    if (tickets.length === 0) {
+      document.getElementById('tickets-body').innerHTML = '<tr><td colspan="8" class="empty">No tickets yet. The agent will process tickets as they come in from Zendesk.</td></tr>';
+      return;
+    }
+    document.getElementById('tickets-body').innerHTML = tickets.map(t => `
+      <tr class="clickable" onclick="openTicket(${t.id})">
+        <td class="mono" style="color:var(--text-muted);font-size:12px">${formatDate(t.received_at)}</td>
+        <td class="mono">${t.zendesk_ticket_id}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${escape(t.customer_email || '')}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(t.subject || '')}</td>
+        <td>${t.classified_intent ? `<span class="pill pill-info mono">${t.classified_intent}</span>` : '<span class="pill pill-neutral">—</span>'}</td>
+        <td class="mono">${t.intent_confidence ? (t.intent_confidence * 100).toFixed(0) + '%' : '—'}</td>
+        <td>${statusPill(t.status)}</td>
+        <td style="font-size:12px;color:var(--text-muted)">${t.final_action || ''}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    document.getElementById('tickets-body').innerHTML = '<tr><td colspan="8" class="empty">Failed to load tickets: ' + e.message + '</td></tr>';
+  }
+}
+
+async function openTicket(id) {
+  document.getElementById('modal-content').innerHTML = '<div class="loading">Loading ticket details...</div>';
+  document.getElementById('ticket-modal').classList.add('open');
+
+  try {
+    const data = await api('/tickets/' + id);
+    const t = data.ticket;
+    const decisions = data.decisions || [];
+    const responses = data.responses || [];
+
+    let html = `
+      <h2>Ticket #${t.zendesk_ticket_id} <span style="float:right">${statusPill(t.status)}</span></h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">${escape(t.subject || '')}</p>
+
+      <h3>Metadata</h3>
+      <div class="meta-row"><span class="key">Customer</span><span class="val">${escape(t.customer_email || '')}</span></div>
+      <div class="meta-row"><span class="key">Channel</span><span class="val">${escape(t.channel || '—')}</span></div>
+      <div class="meta-row"><span class="key">Received</span><span class="val">${formatDate(t.received_at)}</span></div>
+      <div class="meta-row"><span class="key">Completed</span><span class="val">${t.completed_at ? formatDate(t.completed_at) : '—'}</span></div>
+      <div class="meta-row"><span class="key">Intent</span><span class="val">${t.classified_intent || '—'} ${t.intent_confidence ? '('+(t.intent_confidence*100).toFixed(0)+'%)' : ''}</span></div>
+      <div class="meta-row"><span class="key">In scope</span><span class="val">${t.is_in_scope ? 'Yes' : 'No'}</span></div>
+      <div class="meta-row"><span class="key">Final action</span><span class="val">${t.final_action || '—'}</span></div>
+      ${t.error_message ? `<div class="meta-row"><span class="key">Error</span><span class="val" style="color:var(--red)">${escape(t.error_message)}</span></div>` : ''}
+
+      <h3>First Message</h3>
+      <div style="background:var(--bg);padding:12px;border-radius:6px;white-space:pre-wrap;font-size:12px;max-height:150px;overflow-y:auto">${escape(t.first_customer_message || '')}</div>
+
+      <h3>Decision Trace (${decisions.length} steps)</h3>
+    `;
+
+    if (decisions.length === 0) {
+      html += '<div class="empty">No decisions traced.</div>';
+    } else {
+      html += decisions.map(d => {
+        const out = d.output_data ? tryParse(d.output_data) : null;
+        return `
+          <div class="trace-step ${d.status === 'error' ? 'error' : ''}">
+            <div class="head">
+              <div class="step-num">${d.step_order}</div>
+              <div class="step-name">${d.step_name}</div>
+              <div class="step-time">${d.duration_ms}ms${d.tokens_used ? ' · ' + d.tokens_used + ' tokens' : ''}${d.cost_usd ? ' · $' + d.cost_usd.toFixed(4) : ''}</div>
+              <div>${d.status === 'error' ? '<span class="pill pill-error">ERROR</span>' : ''}</div>
+            </div>
+            ${d.reasoning ? `<div class="reasoning">${escape(d.reasoning)}</div>` : ''}
+            ${d.error_message ? `<div style="color:var(--red);font-size:12px;margin-top:4px">${escape(d.error_message)}</div>` : ''}
+            ${out ? `<pre>${escape(JSON.stringify(out, null, 2))}</pre>` : ''}
+          </div>
+        `;
+      }).join('');
+    }
+
+    html += `<h3>Draft Responses</h3>`;
+    if (responses.length === 0) {
+      html += '<div class="empty">No responses drafted.</div>';
+    } else {
+      html += responses.map(r => `
+        <div class="response-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
+            <strong style="font-size:13px">Draft</strong>
+            <span class="pill ${r.status === 'posted_as_note' ? 'pill-success' : 'pill-neutral'}">${r.status}</span>
+            ${r.response_confidence ? `<span style="font-size:11px;color:var(--text-muted)">${(r.response_confidence*100).toFixed(0)}% confidence</span>` : ''}
+            ${r.posted_to_zendesk_at ? `<span style="font-size:11px;color:var(--text-muted)">posted ${formatDate(r.posted_to_zendesk_at)}</span>` : ''}
+          </div>
+          ${r.reasoning ? `<div style="font-size:12px;color:var(--text-muted);font-style:italic">${escape(r.reasoning)}</div>` : ''}
+          <div class="response-body">${escape(r.draft_body)}</div>
+        </div>
+      `).join('');
+    }
+
+    document.getElementById('modal-content').innerHTML = html;
+  } catch (e) {
+    document.getElementById('modal-content').innerHTML = '<div class="empty">Failed to load ticket: ' + e.message + '</div>';
+  }
+}
+
+function closeModal() {
+  document.getElementById('ticket-modal').classList.remove('open');
+}
+document.getElementById('ticket-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'ticket-modal') closeModal();
+});
+
+// ============ CONFIG ============
+
+async function loadConfig() {
+  const list = document.getElementById('config-list');
+  try {
+    const data = await api('/config');
+    const items = data.config || [];
+    list.innerHTML = items.map(c => `
+      <div class="config-item">
+        <div>
+          <div class="key">${c.key}</div>
+          <div class="desc">${escape(c.description || '')}</div>
+        </div>
+        <input type="text" class="value-input" data-key="${c.key}" value="${escape(c.value)}" />
+        <button class="save-btn" onclick="saveConfig('${c.key}', this)">Save</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = '<div class="empty">Failed to load config: ' + e.message + '</div>';
+  }
+}
+
+async function saveConfig(key, btn) {
+  const input = document.querySelector(`input[data-key="${key}"]`);
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    await api('/config', { method: 'POST', body: JSON.stringify({ key, value: input.value }) });
+    btn.textContent = 'Saved';
+    toast('Config updated: ' + key, 'success');
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'Save'; }, 1500);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Save';
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// ============ TEMPLATES ============
+
+async function loadTemplates() {
+  const list = document.getElementById('templates-list');
+  try {
+    const data = await api('/templates');
+    const items = data.templates || [];
+    list.innerHTML = items.map(t => `
+      <div class="template-card">
+        <h4>${escape(t.name)}</h4>
+        <div class="intent-label">intent: ${t.intent}</div>
+        <textarea id="tpl-${t.id}">${escape(t.body)}</textarea>
+        <div class="actions">
+          <span class="saved-msg" id="tpl-msg-${t.id}"></span>
+          <button class="save-btn" onclick="saveTemplate(${t.id})">Save template</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = '<div class="empty">Failed to load templates: ' + e.message + '</div>';
+  }
+}
+
+async function saveTemplate(id) {
+  const body = document.getElementById('tpl-' + id).value;
+  const msg = document.getElementById('tpl-msg-' + id);
+  try {
+    await api('/templates/' + id, { method: 'POST', body: JSON.stringify({ body }) });
+    msg.textContent = 'Saved ✓';
+    toast('Template saved', 'success');
+    setTimeout(() => { msg.textContent = ''; }, 2000);
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+// ============ HELPERS ============
+
+function statusPill(status) {
+  const map = {
+    received: 'pill-neutral',
+    processing: 'pill-info',
+    drafted: 'pill-success',
+    escalated: 'pill-warn',
+    error: 'pill-error'
+  };
+  return `<span class="pill ${map[status] || 'pill-neutral'}">${status}</span>`;
+}
+
+function formatDate(s) {
+  if (!s) return '—';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
+  return d.toLocaleString();
+}
+
+function escape(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function tryParse(s) { try { return JSON.parse(s); } catch { return s; } }
+
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+document.getElementById('filter-status').addEventListener('change', loadTickets);
+document.getElementById('filter-limit').addEventListener('change', loadTickets);
+
+// Initial load
+loadStats();
+loadTickets();
+</script>
+
+</body>
+</html>

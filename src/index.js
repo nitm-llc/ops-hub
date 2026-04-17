@@ -403,9 +403,531 @@ async function handleTrackerAPI(request, env) {
   return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: cors });
 }
 
+// ===== CX AGENT =====
+// Handles Zendesk webhooks, classifies intent, drafts responses
+// All tables live in the CX_AGENT_DB binding (separate D1 from the main Ops Hub DB)
+
+async function initCxAgentTables(db) {
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS agent_tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      zendesk_ticket_id TEXT NOT NULL UNIQUE,
+      subject TEXT, customer_email TEXT, channel TEXT, first_customer_message TEXT,
+      classified_intent TEXT, intent_confidence REAL, is_in_scope INTEGER DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'received', final_action TEXT,
+      received_at TEXT DEFAULT (datetime('now')), completed_at TEXT, error_message TEXT
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS agent_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL,
+      step_name TEXT NOT NULL, step_order INTEGER NOT NULL,
+      input_data TEXT, output_data TEXT, reasoning TEXT,
+      duration_ms INTEGER, tokens_used INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0,
+      status TEXT DEFAULT 'success', error_message TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS agent_responses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL,
+      draft_body TEXT NOT NULL, response_confidence REAL, reasoning TEXT, data_sources TEXT,
+      status TEXT DEFAULT 'draft', posted_to_zendesk_at TEXT,
+      reviewed_by TEXT, reviewed_at TEXT, final_body TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS agent_config (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL, value_type TEXT NOT NULL DEFAULT 'string',
+      description TEXT, updated_at TEXT DEFAULT (datetime('now'))
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS agent_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, intent TEXT NOT NULL, name TEXT NOT NULL,
+      body TEXT NOT NULL, variables TEXT, is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now'))
+    )`),
+  ]);
+
+  const existing = await db.prepare("SELECT COUNT(*) as c FROM agent_config").first();
+  if (existing.c === 0) {
+    await db.batch([
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('agent_enabled', 'true', 'boolean', 'Master switch'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('mode', 'internal_note', 'string', 'internal_note | auto_reply'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('min_confidence_to_respond', '0.75', 'number', 'Min intent classification confidence'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('min_confidence_to_auto_reply', '0.90', 'number', 'Min confidence to auto-reply (when mode=auto_reply)'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('scoped_intents', '["digital_access"]', 'json', 'Intents the agent will handle'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('hard_escalate_topics', '["education_content","clinical_question","partnership","refund_over_50"]', 'json', 'Topics that always escalate'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('shopify_store_domain', 'nurseinthemaking.myshopify.com', 'string', 'Shopify store domain'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('zendesk_subdomain', 'nurseinthemaking', 'string', 'Zendesk subdomain'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('n8n_code_generation_webhook', 'https://nurseinthemaking.app.n8n.cloud/webhook/shopify-order-paid', 'string', 'n8n webhook for code regeneration'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('anthropic_model', 'claude-opus-4-7', 'string', 'Claude model'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('support_staff_ids', '[29324864593179,16129176780315,32863955019931,14117981153307]', 'json', 'Zendesk support staff IDs'),
+    ]);
+  }
+
+  const existingTpl = await db.prepare("SELECT COUNT(*) as c FROM agent_templates").first();
+  if (existingTpl.c === 0) {
+    await db.batch([
+      db.prepare("INSERT INTO agent_templates (intent, name, body, variables) VALUES (?, ?, ?, ?)").bind(
+        'digital_access_success',
+        'Ebook code delivery - standard',
+        "Hi {customer_first_name},\n\nThank you so much for reaching out! I am so sorry for the trouble, and I am more than happy to help!\n\nYour code{plural_s} for {product_titles} {is_are}: {codes}\n\nI have attached a PDF containing the directions on how to redeem {this_these} code{plural_s}.\n\nIf you have any more questions, I'll be happy to help.\n\nHappy studying, future nurse!\nKristine :)",
+        '["customer_first_name","product_titles","codes","plural_s","is_are","this_these"]'
+      ),
+      db.prepare("INSERT INTO agent_templates (intent, name, body, variables) VALUES (?, ?, ?, ?)").bind(
+        'digital_access_regenerating',
+        'Ebook code - regenerating due to failed original',
+        "Hi {customer_first_name},\n\nThank you so much for reaching out! I am so sorry for the trouble with your ebook code. I can see that there was an issue with the original delivery, and I am generating a fresh code for you right now.\n\nYou should receive your new code in the next few minutes. If it does not arrive within 10 minutes, please reply to this email and I will personally make sure you get it.\n\nI have attached a PDF containing the directions on how to redeem your code once it arrives.\n\nThank you for your patience!\n\nHappy studying, future nurse!\nKristine :)",
+        '["customer_first_name"]'
+      ),
+      db.prepare("INSERT INTO agent_templates (intent, name, body, variables) VALUES (?, ?, ?, ?)").bind(
+        'escalation_note',
+        'Internal note for human handoff',
+        "[AI AGENT - ESCALATED]\n\nReason: {escalation_reason}\n\nClassified intent: {intent} (confidence: {confidence})\n\nCustomer message summary: {message_summary}\n\nRelevant data found:\n{data_found}\n\nRecommended human action: {recommended_action}",
+        '["escalation_reason","intent","confidence","message_summary","data_found","recommended_action"]'
+      ),
+    ]);
+  }
+}
+
+async function handleCxAgentWebhook(request, env, ctx) {
+  const cors = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
+  if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+  if (!env.CX_AGENT_DB) return new Response(JSON.stringify({ error: "CX_AGENT_DB not configured" }), { status: 500, headers: cors });
+
+  const db = env.CX_AGENT_DB;
+  await initCxAgentTables(db);
+
+  const rawBody = await request.text();
+  if (env.ZENDESK_WEBHOOK_SECRET) {
+    const sigHeader = request.headers.get('x-zendesk-webhook-signature');
+    const tsHeader = request.headers.get('x-zendesk-webhook-signature-timestamp');
+    if (!sigHeader || !tsHeader) return new Response(JSON.stringify({ error: "Missing signature headers" }), { status: 401, headers: cors });
+    const valid = await verifyZendeskSignature(rawBody, tsHeader, sigHeader, env.ZENDESK_WEBHOOK_SECRET);
+    if (!valid) return new Response(JSON.stringify({ error: "Invalid signature" }), { status: 401, headers: cors });
+  }
+
+  let payload;
+  try { payload = JSON.parse(rawBody); } catch { return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers: cors }); }
+
+  const zendeskTicketId = payload.ticket_id || payload.body?.ticket_id;
+  if (!zendeskTicketId) return new Response(JSON.stringify({ error: "Missing ticket_id" }), { status: 400, headers: cors });
+
+  const enabled = await cxGetConfig(db, 'agent_enabled');
+  if (enabled !== true) return new Response(JSON.stringify({ skipped: true, reason: "Agent disabled" }), { headers: cors });
+
+  const ticketData = await cxFetchZendeskTicket(zendeskTicketId, db, env);
+  if (!ticketData) return new Response(JSON.stringify({ error: "Failed to fetch ticket" }), { status: 500, headers: cors });
+
+  const existing = await db.prepare("SELECT id, status FROM agent_tickets WHERE zendesk_ticket_id = ?").bind(String(zendeskTicketId)).first();
+  if (existing) return new Response(JSON.stringify({ skipped: true, reason: "Already processed", ticket_id: existing.id, status: existing.status }), { headers: cors });
+
+  const insertResult = await db.prepare(
+    `INSERT INTO agent_tickets (zendesk_ticket_id, subject, customer_email, channel, first_customer_message, status) VALUES (?, ?, ?, ?, ?, 'processing')`
+  ).bind(String(zendeskTicketId), ticketData.subject, ticketData.customerEmail, ticketData.channel, ticketData.firstMessage?.substring(0, 2000) || null).run();
+
+  const ticketId = insertResult.meta.last_row_id;
+  ctx.waitUntil(runCxAgentPipeline(ticketId, ticketData, db, env));
+  return new Response(JSON.stringify({ accepted: true, ticket_id: ticketId, zendesk_ticket_id: zendeskTicketId }), { headers: cors });
+}
+
+async function runCxAgentPipeline(ticketId, ticketData, db, env) {
+  const tracer = new CxTracer(db, ticketId);
+  try {
+    const intent = await tracer.trace('intent_classification', async () => cxClassifyIntent(ticketData, db, env));
+    await db.prepare(`UPDATE agent_tickets SET classified_intent = ?, intent_confidence = ? WHERE id = ?`).bind(intent.intent, intent.confidence, ticketId).run();
+
+    const scopeCheck = await tracer.trace('scope_check', async () => {
+      const scopedIntents = await cxGetConfig(db, 'scoped_intents');
+      const hardEscalateTopics = await cxGetConfig(db, 'hard_escalate_topics');
+      const minConfidence = await cxGetConfig(db, 'min_confidence_to_respond');
+      const isInScope = scopedIntents.includes(intent.intent);
+      const shouldEscalate = hardEscalateTopics.some(t => intent.topics?.includes(t));
+      const confidenceOk = intent.confidence >= minConfidence;
+      return {
+        in_scope: isInScope && !shouldEscalate && confidenceOk,
+        reason: !isInScope ? 'Intent not in handled scope'
+              : shouldEscalate ? 'Topic requires human review'
+              : !confidenceOk ? `Confidence ${intent.confidence} below threshold ${minConfidence}`
+              : 'In scope'
+      };
+    });
+
+    if (!scopeCheck.in_scope) {
+      await cxEscalate(ticketId, ticketData, intent, scopeCheck.reason, db, env, tracer);
+      return;
+    }
+    await db.prepare('UPDATE agent_tickets SET is_in_scope = 1 WHERE id = ?').bind(ticketId).run();
+
+    if (intent.intent === 'digital_access') {
+      await cxHandleDigitalAccess(ticketId, ticketData, intent, db, env, tracer);
+    } else {
+      await cxEscalate(ticketId, ticketData, intent, `No handler for intent: ${intent.intent}`, db, env, tracer);
+    }
+  } catch (err) {
+    console.error(`CX agent pipeline error for ticket ${ticketId}:`, err);
+    await db.prepare(`UPDATE agent_tickets SET status = 'error', error_message = ? WHERE id = ?`).bind(err.message, ticketId).run();
+    try { await tracer.trace('pipeline_error', async () => ({ error: err.message, stack: err.stack }), { status: 'error' }); } catch {}
+  }
+}
+
+async function cxClassifyIntent(ticketData, db, env) {
+  const model = await cxGetConfig(db, 'anthropic_model');
+  const systemPrompt = `You are an intent classifier for Nurse In The Making, a nursing education ecommerce company. Classify the customer's message into exactly ONE of these intents:
+
+- digital_access: Customer asking about ebook access codes, how to redeem codes, missing ebook codes, can't find their code, ebook not working. ALSO includes customers who bought ebooks and are asking when they'll receive them.
+- shipping_delivery: Questions about shipping, tracking, delivery, packages, international shipping, delivery delays.
+- refund_cancel: Refund requests, cancellation requests, order reversals.
+- billing_payment: Billing issues, duplicate charges, payment problems, discount codes not working, gift cards.
+- returns_damaged: Returns, damaged items, wrong items received, defective products, missing items from order.
+- order_general: General order questions not covered above (order status, order modifications).
+- product_info: Questions about what products include, what comes in bundles, product comparisons, product availability.
+- education_content: Questions about nursing study content itself (clinical questions, exam content, study material content).
+- account: Account login, password, profile issues.
+- unsubscribe: Unsubscribe requests.
+- partnership: Ambassador, collab, influencer, partnership inquiries.
+- social_engagement: Short social media messages that aren't support requests (reactions, quiz answers, thanks).
+- noise: System alerts, spam, auto-generated emails, copyright notices, anything that isn't real support.
+- other: Genuinely doesn't fit any category above.
+
+Additional "topics" you can flag (array, can be multiple):
+- clinical_question: Message asks for clinical/medical advice or nursing knowledge
+- refund_over_50: Refund request explicitly for over $50
+- angry: Customer is frustrated/angry
+- urgent: Customer says they need urgent help
+
+Respond in this exact JSON format:
+{
+  "intent": "...",
+  "confidence": 0.0-1.0,
+  "reasoning": "One sentence why you chose this intent",
+  "topics": []
+}`;
+  const userPrompt = `Subject: ${ticketData.subject || '(no subject)'}\nChannel: ${ticketData.channel || 'unknown'}\n\nCustomer message:\n${(ticketData.firstMessage || '').substring(0, 3000)}`;
+  const response = await cxCallClaude(env, model, systemPrompt, userPrompt, 500);
+  const parsed = cxExtractJson(response.content);
+  if (!parsed) return { intent: 'other', confidence: 0.0, reasoning: 'Failed to parse classifier response', topics: [], _tokens: response.tokens, _cost: response.cost };
+  return {
+    intent: parsed.intent || 'other',
+    confidence: parsed.confidence || 0.0,
+    reasoning: parsed.reasoning || '',
+    topics: parsed.topics || [],
+    _tokens: response.tokens,
+    _cost: response.cost
+  };
+}
+
+async function cxHandleDigitalAccess(ticketId, ticketData, intent, db, env, tracer) {
+  const order = await tracer.trace('shopify_order_lookup', async () => cxFindCustomerOrder(ticketData, db, env));
+  if (!order) { await cxEscalate(ticketId, ticketData, intent, 'Could not find order for customer.', db, env, tracer); return; }
+
+  const metafields = await tracer.trace('shopify_metafields_lookup', async () => cxFetchOrderMetafields(order.id, db, env));
+  const vsStatus = metafields.find(m => m.namespace === 'vitalsource' && m.key === 'status')?.value;
+  const vsCode = metafields.find(m => m.namespace === 'vitalsource' && m.key === 'code')?.value;
+  const vsExpected = metafields.find(m => m.namespace === 'vitalsource' && m.key === 'expected_count')?.value;
+
+  const decision = await tracer.trace('fulfillment_decision', async () => {
+    if (vsStatus === 'complete' && vsCode) return { action: 'deliver_existing_code', reasoning: 'Codes generated successfully, need to resend' };
+    if (vsStatus === 'partial') return { action: 'escalate_partial', reasoning: `Only ${vsCode?.split(',').length || 0}/${vsExpected} codes generated. Human should regenerate missing ones.` };
+    if (vsStatus === 'failed') return { action: 'trigger_regeneration', reasoning: 'All code generation failed. Triggering regeneration via n8n.' };
+    if (!vsStatus) {
+      const orderHasEbook = order.line_items?.some(li => li.sku?.startsWith('D-'));
+      if (orderHasEbook) return { action: 'trigger_regeneration', reasoning: 'Legacy order, no fulfillment status metafield. Triggering regeneration.' };
+      return { action: 'escalate_no_ebook', reasoning: 'Order contains no ebook products.' };
+    }
+    return { action: 'escalate_unknown_state', reasoning: `Unknown fulfillment status: ${vsStatus}` };
+  });
+
+  if (decision.action === 'deliver_existing_code') {
+    await cxDeliverExistingCode(ticketId, ticketData, order, vsCode, db, env, tracer);
+  } else if (decision.action === 'trigger_regeneration') {
+    await cxTriggerRegeneration(ticketId, ticketData, order, db, env, tracer);
+  } else {
+    await cxEscalate(ticketId, ticketData, intent, decision.reasoning, db, env, tracer, {
+      order_id: order.id, order_number: order.name,
+      vs_status: vsStatus, vs_code: vsCode, vs_expected: vsExpected
+    });
+  }
+}
+
+async function cxDeliverExistingCode(ticketId, ticketData, order, vsCode, db, env, tracer) {
+  const response = await tracer.trace('draft_response', async () => {
+    const codeEntries = vsCode.split(',').map(s => s.trim());
+    const customerFirstName = order.customer?.first_name || cxFirstNameFromEmail(ticketData.customerEmail);
+    const template = await cxGetTemplate(db, 'digital_access_success');
+    const plural = codeEntries.length > 1;
+    const body = template.body
+      .replace('{customer_first_name}', customerFirstName)
+      .replace('{product_titles}', codeEntries.map(e => e.split(' - ')[1] || 'your ebook').join(' and '))
+      .replaceAll('{plural_s}', plural ? 's' : '')
+      .replace('{is_are}', plural ? 'are' : 'is')
+      .replace('{codes}', codeEntries.join(' | '))
+      .replaceAll('{this_these}', plural ? 'these' : 'this');
+    return { body, confidence: 0.95, reasoning: `Found ${codeEntries.length} valid code(s) on order ${order.name}.`,
+      data_sources: { order_id: order.id, order_number: order.name, code_count: codeEntries.length, customer_name: customerFirstName } };
+  });
+  const responseId = await cxSaveResponse(db, ticketId, response);
+  await tracer.trace('post_internal_note', async () => cxPostInternalNote(ticketData.zendeskTicketId, response.body, db, env));
+  await db.prepare(`UPDATE agent_responses SET status = 'posted_as_note', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
+  await db.prepare(`UPDATE agent_tickets SET status = 'drafted', final_action = 'internal_note_posted', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
+}
+
+async function cxTriggerRegeneration(ticketId, ticketData, order, db, env, tracer) {
+  await tracer.trace('trigger_n8n_regeneration', async () => {
+    const webhookUrl = await cxGetConfig(db, 'n8n_code_generation_webhook');
+    const payload = {
+      id: order.id, name: order.name, order_number: order.order_number, email: order.email,
+      customer: order.customer, line_items: order.line_items, financial_status: order.financial_status,
+      cancelled_at: order.cancelled_at, created_at: order.created_at
+    };
+    const resp = await fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    return { webhook_triggered: true, status: resp.status, ok: resp.ok };
+  });
+
+  const response = await tracer.trace('draft_response', async () => {
+    const customerFirstName = order.customer?.first_name || cxFirstNameFromEmail(ticketData.customerEmail);
+    const template = await cxGetTemplate(db, 'digital_access_regenerating');
+    const body = template.body.replace('{customer_first_name}', customerFirstName);
+    return { body, confidence: 0.85, reasoning: `Order ${order.name} had no valid codes. Triggered regeneration via n8n.`,
+      data_sources: { order_id: order.id, order_number: order.name, action: 'regeneration_triggered' } };
+  });
+  const responseId = await cxSaveResponse(db, ticketId, response);
+  await tracer.trace('post_internal_note', async () => cxPostInternalNote(ticketData.zendeskTicketId, response.body, db, env));
+  await db.prepare(`UPDATE agent_responses SET status = 'posted_as_note', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
+  await db.prepare(`UPDATE agent_tickets SET status = 'drafted', final_action = 'internal_note_posted', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
+}
+
+async function cxEscalate(ticketId, ticketData, intent, reason, db, env, tracer, extraData = {}) {
+  const response = await tracer.trace('draft_escalation', async () => {
+    const template = await cxGetTemplate(db, 'escalation_note');
+    const dataFound = Object.keys(extraData).length > 0 ? Object.entries(extraData).map(([k, v]) => `  - ${k}: ${v}`).join('\n') : '  (none)';
+    const body = template.body
+      .replace('{escalation_reason}', reason)
+      .replace('{intent}', intent?.intent || 'unclassified')
+      .replace('{confidence}', (intent?.confidence || 0).toFixed(2))
+      .replace('{message_summary}', (ticketData.firstMessage || '').substring(0, 300))
+      .replace('{data_found}', dataFound)
+      .replace('{recommended_action}', 'Human review required');
+    return { body, confidence: 1.0, reasoning: reason, data_sources: extraData };
+  });
+  const responseId = await cxSaveResponse(db, ticketId, response);
+  await tracer.trace('post_escalation_note', async () => cxPostInternalNote(ticketData.zendeskTicketId, response.body, db, env));
+  await db.prepare(`UPDATE agent_responses SET status = 'posted_as_note', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
+  await db.prepare(`UPDATE agent_tickets SET status = 'escalated', final_action = 'escalated', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
+}
+
+async function cxFetchZendeskTicket(ticketId, db, env) {
+  const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
+  const auth = btoa(`${env.ZENDESK_EMAIL}/token:${env.ZENDESK_API_TOKEN}`);
+  const ticketResp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${ticketId}.json`, { headers: { Authorization: `Basic ${auth}` } });
+  if (!ticketResp.ok) return null;
+  const { ticket } = await ticketResp.json();
+  const commentsResp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${ticketId}/comments.json`, { headers: { Authorization: `Basic ${auth}` } });
+  const { comments = [] } = commentsResp.ok ? await commentsResp.json() : { comments: [] };
+  const supportStaffIds = await cxGetConfig(db, 'support_staff_ids');
+  const customerComments = comments.filter(c => c.public && !supportStaffIds.includes(c.author_id));
+  const firstCustomerMessage = customerComments[0]?.plain_body || ticket.description;
+  return {
+    zendeskTicketId: ticketId, subject: ticket.subject,
+    customerEmail: ticket.requester?.email || ticket.via?.source?.from?.address,
+    channel: ticket.via?.channel, firstMessage: firstCustomerMessage,
+    status: ticket.status, ticket, comments
+  };
+}
+
+async function cxPostInternalNote(ticketId, body, db, env) {
+  const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
+  const auth = btoa(`${env.ZENDESK_EMAIL}/token:${env.ZENDESK_API_TOKEN}`);
+  const resp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${ticketId}.json`, {
+    method: 'PUT',
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticket: { comment: { body, public: false } } })
+  });
+  return { status: resp.status, ok: resp.ok };
+}
+
+async function cxFindCustomerOrder(ticketData, db, env) {
+  const shopDomain = await cxGetConfig(db, 'shopify_store_domain');
+  const orderMatch = (ticketData.subject || '').match(/#?(\d{1,2}-\d{4,7})/) || (ticketData.firstMessage || '').match(/#?(\d{1,2}-\d{4,7})/);
+  if (orderMatch) {
+    const resp = await fetch(`https://${shopDomain}/admin/api/2024-01/orders.json?name=${encodeURIComponent('#' + orderMatch[1])}&status=any`, { headers: { 'X-Shopify-Access-Token': env.SHOPIFY_ACCESS_TOKEN } });
+    if (resp.ok) {
+      const { orders } = await resp.json();
+      if (orders && orders.length > 0) return orders[0];
+    }
+  }
+  if (ticketData.customerEmail) {
+    const resp = await fetch(`https://${shopDomain}/admin/api/2024-01/orders.json?email=${encodeURIComponent(ticketData.customerEmail)}&status=any&limit=10`, { headers: { 'X-Shopify-Access-Token': env.SHOPIFY_ACCESS_TOKEN } });
+    if (resp.ok) {
+      const { orders } = await resp.json();
+      if (orders && orders.length > 0) {
+        const ebookOrders = orders.filter(o => o.line_items?.some(li => li.sku?.startsWith('D-')));
+        return ebookOrders[0] || orders[0];
+      }
+    }
+  }
+  return null;
+}
+
+async function cxFetchOrderMetafields(orderId, db, env) {
+  const shopDomain = await cxGetConfig(db, 'shopify_store_domain');
+  const resp = await fetch(`https://${shopDomain}/admin/api/2024-01/orders/${orderId}/metafields.json`, { headers: { 'X-Shopify-Access-Token': env.SHOPIFY_ACCESS_TOKEN } });
+  if (!resp.ok) return [];
+  const { metafields = [] } = await resp.json();
+  return metafields;
+}
+
+async function cxCallClaude(env, model, systemPrompt, userPrompt, maxTokens = 1024) {
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] })
+  });
+  if (!resp.ok) { const errText = await resp.text(); throw new Error(`Claude API error ${resp.status}: ${errText}`); }
+  const data = await resp.json();
+  const content = data.content?.[0]?.text || '';
+  const inputTokens = data.usage?.input_tokens || 0;
+  const outputTokens = data.usage?.output_tokens || 0;
+  const cost = (inputTokens * 0.000015) + (outputTokens * 0.000075);
+  return { content, tokens: inputTokens + outputTokens, inputTokens, outputTokens, cost };
+}
+
+async function verifyZendeskSignature(body, timestamp, signature, secret) {
+  try {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(timestamp + body));
+    const expected = btoa(String.fromCharCode(...new Uint8Array(sig)));
+    return expected === signature;
+  } catch (err) { console.error('Signature verification error:', err); return false; }
+}
+
+class CxTracer {
+  constructor(db, ticketId) { this.db = db; this.ticketId = ticketId; this.stepOrder = 0; }
+  async trace(stepName, fn, opts = {}) {
+    this.stepOrder++;
+    const startTime = Date.now();
+    let output = null, status = 'success', errorMsg = null;
+    try { output = await fn(); }
+    catch (err) { status = 'error'; errorMsg = err.message; throw err; }
+    finally {
+      const duration = Date.now() - startTime;
+      try {
+        await this.db.prepare(`INSERT INTO agent_decisions (ticket_id, step_name, step_order, output_data, duration_ms, tokens_used, cost_usd, status, error_message, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(this.ticketId, stepName, this.stepOrder, output ? JSON.stringify(output).substring(0, 10000) : null, duration, output?._tokens || 0, output?._cost || 0, opts.status || status, errorMsg, output?.reasoning || null).run();
+      } catch (e) { console.error('Failed to write trace:', e); }
+    }
+    return output;
+  }
+}
+
+async function cxGetConfig(db, key) {
+  const row = await db.prepare('SELECT value, value_type FROM agent_config WHERE key = ?').bind(key).first();
+  if (!row) return null;
+  if (row.value_type === 'boolean') return row.value === 'true';
+  if (row.value_type === 'number') return parseFloat(row.value);
+  if (row.value_type === 'json') { try { return JSON.parse(row.value); } catch { return null; } }
+  return row.value;
+}
+async function cxGetTemplate(db, intent) {
+  return await db.prepare('SELECT * FROM agent_templates WHERE intent = ? AND is_active = 1 LIMIT 1').bind(intent).first();
+}
+async function cxSaveResponse(db, ticketId, response) {
+  const result = await db.prepare(`INSERT INTO agent_responses (ticket_id, draft_body, response_confidence, reasoning, data_sources) VALUES (?, ?, ?, ?, ?)`)
+    .bind(ticketId, response.body, response.confidence, response.reasoning, JSON.stringify(response.data_sources || {})).run();
+  return result.meta.last_row_id;
+}
+function cxExtractJson(text) {
+  if (!text) return null;
+  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (fenceMatch) { try { return JSON.parse(fenceMatch[1]); } catch {} }
+  const rawMatch = text.match(/\{[\s\S]*\}/);
+  if (rawMatch) { try { return JSON.parse(rawMatch[0]); } catch {} }
+  return null;
+}
+function cxFirstNameFromEmail(email) {
+  if (!email) return 'there';
+  const localPart = email.split('@')[0];
+  const firstName = localPart.split(/[._-]/)[0];
+  return firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+}
+
+async function handleCxAgentAPI(request, env, path) {
+  const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Content-Type": "application/json" };
+  if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+  if (!env.CX_AGENT_DB) return new Response(JSON.stringify({ error: "CX_AGENT_DB not configured" }), { status: 500, headers: cors });
+
+  const db = env.CX_AGENT_DB;
+  await initCxAgentTables(db);
+
+  try {
+    if (path === '/cx-agent/api/tickets' && request.method === 'GET') {
+      const url = new URL(request.url);
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
+      const status = url.searchParams.get('status');
+      let query = `SELECT * FROM agent_tickets`;
+      const params = [];
+      if (status) { query += ` WHERE status = ?`; params.push(status); }
+      query += ` ORDER BY received_at DESC LIMIT ?`;
+      params.push(limit);
+      const result = await db.prepare(query).bind(...params).all();
+      return new Response(JSON.stringify({ tickets: result.results }), { headers: cors });
+    }
+
+    const ticketMatch = path.match(/^\/cx-agent\/api\/tickets\/(\d+)$/);
+    if (ticketMatch && request.method === 'GET') {
+      const ticketId = parseInt(ticketMatch[1]);
+      const ticket = await db.prepare('SELECT * FROM agent_tickets WHERE id = ?').bind(ticketId).first();
+      if (!ticket) return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: cors });
+      const decisions = await db.prepare('SELECT * FROM agent_decisions WHERE ticket_id = ? ORDER BY step_order').bind(ticketId).all();
+      const responses = await db.prepare('SELECT * FROM agent_responses WHERE ticket_id = ? ORDER BY created_at').bind(ticketId).all();
+      return new Response(JSON.stringify({ ticket, decisions: decisions.results, responses: responses.results }), { headers: cors });
+    }
+
+    if (path === '/cx-agent/api/stats' && request.method === 'GET') {
+      const [total, byStatus, byIntent, last24h, costs] = await db.batch([
+        db.prepare('SELECT COUNT(*) as c FROM agent_tickets'),
+        db.prepare("SELECT status, COUNT(*) as c FROM agent_tickets GROUP BY status"),
+        db.prepare("SELECT classified_intent, COUNT(*) as c FROM agent_tickets WHERE classified_intent IS NOT NULL GROUP BY classified_intent ORDER BY c DESC"),
+        db.prepare("SELECT COUNT(*) as c FROM agent_tickets WHERE received_at > datetime('now', '-1 day')"),
+        db.prepare("SELECT SUM(cost_usd) as total_cost, SUM(tokens_used) as total_tokens FROM agent_decisions WHERE created_at > datetime('now', '-30 days')"),
+      ]);
+      return new Response(JSON.stringify({
+        total: total.results[0]?.c || 0,
+        by_status: byStatus.results,
+        by_intent: byIntent.results,
+        last_24h: last24h.results[0]?.c || 0,
+        cost_30d: costs.results[0]?.total_cost || 0,
+        tokens_30d: costs.results[0]?.total_tokens || 0
+      }), { headers: cors });
+    }
+
+    if (path === '/cx-agent/api/config' && request.method === 'GET') {
+      const result = await db.prepare('SELECT * FROM agent_config ORDER BY key').all();
+      return new Response(JSON.stringify({ config: result.results }), { headers: cors });
+    }
+    if (path === '/cx-agent/api/config' && request.method === 'POST') {
+      const body = await request.json();
+      if (!body.key) return new Response(JSON.stringify({ error: 'Missing key' }), { status: 400, headers: cors });
+      await db.prepare("UPDATE agent_config SET value = ?, updated_at = datetime('now') WHERE key = ?").bind(String(body.value), body.key).run();
+      return new Response(JSON.stringify({ updated: true, key: body.key, value: body.value }), { headers: cors });
+    }
+
+    if (path === '/cx-agent/api/templates' && request.method === 'GET') {
+      const result = await db.prepare('SELECT * FROM agent_templates WHERE is_active = 1 ORDER BY intent').all();
+      return new Response(JSON.stringify({ templates: result.results }), { headers: cors });
+    }
+    const tplMatch = path.match(/^\/cx-agent\/api\/templates\/(\d+)$/);
+    if (tplMatch && request.method === 'POST') {
+      const body = await request.json();
+      await db.prepare("UPDATE agent_templates SET body = ?, updated_at = datetime('now') WHERE id = ?").bind(body.body, parseInt(tplMatch[1])).run();
+      return new Response(JSON.stringify({ updated: true }), { headers: cors });
+    }
+
+    return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: cors });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: cors });
+  }
+}
+
 // ===== MAIN WORKER =====
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -417,6 +939,9 @@ export default {
     }
 
     if (request.method === "OPTIONS") { return new Response(null, { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" } }); }
+    // ===== CX AGENT =====
+    if (path === "/cx-agent/webhook/zendesk") { return handleCxAgentWebhook(request, env, ctx); }
+    if (path.startsWith("/cx-agent/api/")) { return handleCxAgentAPI(request, env, path); }
     // ===== CONTENT TRACKER API (D1-backed) =====
     if (path === "/tracker/api/data") { return handleTrackerAPI(request, env); }
     // ===== 3PL API (D1-backed) =====
@@ -434,6 +959,7 @@ export default {
     if (path === "/inventory") return Response.redirect(url.origin + "/inventory/", 301);
     if (path === "/ambassadors") return Response.redirect(url.origin + "/ambassadors/", 301);
     if (path === "/tracker") return Response.redirect(url.origin + "/tracker/", 301);
+    if (path === "/cx-agent") return Response.redirect(url.origin + "/cx-agent/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }
     // ===== AMBASSADOR API =====
@@ -481,6 +1007,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
   <a href="/3pl/">3PL</a>
   <a href="/tracker/">Tracker</a>
   <a href="/ambassadors/">Ambassadors</a>
+  <a href="/cx-agent/">CX Agent</a>
 </nav>
 <div class="hub-wrap">
 <div class="hub">
@@ -491,6 +1018,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
     <a href="/3pl/" class="app-card"><div class="app-icon">\u{1F4E6}</div><div class="app-name">3PL Dashboard</div><div class="app-desc">Warehouse & fulfillment</div></a>
     <a href="/tracker/" class="app-card"><div class="app-icon">\u{1F3AF}</div><div class="app-name">Content Tracker</div><div class="app-desc">IG performance scoring & attribution</div></a>
     <a href="/ambassadors/" class="app-card"><div class="app-icon">\u{1F91D}</div><div class="app-name">Ambassadors</div><div class="app-desc">Ambassador sales & commission tracking</div></a>
+    <a href="/cx-agent/" class="app-card"><div class="app-icon">\u{1F916}</div><div class="app-name">CX Agent</div><div class="app-desc">AI customer support automation</div></a>
   </div>
 </div>
 </div></body></html>`;

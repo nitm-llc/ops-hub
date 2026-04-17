@@ -10,6 +10,11 @@
       "binding": "DB",
       "database_name": "content-calendar",
       "database_id": "ef9c3aff-9755-4c6c-9b75-2d09e7916823"
+    },
+    {
+      "binding": "CX_AGENT_DB",
+      "database_name": "cx-agent",
+      "database_id": "PUT_CX_AGENT_DATABASE_ID_HERE"
     }
   ],
   "triggers": {
