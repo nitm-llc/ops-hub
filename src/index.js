@@ -544,7 +544,13 @@ async function handleCxAgentWebhook(request, env, ctx) {
 
   const insertResult = await db.prepare(
     `INSERT INTO agent_tickets (zendesk_ticket_id, subject, customer_email, channel, first_customer_message, status) VALUES (?, ?, ?, ?, ?, 'processing')`
-  ).bind(String(zendeskTicketId), ticketData.subject, ticketData.customerEmail, ticketData.channel, ticketData.firstMessage?.substring(0, 2000) || null).run();
+  ).bind(
+    String(zendeskTicketId),
+    ticketData.subject ?? null,
+    ticketData.customerEmail ?? null,
+    ticketData.channel ?? null,
+    ticketData.firstMessage?.substring(0, 2000) ?? null
+  ).run();
 
   const ticketId = insertResult.meta.last_row_id;
   ctx.waitUntil(runCxAgentPipeline(ticketId, ticketData, db, env));
@@ -1147,8 +1153,13 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
   });
 
   // STEP: Search Help Center for relevant articles
+  // For Messaging tickets, the subject is "Conversation with [name]" which is useless for search.
+  // Always prefer the actual message body as the search query.
   const maxArticles = await cxGetConfig(db, 'help_center_max_articles') || 3;
-  const searchQuery = ticketData.subject || ticketData.firstMessage?.substring(0, 200) || '';
+  const subjectIsUseful = ticketData.subject && !/^Conversation with /i.test(ticketData.subject);
+  const searchQuery = subjectIsUseful
+    ? ticketData.subject
+    : (ticketData.firstMessage?.substring(0, 200) || ticketData.subject || '');
   const articles = await tracer.trace('help_center_search', async () => {
     const results = await cxSearchHelpCenter(searchQuery, db, env, maxArticles);
     return { count: results.length, titles: results.map(a => a.title), _raw: results };
@@ -1157,7 +1168,13 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
   // STEP: Draft the response with Claude
   const response = await tracer.trace('draft_suggestion', async () => {
     const model = await cxGetConfig(db, 'anthropic_model');
-    const customerFirstName = ticketData.ticket?.requester?.name?.split(' ')[0]
+    // Order of preference for first name:
+    //  1) Zendesk requester name (works for email + Messaging — Instagram users have display names too)
+    //  2) The customerName field we extracted in the fetch
+    //  3) Derive from email
+    //  4) Generic "there"
+    const customerFirstName = (ticketData.ticket?.requester?.name?.split(' ')[0])
+      || (ticketData.customerName?.split(' ')[0])
       || cxFirstNameFromEmail(ticketData.customerEmail);
 
     const ordersContext = orderContext.orders?.length
@@ -1171,11 +1188,13 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
     const systemPrompt = `You are Kristine, founder of Nurse In The Making (NITM), a nursing education company. Write a helpful customer service reply in Kristine's warm, supportive tone.
 
 Your tone/style rules:
-- Open with "Hi [FirstName]," (use their first name)
+- Open with "Hi [FirstName]," (use their first name) — but for Instagram DMs and other social messaging, "Hi [FirstName]!" with an exclamation feels more natural
 - Warm, encouraging, supportive — you care about future nurses succeeding
 - Match the empathy level to the customer's situation (if they're frustrated, acknowledge it without being sappy)
+- Match the format to the channel: emails can be longer and more structured; Instagram DMs and Facebook messages should be SHORT, casual, and conversational — closer to how a friend texts. No long paragraphs or formal sign-offs in DMs.
 - Keep replies concise — get to the answer, don't pad
-- Close with "Happy studying, future nurse!" followed by "Kristine :)" on its own line
+- For email: close with "Happy studying, future nurse!" followed by "Kristine :)" on its own line
+- For DMs/messaging: skip the formal sign-off entirely, or use a brief "💛" or "xx Kristine" — match how the customer wrote to you
 - Use product names exactly as written: "The Complete Nursing School Bundle®", "NurseInTheMaking+", "VitalSource Bookshelf"
 - Link to Help Center articles inline when relevant using markdown: [article title](url)
 
@@ -1189,9 +1208,13 @@ Response rules:
 
 Return ONLY the reply body. No subject line, no JSON, no commentary.`;
 
+    const channelLabel = ticketData.isMessagingChannel
+      ? `${ticketData.channel} (social DM — keep reply short and casual)`
+      : (ticketData.channel || 'email');
     const userPrompt = `Customer message:
+Channel: ${channelLabel}
 Subject: ${ticketData.subject || '(none)'}
-From: ${ticketData.customerEmail}
+From: ${ticketData.customerEmail || '(no email — likely social DM)'}
 ${ticketData.firstMessage?.substring(0, 2500) || ''}
 
 ---
@@ -1371,12 +1394,23 @@ async function cxFetchZendeskTicket(ticketId, db, env) {
   const { comments = [] } = commentsResp.ok ? await commentsResp.json() : { comments: [] };
   const supportStaffIds = await cxGetConfig(db, 'support_staff_ids');
   const customerComments = comments.filter(c => c.public && !supportStaffIds.includes(c.author_id));
-  const firstCustomerMessage = customerComments[0]?.plain_body || ticket.description;
+  // For Messaging tickets, ticket.description is often a placeholder like "Conversation with [name]".
+  // Always prefer the first real customer comment if one exists.
+  const firstCustomerMessage = customerComments[0]?.plain_body || ticket.description || null;
+  // Messaging channels (instagram_dm, native_messaging, sunshine_conversations_*) often have no requester email.
+  const channel = ticket.via?.channel ?? null;
+  const isMessagingChannel = channel && (channel === 'instagram_dm' || channel === 'native_messaging' || channel.startsWith('sunshine_conversations'));
   return {
-    zendeskTicketId: ticketId, subject: ticket.subject,
-    customerEmail: ticket.requester?.email || ticket.via?.source?.from?.address,
-    channel: ticket.via?.channel, firstMessage: firstCustomerMessage,
-    status: ticket.status, ticket, comments
+    zendeskTicketId: ticketId,
+    subject: ticket.subject ?? null,
+    customerEmail: ticket.requester?.email ?? ticket.via?.source?.from?.address ?? null,
+    customerName: ticket.requester?.name ?? null,
+    channel,
+    isMessagingChannel,
+    firstMessage: firstCustomerMessage,
+    status: ticket.status ?? null,
+    ticket,
+    comments
   };
 }
 
