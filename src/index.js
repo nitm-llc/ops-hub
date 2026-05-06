@@ -2308,10 +2308,12 @@ async function syncIcpOrderEvents(env, opts = {}) {
       const validEvents = events.filter(e => e.relationships?.profile?.data?.id);
       const stmts = validEvents.map(e => {
         const props = e.attributes?.event_properties || {};
-        const sku = props.SKU || props.sku || props.ProductID || null;
-        const name = props.ProductName || props.product_name || props.Title || null;
+        // Klaviyo's Shopify integration uses these exact property names:
+        // SKU, Name (NOT ProductName), Quantity, $value (NOT RowTotal/Value)
+        const sku = props.SKU || props.sku || (props.ProductID != null ? String(props.ProductID) : null);
+        const name = props.Name || props.ProductName || props.product_name || props.Title || null;
         const qty = parseInt(props.Quantity || props.quantity || 1) || 1;
-        const value = parseFloat(props.RowTotal || props.row_total || props.ProductPrice || props.LineValue || props.value || 0) || 0;
+        const value = parseFloat(props["$value"] || props.RowTotal || props.row_total || props.ProductPrice || props.LineValue || props.value || 0) || 0;
         const profileId = e.relationships.profile.data.id;
         return db.prepare(
           `INSERT OR REPLACE INTO icp_order_items (event_id, profile_id, order_date, sku, product_name, quantity, line_value, synced_at)
@@ -2421,6 +2423,16 @@ async function handleIcpAPI(request, env, path) {
         });
       }
       return new Response(JSON.stringify({ days, segments: Object.values(byRole) }), { headers: cors });
+    }
+
+    if (path === "/icp/api/debug/clear-events" && request.method === "POST") {
+      // Wipes order events + sync state so a Full 365-day backfill can re-pull
+      // everything cleanly. Profiles are untouched.
+      await db.batch([
+        db.prepare(`DELETE FROM icp_order_items`),
+        db.prepare(`DELETE FROM icp_sync_state WHERE key = 'events_last_sync'`),
+      ]);
+      return new Response(JSON.stringify({ ok: true, message: "Events cleared. Run Full 365-day backfill next." }), { headers: cors });
     }
 
     if (path === "/icp/api/debug" && request.method === "GET") {
