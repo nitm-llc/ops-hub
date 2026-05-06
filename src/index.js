@@ -2423,6 +2423,41 @@ async function handleIcpAPI(request, env, path) {
       return new Response(JSON.stringify({ days, segments: Object.values(byRole) }), { headers: cors });
     }
 
+    if (path === "/icp/api/debug" && request.method === "GET") {
+      // Show 5 sample order items from D1 + 1 raw event from Klaviyo so we can see
+      // exactly which property names hold the value/quantity in the live payload.
+      const sampleRows = await db.prepare(
+        `SELECT event_id, profile_id, order_date, sku, product_name, quantity, line_value
+         FROM icp_order_items LIMIT 5`
+      ).all();
+
+      let rawEvent = null;
+      let rawError = null;
+      if (env.KLAVIYO_API_KEY) {
+        try {
+          const metricRow = await db.prepare(
+            `SELECT value FROM icp_sync_state WHERE key = 'ordered_product_metric_id'`
+          ).first();
+          if (metricRow?.value) {
+            const filter = `equals(metric_id,"${metricRow.value}")`;
+            const evUrl = `${KLAVIYO_API}/events/?filter=${encodeURIComponent(filter)}&fields[event]=event_properties,datetime&page[size]=1`;
+            const evData = await klaviyoFetch(evUrl, env);
+            rawEvent = evData.data?.[0] || null;
+          } else {
+            rawError = "No ordered_product_metric_id cached yet";
+          }
+        } catch (e) {
+          rawError = e.message;
+        }
+      }
+
+      return new Response(JSON.stringify({
+        sample_rows: sampleRows.results,
+        raw_klaviyo_event: rawEvent,
+        raw_klaviyo_error: rawError,
+      }, null, 2), { headers: cors });
+    }
+
     if (path === "/icp/api/product-segments" && request.method === "GET") {
       const url = new URL(request.url);
       const days = parseInt(url.searchParams.get("days") || "365");
