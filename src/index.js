@@ -2148,83 +2148,119 @@ async function klaviyoFetch(url, env) {
   return res.json();
 }
 
+// Map of Klaviyo segment ID -> the role/stage label we want to tag profiles with.
+// To find a segment ID: open the segment in Klaviyo, look at the URL.
+// To rebuild this map (e.g. if you rename or recreate segments), update both
+// the IDs and the label strings — the labels here become what shows up in the
+// dashboard. Use the en-dash (U+2013) for "Year 1–2" to match the Klaviyo value.
+const ICP_SEGMENT_MAP = (() => {
+  const enDash = String.fromCharCode(0x2013);
+  return {
+    "S3MHkw": `Nursing student (Year 1${enDash}2)`,
+    "V8vWgd": `Pre-nursing / A&P student`,
+    "VAYudS": `Nursing student (Final year / NCLEX prep)`,
+    "X44QgY": `New grad nurse (on the floor)`,
+    "UYFrD5": `Other healthcare professional`,
+    "Rn3Uv3": `Nurse educator / Faculty`,
+  };
+})();
+
 async function syncIcpProfiles(env, opts = {}) {
   const db = env.DB;
-  const limit = opts.maxPages || 8000;
+  const maxPagesPerSegment = opts.maxPagesPerSegment || 5000;
 
-  // Build the role list. Use String.fromCharCode for the en-dash so encoding
-  // can't get mangled by editors or copy/paste — Klaviyo stores "Year 1\u20132".
-  const enDash = String.fromCharCode(0x2013);
-  const roles = [
-    `Nursing student (Year 1${enDash}2)`,
-    `Pre-nursing / A&P student`,
-    `Nursing student (Final year / NCLEX prep)`,
-    `New grad nurse (on the floor)`,
-    `Other healthcare professional`,
-    `Nurse educator / Faculty`,
-  ];
-  const filter = `any(properties.role_or_stage,[${roles.map(r => `"${r}"`).join(",")}])`;
+  // Resume state lives at the segment level: which segments are already done,
+  // and where in the current segment we left off.
+  const completedRow = await db.prepare(
+    `SELECT value FROM icp_sync_state WHERE key = 'profiles_segments_completed'`
+  ).first();
+  const completed = !opts.restart && completedRow?.value
+    ? new Set(JSON.parse(completedRow.value))
+    : new Set();
 
-  // Filter at the API to get ONLY profiles where role_or_stage is set
-  // (cuts dataset from ~443k to ~21k). Properties are included by default
-  // in profile list responses; additional-fields[profile] only accepts
-  // predictive_analytics/subscriptions per Klaviyo's API.
-  const initialUrl = `${KLAVIYO_API}/profiles/?filter=${encodeURIComponent(filter)}&page[size]=100`;
+  const segmentEntries = Object.entries(ICP_SEGMENT_MAP);
+  const result = { segments_processed: 0, profiles_synced: 0, total_pages: 0, by_segment: {}, complete: false };
 
-  // Resume from cursor if available, unless caller explicitly forced a restart
-  let url;
-  if (opts.restart) {
-    url = initialUrl;
-  } else {
-    const cursorRow = await db.prepare(
-      `SELECT value FROM icp_sync_state WHERE key = 'profiles_next_cursor'`
-    ).first();
-    url = (cursorRow?.value && cursorRow.value !== "") ? cursorRow.value : initialUrl;
-  }
-
-  let pages = 0;
-  let written = 0;
-
-  while (url && pages < limit) {
-    const data = await klaviyoFetch(url, env);
-    const profiles = data.data || [];
-
-    if (profiles.length > 0) {
-      const stmts = profiles.map(p => {
-        const props = p.attributes?.properties || {};
-        const role = props["role_or_stage"] || props["Role Or Stage"] || props["Are you a..."] || null;
-        return db.prepare(
-          `INSERT OR REPLACE INTO icp_profiles (profile_id, email, role_or_stage, created_kl, updated_kl, synced_at)
-           VALUES (?, ?, ?, ?, ?, datetime('now'))`
-        ).bind(
-          p.id,
-          p.attributes?.email || null,
-          role,
-          p.attributes?.created || null,
-          p.attributes?.updated || null,
-        );
-      });
-      await db.batch(stmts);
-      written += profiles.length;
+  for (const [segmentId, role] of segmentEntries) {
+    if (completed.has(segmentId)) {
+      result.by_segment[role] = { skipped: true };
+      continue;
     }
 
-    url = data.links?.next || null;
-    pages++;
+    // Resume URL for this specific segment if we left off mid-segment
+    const cursorKey = `profiles_segment_cursor_${segmentId}`;
+    const cursorRow = await db.prepare(
+      `SELECT value FROM icp_sync_state WHERE key = ?`
+    ).bind(cursorKey).first();
+    const initialUrl = `${KLAVIYO_API}/segments/${segmentId}/profiles/?page[size]=100`;
+    let url = (!opts.restart && cursorRow?.value && cursorRow.value !== "")
+      ? cursorRow.value
+      : initialUrl;
+
+    let pages = 0;
+    let writtenThisSegment = 0;
+
+    while (url && pages < maxPagesPerSegment) {
+      const data = await klaviyoFetch(url, env);
+      const profiles = data.data || [];
+
+      if (profiles.length > 0) {
+        const stmts = profiles.map(p =>
+          db.prepare(
+            `INSERT OR REPLACE INTO icp_profiles (profile_id, email, role_or_stage, created_kl, updated_kl, synced_at)
+             VALUES (?, ?, ?, ?, ?, datetime('now'))`
+          ).bind(
+            p.id,
+            p.attributes?.email || null,
+            role,
+            p.attributes?.created || null,
+            p.attributes?.updated || null,
+          )
+        );
+        await db.batch(stmts);
+        writtenThisSegment += profiles.length;
+      }
+
+      url = data.links?.next || null;
+      pages++;
+    }
+
+    // Save cursor for this segment (empty if we finished it)
+    await db.prepare(
+      `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+    ).bind(cursorKey, url || "").run();
+
+    result.profiles_synced += writtenThisSegment;
+    result.total_pages += pages;
+    result.segments_processed++;
+    result.by_segment[role] = { synced: writtenThisSegment, pages, complete: !url };
+
+    if (!url) {
+      // Mark this segment as fully done
+      completed.add(segmentId);
+      await db.prepare(
+        `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+      ).bind("profiles_segments_completed", JSON.stringify([...completed])).run();
+    } else {
+      // Hit page cap on this segment — stop here so user can click again to continue.
+      // This keeps each "click" responsive and avoids burning all CPU on one segment.
+      break;
+    }
   }
 
-  // Save where we left off (or empty if we finished)
-  await db.prepare(
-    `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
-  ).bind("profiles_next_cursor", url || "").run();
+  result.complete = completed.size === segmentEntries.length;
 
-  if (!url) {
-    // Fully finished — record completion timestamp
+  if (result.complete) {
     await db.prepare(
       `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
     ).bind("profiles_last_sync", new Date().toISOString()).run();
+    // Reset the completed-list so the next sync run starts fresh
+    await db.prepare(
+      `DELETE FROM icp_sync_state WHERE key = 'profiles_segments_completed'`
+    ).run();
   }
 
-  return { profiles_synced: written, pages, complete: !url, has_more: !!url };
+  return result;
 }
 
 async function syncIcpOrderEvents(env, opts = {}) {
