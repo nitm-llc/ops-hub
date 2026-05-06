@@ -2150,7 +2150,7 @@ async function klaviyoFetch(url, env) {
 
 async function syncIcpProfiles(env, opts = {}) {
   const db = env.DB;
-  const limit = opts.maxPages || 300; // covers ~30k profiles
+  const limit = opts.maxPages || 8000; // covers ~800k profiles
   let url = `${KLAVIYO_API}/profiles/?fields[profile]=email,properties,created,updated&page[size]=100`;
   let pages = 0;
   let written = 0;
