@@ -2152,15 +2152,33 @@ async function syncIcpProfiles(env, opts = {}) {
   const db = env.DB;
   const limit = opts.maxPages || 8000;
 
-  // Resume from last cursor if available, unless caller forced a restart
+  // Build the role list. Use String.fromCharCode for the en-dash so encoding
+  // can't get mangled by editors or copy/paste — Klaviyo stores "Year 1\u20132".
+  const enDash = String.fromCharCode(0x2013);
+  const roles = [
+    `Nursing student (Year 1${enDash}2)`,
+    `Pre-nursing / A&P student`,
+    `Nursing student (Final year / NCLEX prep)`,
+    `New grad nurse (on the floor)`,
+    `Other healthcare professional`,
+    `Nurse educator / Faculty`,
+  ];
+  const filter = `any(properties.role_or_stage,[${roles.map(r => `"${r}"`).join(",")}])`;
+
+  // Filter at the API to get ONLY profiles where role_or_stage is set
+  // (cuts dataset from ~443k to ~21k) AND use additional-fields[profile]=properties
+  // which forces Klaviyo to include full custom property data in list responses.
+  const initialUrl = `${KLAVIYO_API}/profiles/?filter=${encodeURIComponent(filter)}&additional-fields[profile]=properties&page[size]=100`;
+
+  // Resume from cursor if available, unless caller explicitly forced a restart
   let url;
   if (opts.restart) {
-    url = `${KLAVIYO_API}/profiles/?fields[profile]=email,properties,created,updated&page[size]=100`;
+    url = initialUrl;
   } else {
     const cursorRow = await db.prepare(
       `SELECT value FROM icp_sync_state WHERE key = 'profiles_next_cursor'`
     ).first();
-    url = cursorRow?.value || `${KLAVIYO_API}/profiles/?fields[profile]=email,properties,created,updated&page[size]=100`;
+    url = (cursorRow?.value && cursorRow.value !== "") ? cursorRow.value : initialUrl;
   }
 
   let pages = 0;
@@ -2173,7 +2191,6 @@ async function syncIcpProfiles(env, opts = {}) {
     if (profiles.length > 0) {
       const stmts = profiles.map(p => {
         const props = p.attributes?.properties || {};
-        // Adjust property keys here if your form uses a different exact name
         const role = props["role_or_stage"] || props["Role Or Stage"] || props["Are you a..."] || null;
         return db.prepare(
           `INSERT OR REPLACE INTO icp_profiles (profile_id, email, role_or_stage, created_kl, updated_kl, synced_at)
@@ -2194,7 +2211,7 @@ async function syncIcpProfiles(env, opts = {}) {
     pages++;
   }
 
-  // Save where we left off (or clear it if we finished)
+  // Save where we left off (or empty if we finished)
   await db.prepare(
     `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
   ).bind("profiles_next_cursor", url || "").run();
@@ -2294,7 +2311,9 @@ async function handleIcpAPI(request, env, path) {
   try {
     if (path === "/icp/api/sync/profiles" && request.method === "POST") {
       if (!env.KLAVIYO_API_KEY) return new Response(JSON.stringify({ error: "KLAVIYO_API_KEY not configured" }), { status: 500, headers: cors });
-      const result = await syncIcpProfiles(env);
+      const reqUrl = new URL(request.url);
+      const restart = reqUrl.searchParams.get("restart") === "1";
+      const result = await syncIcpProfiles(env, { restart });
       return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
     }
 
