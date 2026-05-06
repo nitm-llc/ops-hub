@@ -2265,7 +2265,7 @@ async function syncIcpProfiles(env, opts = {}) {
 
 async function syncIcpOrderEvents(env, opts = {}) {
   const db = env.DB;
-  const maxPages = opts.maxPages || 500;
+  const maxPages = opts.maxPages || 5000;
 
   // Find the Ordered Product metric ID (cached after first lookup)
   let metricId = null;
@@ -2286,12 +2286,16 @@ async function syncIcpOrderEvents(env, opts = {}) {
     ).bind("ordered_product_metric_id", metricId).run();
   }
 
-  // Determine since-date: incremental if we've synced before, else 365 days
+  // Determine since-date for the backfill. We hard-code March 1, 2026 as the floor
+  // because that's when role_or_stage started being collected — orders before that
+  // can't be reliably tagged with the buyer's role-at-time-of-purchase.
+  // Incremental syncs continue forward from the last sync timestamp.
+  const ROLE_OR_STAGE_LAUNCH = "2026-03-01T00:00:00Z";
   const sinceRow = await db.prepare(
     `SELECT value FROM icp_sync_state WHERE key = 'events_last_sync'`
   ).first();
   const sinceISO = opts.fullBackfill || !sinceRow?.value
-    ? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString()
+    ? ROLE_OR_STAGE_LAUNCH
     : sinceRow.value;
 
   const filter = `and(equals(metric_id,"${metricId}"),greater-than(datetime,${sinceISO}))`;

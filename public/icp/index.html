@@ -131,14 +131,15 @@ function StatusPanel({ status, onSync, syncing, syncMsg }) {
         <button onClick={() => onSync("profiles")} disabled={syncing}>Sync profiles from Klaviyo</button>
         <button onClick={() => onSync("events")} disabled={syncing}>Sync recent orders</button>
         <button className="primary" onClick={() => onSync("events", true)} disabled={syncing}>
-          Full 365-day backfill
+          Backfill since Mar 2026
         </button>
         {syncing && <span className="status-line">Syncing… this can take several minutes</span>}
         {syncMsg && <span className="status-line">{syncMsg}</span>}
       </div>
       <div className="help">
-        First time? Click <code>Sync profiles</code> first, then <code>Full 365-day backfill</code>.
+        First time? Click <code>Sync profiles</code> first, then <code>Backfill since Mar 2026</code>.
         Subsequent runs: just <code>Sync profiles</code> + <code>Sync recent orders</code> (incremental).
+        Order data starts at March 1, 2026 because that's when <code>role_or_stage</code> began being collected.
       </div>
     </div>
   );
@@ -356,7 +357,10 @@ function FirstPurchase({ days }) {
 
 function App() {
   const [tab, setTab] = useState("overview");
-  const [days, setDays] = useState(365);
+  // Days since March 1, 2026 — that's when role_or_stage started being collected,
+  // so older orders can't be reliably tagged with the buyer's role at purchase time.
+  const daysSinceMar2026 = Math.ceil((Date.now() - new Date("2026-03-01T00:00:00Z").getTime()) / (24 * 60 * 60 * 1000));
+  const [days, setDays] = useState(daysSinceMar2026);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
   const [statusKey, setStatusKey] = useState(0);
@@ -401,11 +405,14 @@ function App() {
         <div className="row">
           <span style={{fontSize: 13, color: "#94a3b8"}}>Window:</span>
           <select value={days} onChange={e => setDays(parseInt(e.target.value))}>
+            <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
-            <option value={90}>Last 90 days</option>
-            <option value={180}>Last 180 days</option>
-            <option value={365}>Last 365 days</option>
+            <option value={60}>Last 60 days</option>
+            <option value={daysSinceMar2026}>Since Mar 1, 2026 (data start)</option>
           </select>
+          <span style={{fontSize: 12, color: "#64748b"}}>
+            Order data starts at Mar 1, 2026 — when role tagging began.
+          </span>
         </div>
       </div>
 
