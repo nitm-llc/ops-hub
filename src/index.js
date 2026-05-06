@@ -2166,9 +2166,10 @@ async function syncIcpProfiles(env, opts = {}) {
   const filter = `any(properties.role_or_stage,[${roles.map(r => `"${r}"`).join(",")}])`;
 
   // Filter at the API to get ONLY profiles where role_or_stage is set
-  // (cuts dataset from ~443k to ~21k) AND use additional-fields[profile]=properties
-  // which forces Klaviyo to include full custom property data in list responses.
-  const initialUrl = `${KLAVIYO_API}/profiles/?filter=${encodeURIComponent(filter)}&additional-fields[profile]=properties&page[size]=100`;
+  // (cuts dataset from ~443k to ~21k). Properties are included by default
+  // in profile list responses; additional-fields[profile] only accepts
+  // predictive_analytics/subscriptions per Klaviyo's API.
+  const initialUrl = `${KLAVIYO_API}/profiles/?filter=${encodeURIComponent(filter)}&page[size]=100`;
 
   // Resume from cursor if available, unless caller explicitly forced a restart
   let url;
