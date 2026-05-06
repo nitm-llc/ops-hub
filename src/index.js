@@ -2150,8 +2150,19 @@ async function klaviyoFetch(url, env) {
 
 async function syncIcpProfiles(env, opts = {}) {
   const db = env.DB;
-  const limit = opts.maxPages || 8000; // covers ~800k profiles
-  let url = `${KLAVIYO_API}/profiles/?fields[profile]=email,properties,created,updated&page[size]=100`;
+  const limit = opts.maxPages || 8000;
+
+  // Resume from last cursor if available, unless caller forced a restart
+  let url;
+  if (opts.restart) {
+    url = `${KLAVIYO_API}/profiles/?fields[profile]=email,properties,created,updated&page[size]=100`;
+  } else {
+    const cursorRow = await db.prepare(
+      `SELECT value FROM icp_sync_state WHERE key = 'profiles_next_cursor'`
+    ).first();
+    url = cursorRow?.value || `${KLAVIYO_API}/profiles/?fields[profile]=email,properties,created,updated&page[size]=100`;
+  }
+
   let pages = 0;
   let written = 0;
 
@@ -2183,11 +2194,19 @@ async function syncIcpProfiles(env, opts = {}) {
     pages++;
   }
 
+  // Save where we left off (or clear it if we finished)
   await db.prepare(
     `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
-  ).bind("profiles_last_sync", new Date().toISOString()).run();
+  ).bind("profiles_next_cursor", url || "").run();
 
-  return { profiles_synced: written, pages };
+  if (!url) {
+    // Fully finished — record completion timestamp
+    await db.prepare(
+      `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+    ).bind("profiles_last_sync", new Date().toISOString()).run();
+  }
+
+  return { profiles_synced: written, pages, complete: !url, has_more: !!url };
 }
 
 async function syncIcpOrderEvents(env, opts = {}) {
