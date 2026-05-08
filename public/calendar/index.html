@@ -1194,8 +1194,7 @@ function renderMobileList() {
           const isStory = t.listName?.toLowerCase().includes("ig stor") || t.listName?.toLowerCase().includes("story");
           const qotdField = isStory ? t.customFields.find(f => f.name && f.name.toLowerCase().includes("qotd") && (f.type === "checkbox" || f.type_config)) : null;
           const showQotd = qotdField && (qotdField.value === "true" || qotdField.value === true);
-          const isReelOrFeed = (t.platform?.toLowerCase().includes("ig post") || t.platform?.toLowerCase().includes("ig reels") || t.listName?.toLowerCase().includes("ig post") || t.listName?.toLowerCase().includes("ig reels"));
-          const showManychat = isReelOrFeed && Array.isArray(t.tags) && t.tags.some(tag => String(tag).toLowerCase() === "manychat");
+          const showManychat = Array.isArray(t.tags) && t.tags.some(tag => String(tag).toLowerCase() === "manychat");
           
           html += `<div class="mobile-task" style="background:${t.color}" onclick="showModal('${t.id}')">
             ${timeStr ? `<span class="mobile-task-time">${escHTML(timeStr)}</span>` : ''}
@@ -1280,12 +1279,9 @@ function taskPillHTML(task, expanded) {
     }
   }
   
-  // Check for Manychat — shows 🤖 on IG Reels and IG Posts (Feed) when task has "manychat" tag
+  // Check for Manychat — shows 🤖 on any platform when task has "manychat" tag
   let manychatHTML = "";
-  const platformLower = task.platform?.toLowerCase() || "";
-  const listNameLower = task.listName?.toLowerCase() || "";
-  const isReelOrFeed = platformLower.includes("ig post") || platformLower.includes("ig reels") || listNameLower.includes("ig post") || listNameLower.includes("ig reels");
-  if (isReelOrFeed && Array.isArray(task.tags)) {
+  if (Array.isArray(task.tags)) {
     const hasManychat = task.tags.some(tag => String(tag).toLowerCase() === "manychat");
     if (hasManychat) {
       manychatHTML = `<span class="task-pill-emoji" style="font-size:10px">🤖</span>`;
