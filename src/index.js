@@ -2607,7 +2607,7 @@ async function getSubscribedToListMetricId(env) {
   if (cached?.value) return cached.value;
 
   // Pull metrics 1 page at a time looking for the exact name.
-  let url = `${KLAVIYO_API}/metrics/?page[size]=10`;
+  let url = `${KLAVIYO_API}/metrics/`;
   while (url) {
     const data = await klaviyoFetch(url, env);
     const match = (data.data || []).find(m => m.attributes?.name === "Subscribed to List");
