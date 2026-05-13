@@ -72,7 +72,6 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
   <script crossorigin src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
 </head>
 <body>
@@ -89,10 +88,18 @@
     <a href="/growth/" class="active">Growth</a>
   </nav>
   <div id="root"></div>
+  <div id="boot-error" style="display:none;padding:24px;color:#fca5a5;font-family:monospace;font-size:12px;white-space:pre-wrap;"></div>
+
+<script>
+// Surface any boot-time errors so we don't get a blank page silently.
+window.addEventListener("error", function(e) {
+  var el = document.getElementById("boot-error");
+  if (el) { el.style.display = "block"; el.textContent = "Boot error: " + (e.error?.stack || e.message); }
+});
+</script>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo, useCallback } = React;
-const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } = Recharts;
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 const fmtNum = (n) => n == null ? "—" : Number(n).toLocaleString();
 const fmtPct = (n) => n == null ? "—" : (Number(n) * 100).toFixed(1) + "%";
@@ -253,6 +260,18 @@ function Leaderboard({ days, setDays }) {
 
 function GrowthChart({ days }) {
   const { data, error, loading } = useApi(`/growth/api/timeseries?days=${days}&top=8`, [days]);
+  const [hover, setHover] = useState(null);
+  const [width, setWidth] = useState(900);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    function onResize() {
+      if (wrapRef.current) setWidth(wrapRef.current.clientWidth);
+    }
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [data]);
 
   if (loading) return <div className="panel"><div className="loading">Loading chart…</div></div>;
   if (error) return <div className="panel"><div className="error">{error}</div></div>;
@@ -260,35 +279,148 @@ function GrowthChart({ days }) {
     return <div className="panel"><h2>Growth over time</h2><div className="empty">No data to chart yet.</div></div>;
   }
 
+  // Build stacked series
+  const keys = data.series_keys; // [{key, label}]
+  const rows = data.rows;        // [{date, key1: n, key2: n}]
+  const n = rows.length;
+
+  // Compute cumulative stack values for each row
+  const stacked = rows.map(r => {
+    let acc = 0;
+    const out = { date: r.date, layers: [] };
+    for (const k of keys) {
+      const v = r[k.key] || 0;
+      out.layers.push({ key: k.key, label: k.label, base: acc, top: acc + v, value: v });
+      acc += v;
+    }
+    out.total = acc;
+    return out;
+  });
+
+  const yMax = Math.max(1, ...stacked.map(s => s.total));
+  // Round yMax up to a nice number
+  const niceMax = (() => {
+    if (yMax <= 10) return Math.ceil(yMax);
+    const mag = Math.pow(10, Math.floor(Math.log10(yMax)));
+    return Math.ceil(yMax / mag) * mag;
+  })();
+
+  // Layout
+  const W = Math.max(400, width);
+  const H = 320;
+  const P = { top: 16, right: 16, bottom: 40, left: 48 };
+  const innerW = W - P.left - P.right;
+  const innerH = H - P.top - P.bottom;
+  const stepX = n > 1 ? innerW / (n - 1) : 0;
+
+  const xOf = (i) => P.left + i * stepX;
+  const yOf = (v) => P.top + innerH - (v / niceMax) * innerH;
+
+  // Build polygon paths for each layer (bottom-to-top stack)
+  function layerPath(layerIdx) {
+    const top = stacked.map((s, i) => `${xOf(i)},${yOf(s.layers[layerIdx].top)}`).join(" ");
+    const bot = [...stacked].reverse().map((s, ri) => {
+      const i = n - 1 - ri;
+      return `${xOf(i)},${yOf(s.layers[layerIdx].base)}`;
+    }).join(" ");
+    return `${top} ${bot}`;
+  }
+
+  // Y axis ticks
+  const ticks = [];
+  const tickCount = 4;
+  for (let t = 0; t <= tickCount; t++) {
+    const v = (niceMax / tickCount) * t;
+    ticks.push({ v, y: yOf(v) });
+  }
+
+  // X axis labels (show ~6)
+  const xLabelStep = Math.max(1, Math.ceil(n / 6));
+
+  // Hover handler maps x to nearest row
+  function onMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const i = Math.max(0, Math.min(n - 1, Math.round((x - P.left) / Math.max(1, stepX))));
+    setHover({ i, x: xOf(i), row: stacked[i] });
+  }
+
   return (
     <div className="panel">
-      <h2>Top 8 lists — daily new subs</h2>
-      <div className="chart-container">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data.rows} stackOffset="none">
-            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-            <XAxis dataKey="date" stroke="#64748b" fontSize={11} tickFormatter={d => d.slice(5)} />
-            <YAxis stroke="#64748b" fontSize={11} />
-            <Tooltip
-              contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:"6px",fontSize:"12px"}}
-              labelStyle={{color:"#f1f5f9"}}
-              itemStyle={{color:"#cbd5e1"}}
+      <h2>Top {keys.length} lists — daily new subs (stacked)</h2>
+      <div ref={wrapRef} style={{position:"relative",width:"100%"}}>
+        <svg width={W} height={H} style={{display:"block"}} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          {/* Grid + Y ticks */}
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={P.left} x2={W - P.right} y1={t.y} y2={t.y} stroke="#1f2937" strokeDasharray="3 3" />
+              <text x={P.left - 8} y={t.y + 4} textAnchor="end" fill="#64748b" fontSize="11">{Math.round(t.v).toLocaleString()}</text>
+            </g>
+          ))}
+          {/* Stacked layers */}
+          {keys.map((k, li) => (
+            <polygon
+              key={k.key}
+              points={layerPath(li)}
+              fill={COLORS[li % COLORS.length]}
+              fillOpacity={0.75}
+              stroke={COLORS[li % COLORS.length]}
+              strokeWidth="1"
             />
-            <Legend wrapperStyle={{fontSize:11,paddingTop:8}} />
-            {data.series_keys.map((s, i) => (
-              <Area
-                key={s.key}
-                type="monotone"
-                dataKey={s.key}
-                name={s.label}
-                stackId="1"
-                stroke={COLORS[i % COLORS.length]}
-                fill={COLORS[i % COLORS.length]}
-                fillOpacity={0.7}
-              />
-            ))}
-          </AreaChart>
-        </ResponsiveContainer>
+          ))}
+          {/* X labels */}
+          {stacked.map((s, i) => (
+            i % xLabelStep === 0 ? (
+              <text key={i} x={xOf(i)} y={H - P.bottom + 16} textAnchor="middle" fill="#64748b" fontSize="11">
+                {s.date.slice(5)}
+              </text>
+            ) : null
+          ))}
+          {/* Hover indicator */}
+          {hover && (
+            <line x1={hover.x} x2={hover.x} y1={P.top} y2={P.top + innerH} stroke="#475569" strokeDasharray="2 2" />
+          )}
+        </svg>
+        {hover && (
+          <div style={{
+            position:"absolute",
+            left: Math.min(hover.x + 12, W - 260),
+            top: 16,
+            background:"#1e293b",
+            border:"1px solid #334155",
+            borderRadius:"6px",
+            padding:"10px 12px",
+            fontSize:"12px",
+            color:"#cbd5e1",
+            pointerEvents:"none",
+            minWidth:"220px",
+            zIndex:10,
+          }}>
+            <div style={{color:"#f1f5f9",fontWeight:600,marginBottom:6}}>{hover.row.date}</div>
+            <div style={{color:"#94a3b8",marginBottom:6,fontSize:11}}>Total: {fmtNum(hover.row.total)}</div>
+            {hover.row.layers.slice().reverse().filter(l => l.value > 0).map(l => {
+              const li = keys.findIndex(k => k.key === l.key);
+              return (
+                <div key={l.key} style={{display:"flex",justifyContent:"space-between",gap:12,padding:"2px 0"}}>
+                  <span style={{display:"flex",alignItems:"center",gap:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:160}}>
+                    <span style={{width:10,height:10,background:COLORS[li % COLORS.length],borderRadius:2,flexShrink:0}}></span>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis"}} title={l.label}>{l.label}</span>
+                  </span>
+                  <span style={{fontVariantNumeric:"tabular-nums"}}>{fmtNum(l.value)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      {/* Legend */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:12,marginTop:12,fontSize:11,color:"#94a3b8"}}>
+        {keys.map((k, i) => (
+          <div key={k.key} style={{display:"flex",alignItems:"center",gap:6,maxWidth:240}}>
+            <span style={{width:10,height:10,background:COLORS[i % COLORS.length],borderRadius:2,flexShrink:0}}></span>
+            <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={k.label}>{k.label}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
