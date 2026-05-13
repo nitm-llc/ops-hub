@@ -2684,7 +2684,6 @@ async function fetchListSubsAggregates(env, days) {
           `greater-or-equal(datetime,${start.toISOString()})`,
           `less-than(datetime,${end.toISOString()})`,
         ],
-        page_size: 500,
         timezone: "UTC",
       },
     },
