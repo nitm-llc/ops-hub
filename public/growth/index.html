@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NITM List Growth</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0f1a; color: #f1f5f9; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; min-height: 100vh; }
+    .top-nav { background: linear-gradient(180deg,#1a2332 0%,#141c28 100%); padding: 12px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 1px solid #1e293b; }
+    .top-nav .brand { color: #f1f5f9; font-weight: 700; font-size: 14px; text-decoration: none; letter-spacing: 0.5px; }
+    .top-nav a { color: #64748b; text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.15s; }
+    .top-nav a:hover, .top-nav a.active { color: #f1f5f9; }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 32px 24px 80px; }
+    h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 8px; }
+    .subtitle { color: #64748b; font-size: 14px; margin-bottom: 28px; }
+    .panel { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+    .panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #e2e8f0; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    button { background: #334155; color: #f1f5f9; border: none; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; font-family: inherit; }
+    button:hover:not(:disabled) { background: #475569; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.primary { background: #2563eb; }
+    button.primary:hover:not(:disabled) { background: #1d4ed8; }
+    button.small { padding: 6px 12px; font-size: 12px; }
+    select, input { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: inherit; }
+    input[type="text"] { width: 100%; max-width: 280px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px 12px; background: #1e293b; color: #94a3b8; font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid #334155; position: sticky; top: 0; cursor: pointer; user-select: none; }
+    th:hover { color: #cbd5e1; }
+    td { padding: 10px 12px; border-bottom: 1px solid #1e293b; color: #cbd5e1; vertical-align: middle; }
+    tr:hover td { background: #161e2e; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .pct { color: #94a3b8; font-size: 12px; }
+    .pct.positive { color: #34d399; }
+    .pct.negative { color: #f87171; }
+    .status-line { font-size: 12px; color: #64748b; margin-top: 8px; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid #1f2937; }
+    .tab { padding: 10px 16px; cursor: pointer; color: #64748b; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s; }
+    .tab.active { color: #f1f5f9; border-bottom-color: #2563eb; }
+    .tab:hover { color: #cbd5e1; }
+    .empty { text-align: center; padding: 60px 20px; color: #64748b; }
+    .error { background: #2d1414; border: 1px solid #7f1d1d; color: #fca5a5; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; font-family: monospace; word-break: break-word; }
+    .warning { background: #2d2414; border: 1px solid #7f5a1d; color: #fcd34d; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .stat { background: #1e293b; padding: 16px; border-radius: 8px; }
+    .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin-bottom: 6px; }
+    .stat-value { font-size: 22px; font-weight: 700; color: #f1f5f9; font-variant-numeric: tabular-nums; }
+    .badge { display: inline-block; background: #1e293b; color: #94a3b8; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .badge.lead_magnet { background: #14342d; color: #6ee7b7; }
+    .badge.purchaser { background: #1e2a3d; color: #93c5fd; }
+    .badge.system { background: #2a2a3d; color: #c4b5fd; }
+    .badge.other { background: #1e293b; color: #94a3b8; }
+    .label-input { background: #1e293b; border: 1px solid #334155; color: #f1f5f9; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; width: 100%; max-width: 240px; }
+    .category-select { background: #1e293b; border: 1px solid #334155; color: #f1f5f9; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; }
+    .help { font-size: 12px; color: #64748b; line-height: 1.5; margin-top: 12px; }
+    .help code { background: #1e293b; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+    .loading { color: #64748b; padding: 20px; text-align: center; font-size: 13px; }
+    .movers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .mover-card { background: #1a1f2e; border: 1px solid #1f2937; border-radius: 8px; padding: 14px; }
+    .mover-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: #cbd5e1; }
+    .mover-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1f2937; font-size: 12px; }
+    .mover-row:last-child { border-bottom: none; }
+    .mover-name { color: #cbd5e1; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chart-container { width: 100%; height: 320px; position: relative; }
+    .sparkline { display: inline-block; vertical-align: middle; }
+    .caveat-toggle { color: #64748b; font-size: 12px; cursor: pointer; text-decoration: underline; }
+    .caveat-toggle:hover { color: #94a3b8; }
+    @media(max-width:900px){ .movers-grid{grid-template-columns:1fr} }
+    @media(max-width:700px){ .wrap{padding:20px 12px 60px} .panel{padding:16px} h1{font-size:22px} }
+  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
+</head>
+<body>
+  <nav class="top-nav">
+    <span class="brand">NITM Ops</span>
+    <a href="/">Hub</a>
+    <a href="/calendar/">Calendar</a>
+    <a href="/inventory/">Inventory</a>
+    <a href="/3pl/">3PL</a>
+    <a href="/tracker/">Tracker</a>
+    <a href="/ambassadors/">Ambassadors</a>
+    <a href="/cx-agent/">CX Agent</a>
+    <a href="/icp/">ICP</a>
+    <a href="/growth/" class="active">Growth</a>
+  </nav>
+  <div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback } = React;
+const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } = Recharts;
+
+const fmtNum = (n) => n == null ? "—" : Number(n).toLocaleString();
+const fmtPct = (n) => n == null ? "—" : (Number(n) * 100).toFixed(1) + "%";
+const fmtDelta = (n) => n == null ? "—" : (n > 0 ? "+" : "") + Number(n).toLocaleString();
+const fmtDate = (s) => { if (!s) return "never"; try { return new Date(s).toLocaleString(); } catch { return s; } };
+
+// Distinct line colors for the stacked area chart
+const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#06b6d4","#f97316","#84cc16","#a855f7","#14b8a6","#fbbf24"];
+
+function useApi(path, deps = []) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(path);
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
+      setData(j);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [path]);
+
+  useEffect(() => { reload(); }, deps); // eslint-disable-line
+  return { data, error, loading, reload };
+}
+
+function Caveats() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="help">
+      <span className="caveat-toggle" onClick={() => setOpen(!open)}>
+        {open ? "Hide" : "About this data"}
+      </span>
+      {open && (
+        <div style={{marginTop:8}}>
+          Numbers come from Klaviyo's <code>Subscribed to List</code> metric and reflect <strong>gross new opt-ins</strong> per list — they do not subtract unsubscribes or list cleans. Klaviyo only records the event when a profile actively opts in via a form, API single-subscribe, or opt-in page; bulk imports and double-opt-in events on existing subscribers may not be counted, so absolute numbers can differ from Klaviyo's own growth reports. Relative comparisons across lists and over time remain valid.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Status({ status, onBackfill, onRecent, onRegistry, syncing }) {
+  if (!status) return null;
+  const last = (key) => (status.sync_state || []).find(s => s.key === key)?.updated_at;
+  return (
+    <div className="panel">
+      <h2>Sync status</h2>
+      <div className="stat-grid">
+        <div className="stat"><div className="stat-label">Lists tracked</div><div className="stat-value">{fmtNum(status.lists?.c)}</div></div>
+        <div className="stat"><div className="stat-label">Subs rows</div><div className="stat-value">{fmtNum(status.subs?.c)}</div></div>
+        <div className="stat"><div className="stat-label">Earliest data</div><div className="stat-value" style={{fontSize:14}}>{status.subs?.earliest || "—"}</div></div>
+        <div className="stat"><div className="stat-label">Latest data</div><div className="stat-value" style={{fontSize:14}}>{status.subs?.latest || "—"}</div></div>
+      </div>
+      <div className="row" style={{marginTop:16}}>
+        <button className="primary" onClick={onBackfill} disabled={syncing}>{syncing ? "Syncing…" : "Backfill 90 days"}</button>
+        <button onClick={onRecent} disabled={syncing}>Sync last 7 days</button>
+        <button onClick={onRegistry} disabled={syncing}>Refresh list registry</button>
+      </div>
+      <div className="status-line">
+        Last backfill: {fmtDate(last("last_full_backfill"))} · Last recent sync: {fmtDate(last("last_recent_sync"))} · Registry: {fmtDate(last("registry_last_sync"))}
+      </div>
+    </div>
+  );
+}
+
+function Leaderboard({ days, setDays }) {
+  const { data, error, loading } = useApi(`/growth/api/leaderboard?days=${days}`, [days]);
+  const [sortKey, setSortKey] = useState("gross_subs");
+  const [sortDir, setSortDir] = useState("desc");
+
+  const sorted = useMemo(() => {
+    if (!data?.rows) return [];
+    const rows = [...data.rows];
+    rows.sort((a, b) => {
+      const av = a[sortKey] ?? -Infinity;
+      const bv = b[sortKey] ?? -Infinity;
+      if (typeof av === "string") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+    return rows;
+  }, [data, sortKey, sortDir]);
+
+  const toggle = (key) => {
+    if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("desc"); }
+  };
+  const arrow = (key) => sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+
+  return (
+    <div className="panel">
+      <div className="row" style={{justifyContent:"space-between",marginBottom:16}}>
+        <h2 style={{margin:0}}>Leaderboard — gross new subs</h2>
+        <select value={days} onChange={e => setDays(parseInt(e.target.value))}>
+          <option value={7}>Last 7 days</option>
+          <option value={14}>Last 14 days</option>
+          <option value={30}>Last 30 days</option>
+          <option value={60}>Last 60 days</option>
+          <option value={90}>Last 90 days</option>
+        </select>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {loading && <div className="loading">Loading…</div>}
+      {data && data.rows.length === 0 && <div className="empty">No subscription data yet. Run a backfill to populate.</div>}
+      {data && data.rows.length > 0 && (
+        <>
+          <div style={{marginBottom:12,fontSize:13,color:"#94a3b8"}}>
+            <strong style={{color:"#f1f5f9"}}>{fmtNum(data.total_subs)}</strong> total new subs across <strong style={{color:"#f1f5f9"}}>{data.rows.length}</strong> lists · window {data.window_start} → {data.window_end}
+          </div>
+          <div style={{overflowX:"auto"}}>
+            <table>
+              <thead>
+                <tr>
+                  <th onClick={() => toggle("label")}>List / Label{arrow("label")}</th>
+                  <th onClick={() => toggle("category")}>Category{arrow("category")}</th>
+                  <th className="num" onClick={() => toggle("gross_subs")}>Gross subs{arrow("gross_subs")}</th>
+                  <th className="num" onClick={() => toggle("daily_avg")}>Daily avg{arrow("daily_avg")}</th>
+                  <th className="num" onClick={() => toggle("pct_of_total")}>% of total{arrow("pct_of_total")}</th>
+                  <th className="num" onClick={() => toggle("delta")}>vs prior period{arrow("delta")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(r => (
+                  <tr key={r.list_name}>
+                    <td>
+                      <div style={{fontWeight:500,color:"#f1f5f9"}}>{r.label}</div>
+                      {r.label !== r.list_name && <div style={{fontSize:11,color:"#64748b"}}>{r.list_name}</div>}
+                    </td>
+                    <td><span className={"badge " + (r.category || 'other')}>{r.category || 'other'}</span></td>
+                    <td className="num"><strong>{fmtNum(r.gross_subs)}</strong></td>
+                    <td className="num">{r.daily_avg.toFixed(1)}</td>
+                    <td className="num pct">{fmtPct(r.pct_of_total)}</td>
+                    <td className="num">
+                      <div>{fmtDelta(r.delta)}</div>
+                      {r.pct_change != null && (
+                        <div className={"pct " + (r.delta > 0 ? "positive" : r.delta < 0 ? "negative" : "")}>
+                          {(r.pct_change >= 0 ? "+" : "") + fmtPct(r.pct_change)}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function GrowthChart({ days }) {
+  const { data, error, loading } = useApi(`/growth/api/timeseries?days=${days}&top=8`, [days]);
+
+  if (loading) return <div className="panel"><div className="loading">Loading chart…</div></div>;
+  if (error) return <div className="panel"><div className="error">{error}</div></div>;
+  if (!data || data.rows.length === 0) {
+    return <div className="panel"><h2>Growth over time</h2><div className="empty">No data to chart yet.</div></div>;
+  }
+
+  return (
+    <div className="panel">
+      <h2>Top 8 lists — daily new subs</h2>
+      <div className="chart-container">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data.rows} stackOffset="none">
+            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+            <XAxis dataKey="date" stroke="#64748b" fontSize={11} tickFormatter={d => d.slice(5)} />
+            <YAxis stroke="#64748b" fontSize={11} />
+            <Tooltip
+              contentStyle={{background:"#1e293b",border:"1px solid #334155",borderRadius:"6px",fontSize:"12px"}}
+              labelStyle={{color:"#f1f5f9"}}
+              itemStyle={{color:"#cbd5e1"}}
+            />
+            <Legend wrapperStyle={{fontSize:11,paddingTop:8}} />
+            {data.series_keys.map((s, i) => (
+              <Area
+                key={s.key}
+                type="monotone"
+                dataKey={s.key}
+                name={s.label}
+                stackId="1"
+                stroke={COLORS[i % COLORS.length]}
+                fill={COLORS[i % COLORS.length]}
+                fillOpacity={0.7}
+              />
+            ))}
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function Movers() {
+  const { data, error, loading } = useApi(`/growth/api/movers?days=14`, []);
+  if (loading) return <div className="panel"><div className="loading">Loading movers…</div></div>;
+  if (error) return <div className="panel"><div className="error">{error}</div></div>;
+  if (!data) return null;
+  return (
+    <div className="panel">
+      <h2>Movers — last 14 days vs prior 14 days</h2>
+      <div className="movers-grid">
+        <div className="mover-card">
+          <h3>Accelerating</h3>
+          {data.accelerators.length === 0 && <div style={{color:"#64748b",fontSize:12}}>No accelerators with enough volume to show.</div>}
+          {data.accelerators.map(m => (
+            <div className="mover-row" key={m.list_name}>
+              <span className="mover-name" title={m.list_name}>{m.label}</span>
+              <span>
+                <span style={{color:"#cbd5e1"}}>{fmtNum(m.prev_subs)} → {fmtNum(m.curr_subs)}</span>
+                <span className="pct positive" style={{marginLeft:8}}>
+                  {m.pct_change != null ? `+${fmtPct(m.pct_change)}` : "new"}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="mover-card">
+          <h3>Decelerating</h3>
+          {data.decelerators.length === 0 && <div style={{color:"#64748b",fontSize:12}}>No decelerators to flag.</div>}
+          {data.decelerators.map(m => (
+            <div className="mover-row" key={m.list_name}>
+              <span className="mover-name" title={m.list_name}>{m.label}</span>
+              <span>
+                <span style={{color:"#cbd5e1"}}>{fmtNum(m.prev_subs)} → {fmtNum(m.curr_subs)}</span>
+                <span className="pct negative" style={{marginLeft:8}}>
+                  {m.pct_change != null ? fmtPct(m.pct_change) : ""}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Registry() {
+  const { data, error, loading, reload } = useApi(`/growth/api/lists`, []);
+  const [filter, setFilter] = useState("");
+  const [saving, setSaving] = useState({});
+
+  const save = async (row, patch) => {
+    setSaving(s => ({...s, [row.list_id]: true}));
+    try {
+      await fetch("/growth/api/lists", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          list_id: row.list_id,
+          lead_magnet_label: row.lead_magnet_label,
+          category: row.category,
+          is_active: row.is_active,
+          ...patch,
+        }),
+      });
+      await reload();
+    } finally {
+      setSaving(s => ({...s, [row.list_id]: false}));
+    }
+  };
+
+  const filtered = useMemo(() => {
+    if (!data?.lists) return [];
+    const f = filter.toLowerCase();
+    if (!f) return data.lists;
+    return data.lists.filter(l =>
+      (l.name || "").toLowerCase().includes(f) ||
+      (l.lead_magnet_label || "").toLowerCase().includes(f)
+    );
+  }, [data, filter]);
+
+  if (loading) return <div className="panel"><div className="loading">Loading lists…</div></div>;
+  if (error) return <div className="panel"><div className="error">{error}</div></div>;
+
+  return (
+    <div className="panel">
+      <h2>List registry</h2>
+      <div className="row" style={{marginBottom:16}}>
+        <input type="text" placeholder="Filter by name or label…" value={filter} onChange={e => setFilter(e.target.value)} />
+        <div style={{fontSize:12,color:"#64748b"}}>{filtered.length} of {data.lists.length} lists</div>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table>
+          <thead>
+            <tr>
+              <th>Klaviyo list name</th>
+              <th>Friendly label</th>
+              <th>Category</th>
+              <th className="num">All-time subs</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(l => (
+              <RegistryRow key={l.list_id} list={l} onSave={save} saving={saving[l.list_id]} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function RegistryRow({ list, onSave, saving }) {
+  const [label, setLabel] = useState(list.lead_magnet_label || "");
+  const [category, setCategory] = useState(list.category || "other");
+  const dirty = label !== (list.lead_magnet_label || "") || category !== (list.category || "other");
+
+  return (
+    <tr>
+      <td><div style={{fontSize:12,color:"#cbd5e1"}}>{list.name}</div></td>
+      <td>
+        <input className="label-input" type="text" placeholder="(optional)" value={label} onChange={e => setLabel(e.target.value)} />
+      </td>
+      <td>
+        <select className="category-select" value={category} onChange={e => setCategory(e.target.value)}>
+          <option value="lead_magnet">lead_magnet</option>
+          <option value="purchaser">purchaser</option>
+          <option value="system">system</option>
+          <option value="other">other</option>
+        </select>
+      </td>
+      <td className="num">{fmtNum(list.all_time_subs)}</td>
+      <td>
+        {dirty && (
+          <button className="primary small" disabled={saving} onClick={() => onSave({...list, lead_magnet_label: label, category}, { lead_magnet_label: label, category })}>
+            {saving ? "…" : "Save"}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function App() {
+  const [days, setDays] = useState(30);
+  const [tab, setTab] = useState("dashboard");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+  const { data: status, reload: reloadStatus } = useApi("/growth/api/status", []);
+
+  const runSync = async (endpoint, label) => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await fetch(endpoint, { method: "POST" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
+      setSyncMsg({ ok: true, text: `${label} done — ${JSON.stringify(j)}` });
+      await reloadStatus();
+      // Force the data tabs to refresh by toggling
+      window.dispatchEvent(new Event("growth-data-changed"));
+    } catch (e) {
+      setSyncMsg({ ok: false, text: `${label} failed: ${e.message}` });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div className="wrap">
+      <h1>List Growth</h1>
+      <div className="subtitle">Which Klaviyo lists are pulling, by gross new subscribers.</div>
+
+      {syncMsg && (
+        <div className={syncMsg.ok ? "warning" : "error"} style={syncMsg.ok ? {borderColor:"#14532d",background:"#14342d",color:"#86efac"} : null}>
+          {syncMsg.text}
+        </div>
+      )}
+
+      <Status
+        status={status}
+        syncing={syncing}
+        onBackfill={() => runSync("/growth/api/sync/backfill?days=90", "Backfill")}
+        onRecent={() => runSync("/growth/api/sync/recent", "Recent sync")}
+        onRegistry={() => runSync("/growth/api/sync/registry", "Registry refresh")}
+      />
+
+      <div className="tabs">
+        <div className={"tab " + (tab === "dashboard" ? "active" : "")} onClick={() => setTab("dashboard")}>Dashboard</div>
+        <div className={"tab " + (tab === "registry" ? "active" : "")} onClick={() => setTab("registry")}>List registry</div>
+      </div>
+
+      {tab === "dashboard" && (
+        <>
+          <Leaderboard days={days} setDays={setDays} />
+          <GrowthChart days={days} />
+          <Movers />
+        </>
+      )}
+      {tab === "registry" && <Registry />}
+
+      <Caveats />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

@@ -2539,6 +2539,570 @@ async function handleIcpAPI(request, env, path) {
 }
 
 // ===== MAIN WORKER =====
+
+// ===== LIST GROWTH MODULE =====
+// Tracks gross new subscriptions per Klaviyo list so we can see which
+// lead magnets are pulling. Reuses klaviyoFetch + KLAVIYO_API constants from
+// the ICP module above. Data lives in env.DB alongside the ICP tables.
+//
+// Required env: KLAVIYO_API_KEY (already configured for ICP)
+//
+// Data flow:
+//  1. List registry (klaviyo_lists) — periodically refreshed from GET /api/lists
+//  2. Daily backfill — pulls "Subscribed to List" metric aggregates from
+//     Klaviyo grouped by List name, writes one row per (list, day) into
+//     klaviyo_list_subs.
+//  3. Ongoing pulls — same query but only the last few days, run from cron
+//     every 6 hours (gated inside the existing 2-min cron).
+//
+// Known caveats (surfaced in the UI):
+//  - Klaviyo's "Subscribed to List" event is only recorded for opt-ins via
+//    forms / API single-subscribe / opt-in pages. Profiles imported in bulk
+//    or added via double-opt-in flows on existing subscribers may NOT log
+//    the event, so absolute numbers can differ from Klaviyo's own dashboard
+//    growth reports. Relative comparisons across lists are still valid.
+//  - Metric aggregates can only group by List name, not list_id, so we join
+//    back to klaviyo_lists by name. If two lists share the same exact name
+//    in Klaviyo, their counts will be merged in the dashboard.
+
+async function initGrowthTables(db) {
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS klaviyo_lists (
+      list_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      lead_magnet_label TEXT,
+      category TEXT DEFAULT 'other',
+      is_active INTEGER DEFAULT 1,
+      created_kl TEXT,
+      updated_kl TEXT,
+      synced_at TEXT DEFAULT (datetime('now'))
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS klaviyo_list_subs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      list_name TEXT NOT NULL,
+      list_id TEXT,
+      bucket_date TEXT NOT NULL,
+      gross_subs INTEGER NOT NULL DEFAULT 0,
+      captured_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(list_name, bucket_date)
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS growth_sync_state (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_list_subs_date ON klaviyo_list_subs(bucket_date)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_list_subs_name ON klaviyo_list_subs(list_name)`),
+  ]);
+}
+
+// Resolves and caches the "Subscribed to List" metric ID. Klaviyo's
+// internal metrics don't have a stable known ID across accounts so we look
+// it up once and stash it.
+async function getSubscribedToListMetricId(env) {
+  const db = env.DB;
+  const cached = await db.prepare(
+    `SELECT value FROM growth_sync_state WHERE key = 'subscribed_to_list_metric_id'`
+  ).first();
+  if (cached?.value) return cached.value;
+
+  // Pull metrics 1 page at a time looking for the exact name.
+  let url = `${KLAVIYO_API}/metrics/?page[size]=100`;
+  while (url) {
+    const data = await klaviyoFetch(url, env);
+    const match = (data.data || []).find(m => m.attributes?.name === "Subscribed to List");
+    if (match) {
+      await db.prepare(
+        `INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+      ).bind("subscribed_to_list_metric_id", match.id).run();
+      return match.id;
+    }
+    url = data.links?.next || null;
+  }
+  throw new Error("Could not find 'Subscribed to List' metric in Klaviyo account");
+}
+
+// Refresh the list registry from Klaviyo. Preserves any lead_magnet_label /
+// category the user has set in the dashboard.
+async function syncListRegistry(env) {
+  const db = env.DB;
+  let url = `${KLAVIYO_API}/lists/?page[size]=100`;
+  let added = 0;
+  let updated = 0;
+
+  while (url) {
+    const data = await klaviyoFetch(url, env);
+    const lists = data.data || [];
+    if (lists.length === 0) break;
+
+    // For each list, upsert without clobbering user-edited fields.
+    const stmts = lists.map(l => {
+      return db.prepare(`
+        INSERT INTO klaviyo_lists (list_id, name, created_kl, updated_kl, synced_at)
+        VALUES (?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(list_id) DO UPDATE SET
+          name = excluded.name,
+          updated_kl = excluded.updated_kl,
+          synced_at = datetime('now')
+      `).bind(l.id, l.attributes?.name || "(unnamed)", l.attributes?.created || null, l.attributes?.updated || null);
+    });
+    await db.batch(stmts);
+    added += lists.length;
+
+    url = data.links?.next || null;
+  }
+
+  await db.prepare(
+    `INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+  ).bind("registry_last_sync", new Date().toISOString()).run();
+
+  return { lists_seen: added };
+}
+
+// Pull "Subscribed to List" daily counts grouped by list name.
+// `days` is how many days back to fetch (start of the window).
+// Klaviyo's metric aggregates endpoint is a POST with a JSON body.
+async function fetchListSubsAggregates(env, days) {
+  const metricId = await getSubscribedToListMetricId(env);
+
+  const end = new Date();
+  end.setUTCHours(0, 0, 0, 0); // start of today UTC
+  // Bump end forward to tomorrow so today's partial bucket is included.
+  end.setUTCDate(end.getUTCDate() + 1);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - days);
+
+  const body = {
+    data: {
+      type: "metric-aggregate",
+      attributes: {
+        metric_id: metricId,
+        interval: "day",
+        measurements: ["count"],
+        by: ["List"],
+        filter: [
+          `greater-or-equal(datetime,${start.toISOString()})`,
+          `less-than(datetime,${end.toISOString()})`,
+        ],
+        page_size: 500,
+        timezone: "UTC",
+      },
+    },
+  };
+
+  const res = await fetch(`${KLAVIYO_API}/metric-aggregates/`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Klaviyo-API-Key ${env.KLAVIYO_API_KEY}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "revision": KLAVIYO_REVISION,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Klaviyo metric-aggregates ${res.status}: ${text.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+// Parse the aggregate response into [{list_name, date, count}] rows.
+// Klaviyo returns:
+//   data.attributes.dates: ["2026-04-01T00:00:00+00:00", ...]
+//   data.attributes.data: [{ dimensions: ["List Name"], measurements: { count: [n, n, ...] } }, ...]
+function parseAggregateResponse(payload) {
+  const attrs = payload?.data?.attributes;
+  if (!attrs) return [];
+  const dates = attrs.dates || [];
+  const rows = [];
+  for (const series of (attrs.data || [])) {
+    const listName = (series.dimensions || [])[0];
+    if (!listName) continue;
+    const counts = series.measurements?.count || [];
+    for (let i = 0; i < counts.length && i < dates.length; i++) {
+      const c = counts[i];
+      if (c == null) continue;
+      // Trim to YYYY-MM-DD
+      const date = dates[i].slice(0, 10);
+      rows.push({ list_name: listName, date, count: c });
+    }
+  }
+  return rows;
+}
+
+async function writeAggregateRows(env, rows) {
+  if (rows.length === 0) return 0;
+  const db = env.DB;
+
+  // Lookup table from name -> list_id (best-effort; some lists with shared
+  // names will just take whichever list_id comes back first).
+  const lookup = new Map();
+  const lists = await db.prepare(`SELECT list_id, name FROM klaviyo_lists`).all();
+  for (const l of lists.results || []) {
+    if (!lookup.has(l.name)) lookup.set(l.name, l.list_id);
+  }
+
+  // D1 batch size limit ~100 statements, so chunk.
+  const CHUNK = 80;
+  let written = 0;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const slice = rows.slice(i, i + CHUNK);
+    const stmts = slice.map(r => db.prepare(`
+      INSERT INTO klaviyo_list_subs (list_name, list_id, bucket_date, gross_subs, captured_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(list_name, bucket_date) DO UPDATE SET
+        gross_subs = excluded.gross_subs,
+        list_id = COALESCE(excluded.list_id, klaviyo_list_subs.list_id),
+        captured_at = datetime('now')
+    `).bind(r.list_name, lookup.get(r.list_name) || null, r.date, r.count));
+    await db.batch(stmts);
+    written += stmts.length;
+  }
+  return written;
+}
+
+async function syncGrowthBackfill(env, days = 90) {
+  const db = env.DB;
+  await syncListRegistry(env);
+  const payload = await fetchListSubsAggregates(env, days);
+  const rows = parseAggregateResponse(payload);
+  const written = await writeAggregateRows(env, rows);
+  await db.prepare(
+    `INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+  ).bind("last_full_backfill", new Date().toISOString()).run();
+  return { days_requested: days, lists_with_subs: new Set(rows.map(r => r.list_name)).size, rows_written: written };
+}
+
+// Incremental sync — refresh the most recent 7 days. Cheap and covers any
+// late-arriving events without re-fetching the world.
+async function syncGrowthRecent(env) {
+  const db = env.DB;
+  const payload = await fetchListSubsAggregates(env, 7);
+  const rows = parseAggregateResponse(payload);
+  const written = await writeAggregateRows(env, rows);
+  await db.prepare(
+    `INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+  ).bind("last_recent_sync", new Date().toISOString()).run();
+  return { rows_written: written, lists_seen: new Set(rows.map(r => r.list_name)).size };
+}
+
+async function handleGrowthAPI(request, env, path) {
+  const cors = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Content-Type": "application/json",
+  };
+  if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+
+  const db = env.DB;
+  await initGrowthTables(db);
+
+  try {
+    // ----- Status / metadata -----
+    if (path === "/growth/api/status" && request.method === "GET") {
+      const [listsRow, subsRow, syncState] = await db.batch([
+        db.prepare(`SELECT COUNT(*) as c FROM klaviyo_lists`),
+        db.prepare(`SELECT COUNT(*) as c, MIN(bucket_date) as earliest, MAX(bucket_date) as latest, SUM(gross_subs) as total FROM klaviyo_list_subs`),
+        db.prepare(`SELECT key, value, updated_at FROM growth_sync_state`),
+      ]);
+      return new Response(JSON.stringify({
+        lists: listsRow.results[0],
+        subs: subsRow.results[0],
+        sync_state: syncState.results,
+      }), { headers: cors });
+    }
+
+    // ----- Refresh just the list registry -----
+    if (path === "/growth/api/sync/registry" && request.method === "POST") {
+      if (!env.KLAVIYO_API_KEY) return new Response(JSON.stringify({ error: "KLAVIYO_API_KEY not configured" }), { status: 500, headers: cors });
+      const result = await syncListRegistry(env);
+      return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
+    }
+
+    // ----- Backfill: full historical pull -----
+    if (path === "/growth/api/sync/backfill" && request.method === "POST") {
+      if (!env.KLAVIYO_API_KEY) return new Response(JSON.stringify({ error: "KLAVIYO_API_KEY not configured" }), { status: 500, headers: cors });
+      const url = new URL(request.url);
+      const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "90")));
+      const result = await syncGrowthBackfill(env, days);
+      return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
+    }
+
+    // ----- Incremental: last 7 days only -----
+    if (path === "/growth/api/sync/recent" && request.method === "POST") {
+      if (!env.KLAVIYO_API_KEY) return new Response(JSON.stringify({ error: "KLAVIYO_API_KEY not configured" }), { status: 500, headers: cors });
+      const result = await syncGrowthRecent(env);
+      return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
+    }
+
+    // ----- List registry CRUD (label + category editing) -----
+    if (path === "/growth/api/lists" && request.method === "GET") {
+      const result = await db.prepare(`
+        SELECT l.list_id, l.name, l.lead_magnet_label, l.category, l.is_active,
+               l.created_kl, l.updated_kl,
+               COALESCE(SUM(s.gross_subs), 0) as all_time_subs
+        FROM klaviyo_lists l
+        LEFT JOIN klaviyo_list_subs s ON s.list_name = l.name
+        GROUP BY l.list_id
+        ORDER BY all_time_subs DESC, l.name
+      `).all();
+      return new Response(JSON.stringify({ lists: result.results }), { headers: cors });
+    }
+
+    if (path === "/growth/api/lists" && request.method === "POST") {
+      const body = await request.json();
+      const { list_id, lead_magnet_label, category, is_active } = body;
+      if (!list_id) return new Response(JSON.stringify({ error: "list_id required" }), { status: 400, headers: cors });
+      await db.prepare(`
+        UPDATE klaviyo_lists
+        SET lead_magnet_label = ?, category = ?, is_active = ?
+        WHERE list_id = ?
+      `).bind(lead_magnet_label || null, category || 'other', is_active ? 1 : 0, list_id).run();
+      return new Response(JSON.stringify({ ok: true }), { headers: cors });
+    }
+
+    // ----- Leaderboard: gross subs per list over a window -----
+    if (path === "/growth/api/leaderboard" && request.method === "GET") {
+      const url = new URL(request.url);
+      const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "30")));
+
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      end.setUTCDate(end.getUTCDate() + 1);
+      const start = new Date(end);
+      start.setUTCDate(start.getUTCDate() - days);
+      const prevStart = new Date(start);
+      prevStart.setUTCDate(prevStart.getUTCDate() - days);
+
+      const cutoff = start.toISOString().slice(0, 10);
+      const prevCutoff = prevStart.toISOString().slice(0, 10);
+      const endStr = end.toISOString().slice(0, 10);
+
+      // Current window
+      const current = await db.prepare(`
+        SELECT s.list_name, COALESCE(l.list_id, s.list_id) as list_id,
+               COALESCE(l.lead_magnet_label, s.list_name) as label,
+               l.category,
+               SUM(s.gross_subs) as gross_subs,
+               COUNT(DISTINCT s.bucket_date) as days_with_data
+        FROM klaviyo_list_subs s
+        LEFT JOIN klaviyo_lists l ON l.name = s.list_name
+        WHERE s.bucket_date >= ? AND s.bucket_date < ?
+        GROUP BY s.list_name
+        ORDER BY gross_subs DESC
+      `).bind(cutoff, endStr).all();
+
+      // Previous window for delta
+      const previous = await db.prepare(`
+        SELECT s.list_name, SUM(s.gross_subs) as prev_subs
+        FROM klaviyo_list_subs s
+        WHERE s.bucket_date >= ? AND s.bucket_date < ?
+        GROUP BY s.list_name
+      `).bind(prevCutoff, cutoff).all();
+
+      const prevMap = new Map((previous.results || []).map(r => [r.list_name, r.prev_subs || 0]));
+
+      const total = (current.results || []).reduce((a, r) => a + (r.gross_subs || 0), 0);
+      const rows = (current.results || []).map(r => {
+        const prev = prevMap.get(r.list_name) || 0;
+        const delta = (r.gross_subs || 0) - prev;
+        const pct_change = prev > 0 ? delta / prev : (r.gross_subs > 0 ? null : 0);
+        return {
+          list_name: r.list_name,
+          list_id: r.list_id,
+          label: r.label,
+          category: r.category || 'other',
+          gross_subs: r.gross_subs || 0,
+          daily_avg: r.days_with_data > 0 ? (r.gross_subs / r.days_with_data) : 0,
+          pct_of_total: total > 0 ? (r.gross_subs / total) : 0,
+          prev_subs: prev,
+          delta,
+          pct_change,
+        };
+      });
+
+      return new Response(JSON.stringify({
+        days,
+        window_start: cutoff,
+        window_end: endStr,
+        total_subs: total,
+        rows,
+      }), { headers: cors });
+    }
+
+    // ----- Time series for chart -----
+    if (path === "/growth/api/timeseries" && request.method === "GET") {
+      const url = new URL(request.url);
+      const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "30")));
+      const topN = Math.max(1, Math.min(20, parseInt(url.searchParams.get("top") || "8")));
+
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      end.setUTCDate(end.getUTCDate() + 1);
+      const start = new Date(end);
+      start.setUTCDate(start.getUTCDate() - days);
+      const cutoff = start.toISOString().slice(0, 10);
+      const endStr = end.toISOString().slice(0, 10);
+
+      // Top N lists for window
+      const topLists = await db.prepare(`
+        SELECT s.list_name, COALESCE(l.lead_magnet_label, s.list_name) as label,
+               SUM(s.gross_subs) as total
+        FROM klaviyo_list_subs s
+        LEFT JOIN klaviyo_lists l ON l.name = s.list_name
+        WHERE s.bucket_date >= ? AND s.bucket_date < ?
+        GROUP BY s.list_name
+        ORDER BY total DESC
+        LIMIT ?
+      `).bind(cutoff, endStr, topN).all();
+
+      const topNames = (topLists.results || []).map(r => r.list_name);
+      const labelMap = new Map((topLists.results || []).map(r => [r.list_name, r.label]));
+
+      // Pull series for those lists
+      let series = { results: [] };
+      if (topNames.length > 0) {
+        const placeholders = topNames.map(() => "?").join(",");
+        series = await db.prepare(`
+          SELECT bucket_date, list_name, gross_subs
+          FROM klaviyo_list_subs
+          WHERE bucket_date >= ? AND bucket_date < ?
+            AND list_name IN (${placeholders})
+          ORDER BY bucket_date
+        `).bind(cutoff, endStr, ...topNames).all();
+      }
+
+      // Pivot into [{date, list_a: n, list_b: n, ...}]
+      const byDate = new Map();
+      for (const r of (series.results || [])) {
+        if (!byDate.has(r.bucket_date)) byDate.set(r.bucket_date, { date: r.bucket_date });
+        byDate.get(r.bucket_date)[r.list_name] = r.gross_subs || 0;
+      }
+
+      // Fill missing dates with zeros so the chart is continuous
+      const dateList = [];
+      const d = new Date(start);
+      while (d < end) {
+        dateList.push(d.toISOString().slice(0, 10));
+        d.setUTCDate(d.getUTCDate() + 1);
+      }
+      const out = dateList.map(date => {
+        const row = byDate.get(date) || { date };
+        for (const name of topNames) {
+          if (row[name] == null) row[name] = 0;
+        }
+        return row;
+      });
+
+      return new Response(JSON.stringify({
+        days,
+        series_keys: topNames.map(n => ({ key: n, label: labelMap.get(n) || n })),
+        rows: out,
+      }), { headers: cors });
+    }
+
+    // ----- Movers: biggest accelerators and decelerators -----
+    if (path === "/growth/api/movers" && request.method === "GET") {
+      const url = new URL(request.url);
+      const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get("days") || "14")));
+      // Compare last `days` to prior `days`
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      end.setUTCDate(end.getUTCDate() + 1);
+      const cutA = new Date(end); cutA.setUTCDate(cutA.getUTCDate() - days);
+      const cutB = new Date(cutA); cutB.setUTCDate(cutB.getUTCDate() - days);
+
+      const endStr = end.toISOString().slice(0, 10);
+      const cutAStr = cutA.toISOString().slice(0, 10);
+      const cutBStr = cutB.toISOString().slice(0, 10);
+
+      const result = await db.prepare(`
+        WITH curr AS (
+          SELECT list_name, SUM(gross_subs) as subs
+          FROM klaviyo_list_subs
+          WHERE bucket_date >= ? AND bucket_date < ?
+          GROUP BY list_name
+        ),
+        prev AS (
+          SELECT list_name, SUM(gross_subs) as subs
+          FROM klaviyo_list_subs
+          WHERE bucket_date >= ? AND bucket_date < ?
+          GROUP BY list_name
+        )
+        SELECT
+          COALESCE(c.list_name, p.list_name) as list_name,
+          COALESCE(l.lead_magnet_label, COALESCE(c.list_name, p.list_name)) as label,
+          COALESCE(c.subs, 0) as curr_subs,
+          COALESCE(p.subs, 0) as prev_subs,
+          (COALESCE(c.subs, 0) - COALESCE(p.subs, 0)) as delta
+        FROM curr c
+        FULL OUTER JOIN prev p ON p.list_name = c.list_name
+        LEFT JOIN klaviyo_lists l ON l.name = COALESCE(c.list_name, p.list_name)
+        WHERE (COALESCE(c.subs, 0) + COALESCE(p.subs, 0)) >= 5
+      `).bind(cutAStr, endStr, cutBStr, cutAStr).all().catch(async () => {
+        // D1 doesn't support FULL OUTER JOIN; fall back to UNION emulation.
+        return db.prepare(`
+          WITH curr AS (
+            SELECT list_name, SUM(gross_subs) as subs
+            FROM klaviyo_list_subs
+            WHERE bucket_date >= ? AND bucket_date < ?
+            GROUP BY list_name
+          ),
+          prev AS (
+            SELECT list_name, SUM(gross_subs) as subs
+            FROM klaviyo_list_subs
+            WHERE bucket_date >= ? AND bucket_date < ?
+            GROUP BY list_name
+          ),
+          combined AS (
+            SELECT list_name FROM curr
+            UNION
+            SELECT list_name FROM prev
+          )
+          SELECT
+            cb.list_name,
+            COALESCE(l.lead_magnet_label, cb.list_name) as label,
+            COALESCE(c.subs, 0) as curr_subs,
+            COALESCE(p.subs, 0) as prev_subs,
+            (COALESCE(c.subs, 0) - COALESCE(p.subs, 0)) as delta
+          FROM combined cb
+          LEFT JOIN curr c ON c.list_name = cb.list_name
+          LEFT JOIN prev p ON p.list_name = cb.list_name
+          LEFT JOIN klaviyo_lists l ON l.name = cb.list_name
+          WHERE (COALESCE(c.subs, 0) + COALESCE(p.subs, 0)) >= 5
+        `).bind(cutAStr, endStr, cutBStr, cutAStr).all();
+      });
+
+      const rows = (result.results || []).map(r => ({
+        list_name: r.list_name,
+        label: r.label,
+        curr_subs: r.curr_subs || 0,
+        prev_subs: r.prev_subs || 0,
+        delta: r.delta || 0,
+        pct_change: r.prev_subs > 0 ? r.delta / r.prev_subs : null,
+      }));
+      rows.sort((a, b) => (b.pct_change ?? -Infinity) - (a.pct_change ?? -Infinity));
+      const accelerators = rows.filter(r => r.delta > 0).slice(0, 5);
+      const decelerators = rows.filter(r => r.delta < 0).slice(-5).reverse();
+
+      return new Response(JSON.stringify({
+        days,
+        window_curr: [cutAStr, endStr],
+        window_prev: [cutBStr, cutAStr],
+        accelerators,
+        decelerators,
+      }), { headers: cors });
+    }
+
+    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: cors });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err.message, stack: err.stack }), { status: 500, headers: cors });
+  }
+}
+
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -2558,6 +3122,8 @@ export default {
     if (path.startsWith("/cx-agent/api/")) { return handleCxAgentAPI(request, env, path); }
     // ===== ICP =====
     if (path.startsWith("/icp/api/")) { return handleIcpAPI(request, env, path); }
+    // ===== LIST GROWTH =====
+    if (path.startsWith("/growth/api/")) { return handleGrowthAPI(request, env, path); }
     // ===== CONTENT TRACKER API (D1-backed) =====
     if (path === "/tracker/api/data") { return handleTrackerAPI(request, env); }
     // ===== 3PL API (D1-backed) =====
@@ -2577,6 +3143,7 @@ export default {
     if (path === "/tracker") return Response.redirect(url.origin + "/tracker/", 301);
     if (path === "/cx-agent") return Response.redirect(url.origin + "/cx-agent/", 301);
     if (path === "/icp") return Response.redirect(url.origin + "/icp/", 301);
+    if (path === "/growth") return Response.redirect(url.origin + "/growth/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }
     // ===== AMBASSADOR API =====
@@ -2626,6 +3193,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
   <a href="/ambassadors/">Ambassadors</a>
   <a href="/cx-agent/">CX Agent</a>
   <a href="/icp/">ICP</a>
+  <a href="/growth/">Growth</a>
 </nav>
 <div class="hub-wrap">
 <div class="hub">
@@ -2638,6 +3206,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
     <a href="/ambassadors/" class="app-card"><div class="app-icon">\u{1F91D}</div><div class="app-name">Ambassadors</div><div class="app-desc">Ambassador sales & commission tracking</div></a>
     <a href="/cx-agent/" class="app-card"><div class="app-icon">\u{1F916}</div><div class="app-name">CX Agent</div><div class="app-desc">AI customer support automation</div></a>
     <a href="/icp/" class="app-card"><div class="app-icon">\u{1F3AF}</div><div class="app-name">ICP Analytics</div><div class="app-desc">Klaviyo segment + product analysis</div></a>
+    <a href="/growth/" class="app-card"><div class="app-icon">\u{1F4C8}</div><div class="app-name">List Growth</div><div class="app-desc">Which Klaviyo lists are popping off</div></a>
   </div>
 </div>
 </div></body></html>`;
