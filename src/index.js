@@ -2601,21 +2601,46 @@ async function initGrowthTables(db) {
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_list_subs_name ON klaviyo_list_subs(list_name)`),
   ]);
 
-  // Seed default categories on first run (idempotent — INSERT OR IGNORE).
-  // Only 'other' is truly default and protected from deletion, because it's the
-  // fallback bucket lists get demoted to when their category is removed.
-  // lead_magnet/purchaser/system are seeded as starter conveniences but the
-  // user can delete them like any custom category.
-  await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('lead_magnet', 10, 0)`),
-    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('purchaser', 20, 0)`),
-    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('system', 30, 0)`),
-    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('other', 99, 1)`),
-    // Migration: earlier deploys marked all four as defaults. Reset the three
-    // non-fallback ones so they can be deleted. 'other' stays protected.
-    db.prepare(`UPDATE growth_categories SET is_default = 0 WHERE name IN ('lead_magnet', 'purchaser', 'system')`),
-    db.prepare(`UPDATE growth_categories SET is_default = 1 WHERE name = 'other'`),
-  ]);
+  // Seed default categories ONLY on first-ever run. Without this guard, every
+  // API request would re-INSERT-OR-IGNORE the seed rows, which means any
+  // category the user deletes ('lead_magnet', 'purchaser', 'system') would
+  // get resurrected on the very next GET. The seeds are a one-time convenience,
+  // not invariants.
+  //
+  // We track first-run via a sentinel row in growth_sync_state. 'other' must
+  // always exist regardless because it's the demote target — that one we
+  // re-create unconditionally below.
+  const seeded = await db.prepare(
+    `SELECT value FROM growth_sync_state WHERE key = 'categories_seeded'`
+  ).first();
+  if (!seeded) {
+    await db.batch([
+      db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('lead_magnet', 10, 0)`),
+      db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('purchaser', 20, 0)`),
+      db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('system', 30, 0)`),
+      db.prepare(`INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES ('categories_seeded', '1', datetime('now'))`),
+    ]);
+  }
+
+  // 'other' is always present — it's the fallback bucket lists demote to when
+  // their category gets deleted. Safe to re-INSERT-OR-IGNORE on every call.
+  await db.prepare(
+    `INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('other', 99, 1)`
+  ).run();
+
+  // One-time migration: earlier deploys marked all four seed rows as defaults.
+  // Reset the three non-fallback ones so they can be deleted. Guarded the same
+  // way so it doesn't re-run after the user has made changes.
+  const migrated = await db.prepare(
+    `SELECT value FROM growth_sync_state WHERE key = 'categories_defaults_migrated'`
+  ).first();
+  if (!migrated) {
+    await db.batch([
+      db.prepare(`UPDATE growth_categories SET is_default = 0 WHERE name IN ('lead_magnet', 'purchaser', 'system')`),
+      db.prepare(`UPDATE growth_categories SET is_default = 1 WHERE name = 'other'`),
+      db.prepare(`INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES ('categories_defaults_migrated', '1', datetime('now'))`),
+    ]);
+  }
 }
 
 // Resolves and caches the "Subscribed to List" metric ID. Klaviyo's
