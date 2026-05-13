@@ -2602,13 +2602,19 @@ async function initGrowthTables(db) {
   ]);
 
   // Seed default categories on first run (idempotent — INSERT OR IGNORE).
-  // 'other' is_default=1 and protected from deletion so lists always have
-  // somewhere to land when a category gets removed.
+  // Only 'other' is truly default and protected from deletion, because it's the
+  // fallback bucket lists get demoted to when their category is removed.
+  // lead_magnet/purchaser/system are seeded as starter conveniences but the
+  // user can delete them like any custom category.
   await db.batch([
     db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('lead_magnet', 10, 0)`),
     db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('purchaser', 20, 0)`),
     db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('system', 30, 0)`),
     db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('other', 99, 1)`),
+    // Migration: earlier deploys marked all four as defaults. Reset the three
+    // non-fallback ones so they can be deleted. 'other' stays protected.
+    db.prepare(`UPDATE growth_categories SET is_default = 0 WHERE name IN ('lead_magnet', 'purchaser', 'system')`),
+    db.prepare(`UPDATE growth_categories SET is_default = 1 WHERE name = 'other'`),
   ]);
 }
 
@@ -2678,15 +2684,22 @@ async function syncListRegistry(env) {
 // Pull "Subscribed to List" daily counts grouped by list name.
 // `days` is how many days back to fetch (start of the window).
 // Klaviyo's metric aggregates endpoint is a POST with a JSON body.
+// Klaviyo caps the date range at 1 year per request — callers that need
+// more history should chunk and call fetchListSubsAggregatesRange instead.
 async function fetchListSubsAggregates(env, days) {
-  const metricId = await getSubscribedToListMetricId(env);
-
   const end = new Date();
   end.setUTCHours(0, 0, 0, 0); // start of today UTC
   // Bump end forward to tomorrow so today's partial bucket is included.
   end.setUTCDate(end.getUTCDate() + 1);
   const start = new Date(end);
   start.setUTCDate(start.getUTCDate() - days);
+  return fetchListSubsAggregatesRange(env, start, end);
+}
+
+// Explicit-range version. start and end are Date objects (UTC, inclusive/exclusive).
+// Klaviyo's metric-aggregates endpoint enforces a max 366-day range per call.
+async function fetchListSubsAggregatesRange(env, start, end) {
+  const metricId = await getSubscribedToListMetricId(env);
 
   const body = {
     data: {
@@ -2789,6 +2802,78 @@ async function syncGrowthBackfill(env, days = 90) {
   return { days_requested: days, lists_with_subs: new Set(rows.map(r => r.list_name)).size, rows_written: written };
 }
 
+// Year-by-year backfill walking backward from today until we hit a year with
+// no data (or the safety cap). Each call to Klaviyo covers ~365 days, the max
+// the metric-aggregates endpoint accepts in a single request.
+//
+// Stop conditions: empty year (no rows), 10-year safety cap, or
+// pre-2018 floor (the Subscribed to List event was only added in late 2018
+// and almost no accounts have meaningful data before then).
+async function syncGrowthBackfillAllTime(env) {
+  const db = env.DB;
+  await syncListRegistry(env);
+
+  const MAX_YEARS = 10;
+  const FLOOR_YEAR = 2018;
+
+  const yearEnd = new Date();
+  yearEnd.setUTCHours(0, 0, 0, 0);
+  yearEnd.setUTCDate(yearEnd.getUTCDate() + 1); // tomorrow, exclusive
+
+  const summary = { years_processed: 0, years_with_data: 0, rows_written: 0, lists_with_subs: new Set(), earliest_date: null };
+
+  for (let y = 0; y < MAX_YEARS; y++) {
+    const yearStart = new Date(yearEnd);
+    yearStart.setUTCFullYear(yearStart.getUTCFullYear() - 1);
+
+    // Don't go before the floor year
+    if (yearStart.getUTCFullYear() < FLOOR_YEAR) {
+      yearStart.setUTCFullYear(FLOOR_YEAR, 0, 1);
+      if (yearStart >= yearEnd) break;
+    }
+
+    const payload = await fetchListSubsAggregatesRange(env, yearStart, yearEnd);
+    const rows = parseAggregateResponse(payload);
+    summary.years_processed++;
+
+    if (rows.length === 0) {
+      // No data this year — assume no further data going back. Stop here.
+      break;
+    }
+
+    summary.years_with_data++;
+    const written = await writeAggregateRows(env, rows);
+    summary.rows_written += written;
+    for (const r of rows) {
+      summary.lists_with_subs.add(r.list_name);
+      if (!summary.earliest_date || r.date < summary.earliest_date) {
+        summary.earliest_date = r.date;
+      }
+    }
+
+    // Move window back another year
+    yearEnd.setTime(yearStart.getTime());
+
+    // Don't go past the floor
+    if (yearEnd.getUTCFullYear() < FLOOR_YEAR) break;
+  }
+
+  await db.prepare(
+    `INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+  ).bind("last_full_backfill", new Date().toISOString()).run();
+  await db.prepare(
+    `INSERT OR REPLACE INTO growth_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+  ).bind("last_alltime_backfill", new Date().toISOString()).run();
+
+  return {
+    years_processed: summary.years_processed,
+    years_with_data: summary.years_with_data,
+    rows_written: summary.rows_written,
+    lists_with_subs: summary.lists_with_subs.size,
+    earliest_date: summary.earliest_date,
+  };
+}
+
 // Incremental sync — refresh the most recent 7 days. Cheap and covers any
 // late-arriving events without re-fetching the world.
 async function syncGrowthRecent(env) {
@@ -2842,6 +2927,13 @@ async function handleGrowthAPI(request, env, path) {
       const url = new URL(request.url);
       const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "90")));
       const result = await syncGrowthBackfill(env, days);
+      return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
+    }
+
+    // ----- Backfill: all-time, year-by-year until empty year -----
+    if (path === "/growth/api/sync/backfill-all" && request.method === "POST") {
+      if (!env.KLAVIYO_API_KEY) return new Response(JSON.stringify({ error: "KLAVIYO_API_KEY not configured" }), { status: 500, headers: cors });
+      const result = await syncGrowthBackfillAllTime(env);
       return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
     }
 
@@ -2927,7 +3019,7 @@ async function handleGrowthAPI(request, env, path) {
     // ----- Category totals for pill bar (single round-trip vs. one per category) -----
     if (path === "/growth/api/category-totals" && request.method === "GET") {
       const url = new URL(request.url);
-      const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "30")));
+      const days = Math.max(1, Math.min(3650, parseInt(url.searchParams.get("days") || "30")));
       const end = new Date();
       end.setUTCHours(0, 0, 0, 0);
       end.setUTCDate(end.getUTCDate() + 1);
@@ -2965,7 +3057,7 @@ async function handleGrowthAPI(request, env, path) {
     // ----- Leaderboard: gross subs per list over a window -----
     if (path === "/growth/api/leaderboard" && request.method === "GET") {
       const url = new URL(request.url);
-      const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "30")));
+      const days = Math.max(1, Math.min(3650, parseInt(url.searchParams.get("days") || "30")));
       const categoryFilter = url.searchParams.get("category");  // optional
 
       const end = new Date();
@@ -3042,7 +3134,7 @@ async function handleGrowthAPI(request, env, path) {
     // ----- Time series for chart -----
     if (path === "/growth/api/timeseries" && request.method === "GET") {
       const url = new URL(request.url);
-      const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "30")));
+      const days = Math.max(1, Math.min(3650, parseInt(url.searchParams.get("days") || "30")));
       const topN = Math.max(1, Math.min(20, parseInt(url.searchParams.get("top") || "8")));
 
       const end = new Date();

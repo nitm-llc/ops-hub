@@ -166,7 +166,7 @@ function Caveats() {
   );
 }
 
-function Status({ status, onBackfill, onRecent, onRegistry, syncing }) {
+function Status({ status, onBackfill, onBackfillAll, onRecent, onRegistry, syncing }) {
   if (!status) return null;
   const last = (key) => (status.sync_state || []).find(s => s.key === key)?.updated_at;
   return (
@@ -179,12 +179,16 @@ function Status({ status, onBackfill, onRecent, onRegistry, syncing }) {
         <div className="stat"><div className="stat-label">Latest data</div><div className="stat-value" style={{fontSize:14}}>{status.subs?.latest || "—"}</div></div>
       </div>
       <div className="row" style={{marginTop:16}}>
-        <button className="primary" onClick={onBackfill} disabled={syncing}>{syncing ? "Syncing…" : "Backfill 90 days"}</button>
+        <button className="primary" onClick={onBackfillAll} disabled={syncing}>{syncing ? "Syncing…" : "Backfill all-time"}</button>
+        <button onClick={onBackfill} disabled={syncing}>Backfill 90 days</button>
         <button onClick={onRecent} disabled={syncing}>Sync last 7 days</button>
         <button onClick={onRegistry} disabled={syncing}>Refresh list registry</button>
       </div>
       <div className="status-line">
-        Last backfill: {fmtDate(last("last_full_backfill"))} · Last recent sync: {fmtDate(last("last_recent_sync"))} · Registry: {fmtDate(last("registry_last_sync"))}
+        Last all-time: {fmtDate(last("last_alltime_backfill"))} · Last 90-day: {fmtDate(last("last_full_backfill"))} · Last recent: {fmtDate(last("last_recent_sync"))} · Registry: {fmtDate(last("registry_last_sync"))}
+      </div>
+      <div className="help" style={{marginTop:8}}>
+        <strong>All-time</strong> walks year by year until it hits a year with no data. Usually 3-5 Klaviyo calls, ~30-60s. Run once after first deploy; use <strong>Sync last 7 days</strong> for daily refresh after that.
       </div>
     </div>
   );
@@ -231,6 +235,9 @@ function Leaderboard({ days, setDays, category, setCategory, categories, refresh
           <option value={30}>Last 30 days</option>
           <option value={60}>Last 60 days</option>
           <option value={90}>Last 90 days</option>
+          <option value={180}>Last 6 months</option>
+          <option value={365}>Last 12 months</option>
+          <option value={3650}>All time (~10y)</option>
         </select>
       </div>
       {/* Category filter pills */}
@@ -742,7 +749,8 @@ function App() {
       <Status
         status={status}
         syncing={syncing}
-        onBackfill={() => runSync("/growth/api/sync/backfill?days=90", "Backfill")}
+        onBackfill={() => runSync("/growth/api/sync/backfill?days=90", "Backfill 90d")}
+        onBackfillAll={() => runSync("/growth/api/sync/backfill-all", "All-time backfill")}
         onRecent={() => runSync("/growth/api/sync/recent", "Recent sync")}
         onRegistry={() => runSync("/growth/api/sync/registry", "Registry refresh")}
       />
