@@ -2607,7 +2607,7 @@ async function getSubscribedToListMetricId(env) {
   if (cached?.value) return cached.value;
 
   // Pull metrics 1 page at a time looking for the exact name.
-  let url = `${KLAVIYO_API}/metrics/?page[size]=100`;
+  let url = `${KLAVIYO_API}/metrics/?page[size]=10`;
   while (url) {
     const data = await klaviyoFetch(url, env);
     const match = (data.data || []).find(m => m.attributes?.name === "Subscribed to List");
@@ -2626,7 +2626,7 @@ async function getSubscribedToListMetricId(env) {
 // category the user has set in the dashboard.
 async function syncListRegistry(env) {
   const db = env.DB;
-  let url = `${KLAVIYO_API}/lists/?page[size]=100`;
+  let url = `${KLAVIYO_API}/lists/?page[size]=10`;
   let added = 0;
   let updated = 0;
 
