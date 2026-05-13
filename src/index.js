@@ -2591,8 +2591,24 @@ async function initGrowthTables(db) {
       value TEXT,
       updated_at TEXT DEFAULT (datetime('now'))
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS growth_categories (
+      name TEXT PRIMARY KEY,
+      sort_order INTEGER DEFAULT 100,
+      is_default INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_list_subs_date ON klaviyo_list_subs(bucket_date)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_list_subs_name ON klaviyo_list_subs(list_name)`),
+  ]);
+
+  // Seed default categories on first run (idempotent — INSERT OR IGNORE).
+  // 'other' is_default=1 and protected from deletion so lists always have
+  // somewhere to land when a category gets removed.
+  await db.batch([
+    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('lead_magnet', 10, 0)`),
+    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('purchaser', 20, 0)`),
+    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('system', 30, 0)`),
+    db.prepare(`INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES ('other', 99, 1)`),
   ]);
 }
 
@@ -2862,10 +2878,95 @@ async function handleGrowthAPI(request, env, path) {
       return new Response(JSON.stringify({ ok: true }), { headers: cors });
     }
 
+    // ----- Categories CRUD -----
+    if (path === "/growth/api/categories" && request.method === "GET") {
+      // Return categories with the count of lists assigned to each.
+      const result = await db.prepare(`
+        SELECT c.name, c.sort_order, c.is_default,
+               COUNT(l.list_id) as list_count
+        FROM growth_categories c
+        LEFT JOIN klaviyo_lists l ON l.category = c.name
+        GROUP BY c.name
+        ORDER BY c.sort_order, c.name
+      `).all();
+      return new Response(JSON.stringify({ categories: result.results || [] }), { headers: cors });
+    }
+
+    if (path === "/growth/api/categories" && request.method === "POST") {
+      const body = await request.json();
+      const name = (body.name || "").trim().toLowerCase().replace(/\s+/g, "_");
+      if (!name) return new Response(JSON.stringify({ error: "name required" }), { status: 400, headers: cors });
+      if (name.length > 40) return new Response(JSON.stringify({ error: "name too long (max 40 chars)" }), { status: 400, headers: cors });
+      if (!/^[a-z0-9_]+$/.test(name)) return new Response(JSON.stringify({ error: "name must be lowercase letters, numbers, and underscores only" }), { status: 400, headers: cors });
+
+      // INSERT OR IGNORE so re-adding an existing one is a no-op rather than an error
+      await db.prepare(
+        `INSERT OR IGNORE INTO growth_categories (name, sort_order, is_default) VALUES (?, ?, 0)`
+      ).bind(name, body.sort_order || 50).run();
+      return new Response(JSON.stringify({ ok: true, name }), { headers: cors });
+    }
+
+    // Delete is keyed by name in the URL path: /growth/api/categories/<name>
+    if (path.startsWith("/growth/api/categories/") && request.method === "DELETE") {
+      const name = decodeURIComponent(path.slice("/growth/api/categories/".length));
+      if (!name) return new Response(JSON.stringify({ error: "name required" }), { status: 400, headers: cors });
+
+      // Protect defaults (currently just 'other') from deletion.
+      const row = await db.prepare(`SELECT is_default FROM growth_categories WHERE name = ?`).bind(name).first();
+      if (!row) return new Response(JSON.stringify({ error: "category not found" }), { status: 404, headers: cors });
+      if (row.is_default) return new Response(JSON.stringify({ error: `'${name}' is a default category and can't be deleted` }), { status: 400, headers: cors });
+
+      // Demote any lists in this category to 'other', then delete the category.
+      await db.batch([
+        db.prepare(`UPDATE klaviyo_lists SET category = 'other' WHERE category = ?`).bind(name),
+        db.prepare(`DELETE FROM growth_categories WHERE name = ?`).bind(name),
+      ]);
+      return new Response(JSON.stringify({ ok: true, demoted: true }), { headers: cors });
+    }
+
+    // ----- Category totals for pill bar (single round-trip vs. one per category) -----
+    if (path === "/growth/api/category-totals" && request.method === "GET") {
+      const url = new URL(request.url);
+      const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "30")));
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      end.setUTCDate(end.getUTCDate() + 1);
+      const start = new Date(end);
+      start.setUTCDate(start.getUTCDate() - days);
+      const cutoff = start.toISOString().slice(0, 10);
+      const endStr = end.toISOString().slice(0, 10);
+
+      // Sum subs per category, plus a synthetic "_all" total.
+      const perCat = await db.prepare(`
+        SELECT COALESCE(l.category, 'other') as category,
+               SUM(s.gross_subs) as subs,
+               COUNT(DISTINCT s.list_name) as list_count
+        FROM klaviyo_list_subs s
+        LEFT JOIN klaviyo_lists l ON l.name = s.list_name
+        WHERE s.bucket_date >= ? AND s.bucket_date < ?
+        GROUP BY COALESCE(l.category, 'other')
+      `).bind(cutoff, endStr).all();
+
+      const totals = {};
+      let grand = 0;
+      let grandLists = 0;
+      for (const r of (perCat.results || [])) {
+        totals[r.category] = { subs: r.subs || 0, list_count: r.list_count || 0 };
+        grand += r.subs || 0;
+        grandLists += r.list_count || 0;
+      }
+      return new Response(JSON.stringify({
+        days,
+        totals,
+        _all: { subs: grand, list_count: grandLists },
+      }), { headers: cors });
+    }
+
     // ----- Leaderboard: gross subs per list over a window -----
     if (path === "/growth/api/leaderboard" && request.method === "GET") {
       const url = new URL(request.url);
       const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get("days") || "30")));
+      const categoryFilter = url.searchParams.get("category");  // optional
 
       const end = new Date();
       end.setUTCHours(0, 0, 0, 0);
@@ -2879,27 +2980,34 @@ async function handleGrowthAPI(request, env, path) {
       const prevCutoff = prevStart.toISOString().slice(0, 10);
       const endStr = end.toISOString().slice(0, 10);
 
+      // Build the category filter clause — applied to BOTH current and previous
+      // window so totals and deltas stay apples-to-apples within the category.
+      // If no category specified, no filter; if specified, must match exactly.
+      const catClause = categoryFilter ? ` AND COALESCE(l.category, 'other') = ?` : "";
+      const catBind = categoryFilter ? [categoryFilter] : [];
+
       // Current window
       const current = await db.prepare(`
         SELECT s.list_name, COALESCE(l.list_id, s.list_id) as list_id,
                COALESCE(l.lead_magnet_label, s.list_name) as label,
-               l.category,
+               COALESCE(l.category, 'other') as category,
                SUM(s.gross_subs) as gross_subs,
                COUNT(DISTINCT s.bucket_date) as days_with_data
         FROM klaviyo_list_subs s
         LEFT JOIN klaviyo_lists l ON l.name = s.list_name
-        WHERE s.bucket_date >= ? AND s.bucket_date < ?
+        WHERE s.bucket_date >= ? AND s.bucket_date < ?${catClause}
         GROUP BY s.list_name
         ORDER BY gross_subs DESC
-      `).bind(cutoff, endStr).all();
+      `).bind(cutoff, endStr, ...catBind).all();
 
-      // Previous window for delta
+      // Previous window for delta — same category filter
       const previous = await db.prepare(`
         SELECT s.list_name, SUM(s.gross_subs) as prev_subs
         FROM klaviyo_list_subs s
-        WHERE s.bucket_date >= ? AND s.bucket_date < ?
+        LEFT JOIN klaviyo_lists l ON l.name = s.list_name
+        WHERE s.bucket_date >= ? AND s.bucket_date < ?${catClause}
         GROUP BY s.list_name
-      `).bind(prevCutoff, cutoff).all();
+      `).bind(prevCutoff, cutoff, ...catBind).all();
 
       const prevMap = new Map((previous.results || []).map(r => [r.list_name, r.prev_subs || 0]));
 

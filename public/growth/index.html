@@ -51,6 +51,23 @@
     .badge.purchaser { background: #1e2a3d; color: #93c5fd; }
     .badge.system { background: #2a2a3d; color: #c4b5fd; }
     .badge.other { background: #1e293b; color: #94a3b8; }
+    /* Pill filter bar above the leaderboard */
+    .pill-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .pill { background: #1e293b; color: #94a3b8; border: 1px solid #334155; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: inherit; display: inline-flex; align-items: center; gap: 6px; }
+    .pill:hover { background: #283447; color: #cbd5e1; }
+    .pill.active { background: #2563eb; color: #f1f5f9; border-color: #3b82f6; }
+    .pill .pill-count { background: rgba(0,0,0,0.25); color: inherit; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .pill.active .pill-count { background: rgba(255,255,255,0.18); }
+    /* Manage categories panel */
+    .cat-manage { background: #161e2e; border: 1px solid #1f2937; border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+    .cat-manage h3 { font-size: 13px; font-weight: 600; color: #cbd5e1; margin-bottom: 10px; }
+    .cat-chip { display: inline-flex; align-items: center; gap: 6px; background: #1e293b; border: 1px solid #334155; color: #cbd5e1; padding: 4px 8px 4px 10px; border-radius: 6px; font-size: 12px; margin: 0 6px 6px 0; }
+    .cat-chip .cat-count { color: #64748b; font-size: 11px; }
+    .cat-chip .cat-del { background: transparent; color: #f87171; border: none; padding: 0 4px; cursor: pointer; font-size: 14px; line-height: 1; }
+    .cat-chip .cat-del:hover { color: #fca5a5; }
+    .cat-chip .cat-del:disabled { color: #475569; cursor: not-allowed; }
+    .cat-chip.default { background: #14342d; border-color: #14532d; }
+    .cat-chip.default .cat-count { color: #6ee7b7; opacity: 0.7; }
     .label-input { background: #1e293b; border: 1px solid #334155; color: #f1f5f9; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; width: 100%; max-width: 240px; }
     .category-select { background: #1e293b; border: 1px solid #334155; color: #f1f5f9; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; }
     .help { font-size: 12px; color: #64748b; line-height: 1.5; margin-top: 12px; }
@@ -173,8 +190,10 @@ function Status({ status, onBackfill, onRecent, onRegistry, syncing }) {
   );
 }
 
-function Leaderboard({ days, setDays }) {
-  const { data, error, loading } = useApi(`/growth/api/leaderboard?days=${days}`, [days]);
+function Leaderboard({ days, setDays, category, setCategory, categories, refreshNonce }) {
+  const qs = `days=${days}` + (category ? `&category=${encodeURIComponent(category)}` : "");
+  const { data, error, loading } = useApi(`/growth/api/leaderboard?${qs}`, [days, category, refreshNonce]);
+  const { data: catTotals } = useApi(`/growth/api/category-totals?days=${days}`, [days, refreshNonce]);
   const [sortKey, setSortKey] = useState("gross_subs");
   const [sortDir, setSortDir] = useState("desc");
 
@@ -196,6 +215,12 @@ function Leaderboard({ days, setDays }) {
   };
   const arrow = (key) => sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "";
 
+  // Pill bar source — show "All" plus every defined category, in sort_order.
+  // Counts come from category-totals; missing categories show "0".
+  const pillCats = (categories || []);
+  const totalsAll = catTotals?._all?.subs || 0;
+  const getCount = (name) => catTotals?.totals?.[name]?.subs || 0;
+
   return (
     <div className="panel">
       <div className="row" style={{justifyContent:"space-between",marginBottom:16}}>
@@ -208,13 +233,30 @@ function Leaderboard({ days, setDays }) {
           <option value={90}>Last 90 days</option>
         </select>
       </div>
+      {/* Category filter pills */}
+      <div className="pill-bar">
+        <button className={"pill " + (!category ? "active" : "")} onClick={() => setCategory(null)}>
+          All
+          <span className="pill-count">{fmtNum(totalsAll)}</span>
+        </button>
+        {pillCats.map(c => (
+          <button
+            key={c.name}
+            className={"pill " + (category === c.name ? "active" : "")}
+            onClick={() => setCategory(category === c.name ? null : c.name)}
+          >
+            {c.name}
+            <span className="pill-count">{fmtNum(getCount(c.name))}</span>
+          </button>
+        ))}
+      </div>
       {error && <div className="error">{error}</div>}
       {loading && <div className="loading">Loading…</div>}
       {data && data.rows.length === 0 && <div className="empty">No subscription data yet. Run a backfill to populate.</div>}
       {data && data.rows.length > 0 && (
         <>
           <div style={{marginBottom:12,fontSize:13,color:"#94a3b8"}}>
-            <strong style={{color:"#f1f5f9"}}>{fmtNum(data.total_subs)}</strong> total new subs across <strong style={{color:"#f1f5f9"}}>{data.rows.length}</strong> lists · window {data.window_start} → {data.window_end}
+            <strong style={{color:"#f1f5f9"}}>{fmtNum(data.total_subs)}</strong> total new subs across <strong style={{color:"#f1f5f9"}}>{data.rows.length}</strong> lists{category ? <> in <span className={"badge " + category}>{category}</span></> : null} · window {data.window_start} → {data.window_end}
           </div>
           <div style={{overflowX:"auto"}}>
             <table>
@@ -470,7 +512,86 @@ function Movers() {
   );
 }
 
-function Registry() {
+function CategoryManager({ categories, onChanged }) {
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const add = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/growth/api/categories", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ name: newName }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || "Failed to add");
+      setNewName("");
+      await onChanged();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (name, listCount) => {
+    if (listCount > 0) {
+      if (!confirm(`'${name}' has ${listCount} list(s) assigned. Deleting will demote them to 'other'. Continue?`)) return;
+    } else {
+      if (!confirm(`Delete category '${name}'?`)) return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/growth/api/categories/${encodeURIComponent(name)}`, { method: "DELETE" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || "Failed to delete");
+      await onChanged();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cat-manage">
+      <h3>Categories</h3>
+      <div style={{marginBottom:10}}>
+        {(categories || []).map(c => (
+          <span key={c.name} className={"cat-chip " + (c.is_default ? "default" : "")}>
+            <span>{c.name}</span>
+            <span className="cat-count">{c.list_count}</span>
+            {!c.is_default && (
+              <button className="cat-del" disabled={busy} onClick={() => remove(c.name, c.list_count)} title="Delete">×</button>
+            )}
+          </span>
+        ))}
+      </div>
+      <div className="row">
+        <input
+          className="label-input"
+          type="text"
+          placeholder="new_category_name"
+          value={newName}
+          onChange={e => setNewName(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && newName.trim()) add(); }}
+          style={{maxWidth:220}}
+        />
+        <button className="primary small" disabled={busy || !newName.trim()} onClick={add}>Add</button>
+      </div>
+      {err && <div className="error" style={{marginTop:10,marginBottom:0}}>{err}</div>}
+      <div style={{fontSize:11,color:"#64748b",marginTop:8}}>
+        Names are lowercased and spaces become underscores. <code>other</code> is the fallback bucket and can't be deleted.
+      </div>
+    </div>
+  );
+}
+
+function Registry({ categories, refreshCategories }) {
   const { data, error, loading, reload } = useApi(`/growth/api/lists`, []);
   const [filter, setFilter] = useState("");
   const [saving, setSaving] = useState({});
@@ -490,6 +611,8 @@ function Registry() {
         }),
       });
       await reload();
+      // Category counts on chips and pills depend on list assignments — refresh.
+      await refreshCategories();
     } finally {
       setSaving(s => ({...s, [row.list_id]: false}));
     }
@@ -511,6 +634,7 @@ function Registry() {
   return (
     <div className="panel">
       <h2>List registry</h2>
+      <CategoryManager categories={categories} onChanged={async () => { await refreshCategories(); await reload(); }} />
       <div className="row" style={{marginBottom:16}}>
         <input type="text" placeholder="Filter by name or label…" value={filter} onChange={e => setFilter(e.target.value)} />
         <div style={{fontSize:12,color:"#64748b"}}>{filtered.length} of {data.lists.length} lists</div>
@@ -528,7 +652,7 @@ function Registry() {
           </thead>
           <tbody>
             {filtered.map(l => (
-              <RegistryRow key={l.list_id} list={l} onSave={save} saving={saving[l.list_id]} />
+              <RegistryRow key={l.list_id} list={l} categories={categories} onSave={save} saving={saving[l.list_id]} />
             ))}
           </tbody>
         </table>
@@ -537,10 +661,15 @@ function Registry() {
   );
 }
 
-function RegistryRow({ list, onSave, saving }) {
+function RegistryRow({ list, categories, onSave, saving }) {
   const [label, setLabel] = useState(list.lead_magnet_label || "");
   const [category, setCategory] = useState(list.category || "other");
   const dirty = label !== (list.lead_magnet_label || "") || category !== (list.category || "other");
+  // If the row's stored category was deleted, it won't appear in categories list.
+  // Add it as a transient option so the dropdown can still show it instead of
+  // silently snapping to something else.
+  const opts = (categories || []).map(c => c.name);
+  if (category && !opts.includes(category)) opts.push(category);
 
   return (
     <tr>
@@ -550,10 +679,7 @@ function RegistryRow({ list, onSave, saving }) {
       </td>
       <td>
         <select className="category-select" value={category} onChange={e => setCategory(e.target.value)}>
-          <option value="lead_magnet">lead_magnet</option>
-          <option value="purchaser">purchaser</option>
-          <option value="system">system</option>
-          <option value="other">other</option>
+          {opts.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
       </td>
       <td className="num">{fmtNum(list.all_time_subs)}</td>
@@ -573,7 +699,17 @@ function App() {
   const [tab, setTab] = useState("dashboard");
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const [category, setCategory] = useState(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const { data: status, reload: reloadStatus } = useApi("/growth/api/status", []);
+  const { data: catData, reload: reloadCats } = useApi("/growth/api/categories", []);
+  const categories = catData?.categories || [];
+
+  const refreshCategories = useCallback(async () => {
+    await reloadCats();
+    // Bump nonce so Leaderboard (and its category-totals dep) refetches counts.
+    setRefreshNonce(n => n + 1);
+  }, [reloadCats]);
 
   const runSync = async (endpoint, label) => {
     setSyncing(true);
@@ -584,8 +720,7 @@ function App() {
       if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
       setSyncMsg({ ok: true, text: `${label} done — ${JSON.stringify(j)}` });
       await reloadStatus();
-      // Force the data tabs to refresh by toggling
-      window.dispatchEvent(new Event("growth-data-changed"));
+      setRefreshNonce(n => n + 1);
     } catch (e) {
       setSyncMsg({ ok: false, text: `${label} failed: ${e.message}` });
     } finally {
@@ -619,12 +754,17 @@ function App() {
 
       {tab === "dashboard" && (
         <>
-          <Leaderboard days={days} setDays={setDays} />
+          <Leaderboard
+            days={days} setDays={setDays}
+            category={category} setCategory={setCategory}
+            categories={categories}
+            refreshNonce={refreshNonce}
+          />
           <GrowthChart days={days} />
           <Movers />
         </>
       )}
-      {tab === "registry" && <Registry />}
+      {tab === "registry" && <Registry categories={categories} refreshCategories={refreshCategories} />}
 
       <Caveats />
     </div>
