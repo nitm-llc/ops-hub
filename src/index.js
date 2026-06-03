@@ -1,3 +1,4 @@
+import { handleStageRoutes } from "./stage-tracker.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCO2_B3HitEVQIJE71RL357tdUPErxkhG4AdwXapyhOWtry_-czGMVg_HpZ0paQQ/pub";
@@ -3332,6 +3333,10 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // ===== STAGE TIMING (handles /stage/* ; returns null otherwise) =====
+    const stageResp = await handleStageRoutes(request, env, ctx, path);
+    if (stageResp) return stageResp;
+
     // Helper: add noindex header to any response
     function addNoIndex(response) {
       const newResp = new Response(response.body, response);
@@ -3418,6 +3423,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
   <a href="/cx-agent/">CX Agent</a>
   <a href="/icp/">ICP</a>
   <a href="/growth/">Growth</a>
+  <a href="/stage/">Stage Timing</a>
 </nav>
 <div class="hub-wrap">
 <div class="hub">
@@ -3431,6 +3437,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
     <a href="/cx-agent/" class="app-card"><div class="app-icon">\u{1F916}</div><div class="app-name">CX Agent</div><div class="app-desc">AI customer support automation</div></a>
     <a href="/icp/" class="app-card"><div class="app-icon">\u{1F3AF}</div><div class="app-name">ICP Analytics</div><div class="app-desc">Klaviyo segment + product analysis</div></a>
     <a href="/growth/" class="app-card"><div class="app-icon">\u{1F4C8}</div><div class="app-name">List Growth</div><div class="app-desc">Which Klaviyo lists are popping off</div></a>
+    <a href="/stage/" class="app-card"><div class="app-icon">\u{23F1}</div><div class="app-name">Stage Timing</div><div class="app-desc">How long tasks sit in each stage</div></a>
   </div>
 </div>
 </div></body></html>`;

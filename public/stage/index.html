@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stage Timing — Ops Hub</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --panel2: #1f232c; --border: #2a2f3a;
+    --text: #e6e9ef; --muted: #9aa3b2; --accent: #4c8dff; --good: #2ecd6f;
+    --warn: #f9b234; --bad: #ff5c7c; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 20px; margin-bottom: 20px; }
+  .card h2 { font-size: 15px; margin: 0 0 14px; letter-spacing: .02em; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 5px; }
+  input, select { width: 100%; background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); padding: 9px 11px; border-radius: 8px; font-size: 14px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 200px; }
+  button { background: var(--accent); color: #fff; border: 0; padding: 9px 16px;
+    border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 600; }
+  button.secondary { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.link { background: none; color: var(--bad); padding: 4px 6px; font-weight: 500; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  .muted { color: var(--muted); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .stepnum { display:inline-block; width:20px; height:20px; line-height:20px; text-align:center;
+    background:var(--accent); color:#fff; border-radius:50%; font-size:12px; margin-right:8px; }
+  .ok { color: var(--good); } .err { color: var(--bad); }
+  .empty { color: var(--muted); padding: 16px 0; text-align: center; }
+  .bar { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+  .bar > span { display:block; height:100%; background: var(--accent); }
+  code { background: var(--panel2); padding: 2px 6px; border-radius: 5px; font-size: 12px; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--panel2); border: 1px solid var(--border); padding: 10px 18px;
+    border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Stage Timing</h1>
+  <p class="sub">Track how long tasks spend in each stage, per list. Captures stage changes going forward via ClickUp webhooks.</p>
+
+  <!-- ADD A LIST -->
+  <div class="card">
+    <h2>Track a new list</h2>
+    <div class="row">
+      <div>
+        <label>ClickUp List ID or List URL</label>
+        <input id="listInput" placeholder="901708279415  or  https://app.clickup.com/.../li/901708279415" />
+        <div class="hint"><span class="stepnum">1</span>Paste the list ID (or its URL), then load its fields.</div>
+      </div>
+      <div style="flex:0 0 auto; display:flex; align-items:flex-start; padding-top:22px;">
+        <button id="loadFields" class="secondary">Load fields</button>
+      </div>
+    </div>
+
+    <div id="fieldPicker" style="display:none; margin-top:14px;">
+      <div class="row">
+        <div>
+          <label>Which dropdown is the "stage" field?</label>
+          <select id="fieldSelect"></select>
+          <div class="hint"><span class="stepnum">2</span>Pick the field by name — we resolve the IDs automatically.</div>
+        </div>
+        <div style="flex:0 0 auto; display:flex; align-items:flex-start; padding-top:22px;">
+          <button id="saveList">Track this list</button>
+        </div>
+      </div>
+      <div id="optPreview" class="hint"></div>
+    </div>
+    <div id="addMsg" class="hint"></div>
+  </div>
+
+  <!-- TRACKED LISTS -->
+  <div class="card">
+    <h2>Tracked lists</h2>
+    <table id="listsTable">
+      <thead><tr><th>List</th><th>Stage field</th><th>Webhook URL</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="listsEmpty" class="empty" style="display:none;">No lists tracked yet. Add one above.</div>
+    <div class="hint" style="margin-top:14px;">
+      <span class="stepnum">3</span>In ClickUp: open the list → Automations → <em>When custom field changes</em> (pick your stage field) → <em>Call webhook</em> → paste the URL above. That's the one manual step ClickUp requires.
+    </div>
+  </div>
+
+  <!-- REPORT -->
+  <div class="card">
+    <h2>Stage durations</h2>
+    <div class="row">
+      <div style="max-width:340px;">
+        <label>List</label>
+        <select id="reportList"></select>
+      </div>
+      <div style="flex:0 0 auto; display:flex; align-items:flex-start; padding-top:22px;">
+        <button id="runReport" class="secondary">Refresh</button>
+      </div>
+    </div>
+
+    <div id="reportBody" style="margin-top:16px;"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let loadedFields = [];
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2200);
+}
+function parseListId(v) {
+  v = (v || "").trim();
+  const m = v.match(/(\d{6,})/g); // grab the longest numeric chunk
+  return m ? m[m.length - 1] : v;
+}
+function webhookUrl() {
+  return location.origin + "/stage/webhook/clickup";
+}
+
+// --- Load dropdown fields for a list ---
+$("#loadFields").onclick = async () => {
+  const listId = parseListId($("#listInput").value);
+  if (!listId) return toast("Enter a list ID");
+  $("#addMsg").innerHTML = "Loading fields…";
+  try {
+    const r = await fetch("/stage/api/clickup-fields?list_id=" + encodeURIComponent(listId));
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "lookup failed");
+    loadedFields = d.fields || [];
+    if (!loadedFields.length) { $("#addMsg").innerHTML = '<span class="err">No dropdown fields on this list.</span>'; return; }
+    const sel = $("#fieldSelect");
+    sel.innerHTML = loadedFields.map((f, i) =>
+      `<option value="${i}">${f.name} (${Object.keys(f.options).length} options)</option>`).join("");
+    sel.dataset.listId = listId;
+    sel.dataset.listName = d.list_name || "";
+    $("#fieldPicker").style.display = "block";
+    $("#addMsg").innerHTML = d.list_name ? `List: <code>${d.list_name}</code>` : "";
+    showOptPreview();
+  } catch (e) {
+    $("#addMsg").innerHTML = '<span class="err">' + e.message + '</span>';
+  }
+};
+
+$("#fieldSelect").onchange = showOptPreview;
+function showOptPreview() {
+  const f = loadedFields[$("#fieldSelect").value];
+  if (!f) return;
+  const names = Object.values(f.options).sort((a,b)=>a.order-b.order).map(o=>o.name);
+  $("#optPreview").innerHTML = "Stages: " + names.map(n=>`<code>${n}</code>`).join(" → ");
+}
+
+// --- Save a tracked list ---
+$("#saveList").onclick = async () => {
+  const sel = $("#fieldSelect");
+  const f = loadedFields[sel.value];
+  if (!f) return;
+  const payload = {
+    list_id: sel.dataset.listId,
+    list_name: sel.dataset.listName,
+    stage_field_id: f.id,
+    stage_field_name: f.name,
+    stage_options: f.options,
+  };
+  const r = await fetch("/stage/api/lists", {
+    method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify(payload),
+  });
+  const d = await r.json();
+  if (d.ok) { toast("List tracked"); $("#fieldPicker").style.display="none"; $("#listInput").value=""; loadLists(); }
+  else toast("Error: " + (d.error||""));
+};
+
+// --- Load tracked lists ---
+async function loadLists() {
+  const r = await fetch("/stage/api/lists");
+  const d = await r.json();
+  const tbody = $("#listsTable tbody");
+  const lists = d.lists || [];
+  $("#listsEmpty").style.display = lists.length ? "none" : "block";
+  tbody.innerHTML = lists.map(l => `
+    <tr>
+      <td>${l.list_name || l.list_id}<br><span class="muted">${l.list_id}</span></td>
+      <td>${l.stage_field_name || l.stage_field_id}</td>
+      <td><code>${webhookUrl()}</code></td>
+      <td><button class="link" onclick="removeList('${l.list_id}')">Remove</button></td>
+    </tr>`).join("");
+
+  // populate report dropdown
+  const rs = $("#reportList");
+  rs.innerHTML = lists.map(l => `<option value="${l.list_id}">${l.list_name || l.list_id}</option>`).join("");
+  if (lists.length) runReport();
+}
+window.removeList = async (id) => {
+  if (!confirm("Stop tracking this list? (existing data is kept)")) return;
+  await fetch("/stage/api/lists/" + id, { method: "DELETE" });
+  toast("Removed"); loadLists();
+};
+
+// --- Report ---
+$("#runReport").onclick = runReport;
+$("#reportList").onchange = runReport;
+async function runReport() {
+  const listId = $("#reportList").value;
+  if (!listId) { $("#reportBody").innerHTML = '<div class="empty">No list selected.</div>'; return; }
+  const r = await fetch("/stage/api/report?list_id=" + listId);
+  const d = await r.json();
+  if (!d.ok) { $("#reportBody").innerHTML = '<div class="err">'+(d.error||"error")+'</div>'; return; }
+
+  let html = "";
+  if (!d.transition_rows) {
+    html += `<div class="empty">No completed stage transitions yet. Data appears once tasks start moving between stages (give it a few days).</div>`;
+  } else {
+    const maxAvg = Math.max(...d.stages.map(s=>s.avg_days||0), 1);
+    html += `<table><thead><tr><th>Stage</th><th>Avg days</th><th>Median</th><th>Completed</th><th style="width:30%">　</th></tr></thead><tbody>`;
+    html += d.stages.map(s => `
+      <tr>
+        <td>${s.stage}</td>
+        <td><b>${s.avg_days ?? "—"}</b></td>
+        <td>${s.median_days ?? "—"}</td>
+        <td class="muted">${s.completed_count}</td>
+        <td><div class="bar"><span style="width:${Math.round(100*(s.avg_days||0)/maxAvg)}%"></span></div></td>
+      </tr>`).join("");
+    html += `</tbody></table>`;
+  }
+
+  if (d.inFlight && d.inFlight.length) {
+    html += `<h2 style="font-size:13px;margin:22px 0 10px;color:var(--muted);">Currently in-flight (time so far)</h2>`;
+    html += `<table><thead><tr><th>Task</th><th>Stage</th><th>Days in stage</th></tr></thead><tbody>`;
+    html += d.inFlight.map(t => `
+      <tr><td>${t.task||"—"}</td><td>${t.stage}</td>
+      <td class="${(t.days_in_stage||0) > 7 ? 'err' : ''}">${t.days_in_stage ?? "—"}</td></tr>`).join("");
+    html += `</tbody></table>`;
+  }
+  $("#reportBody").innerHTML = html;
+}
+
+loadLists();
+</script>
+</body>
+</html>
