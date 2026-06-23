@@ -3357,6 +3357,34 @@ export default {
     if (path === "/tracker/api/data") { return handleTrackerAPI(request, env); }
     // ===== 3PL API (D1-backed) =====
     if (path.startsWith("/3pl/api/")) { return handle3plAPI(request, env, path); }
+    // ===== CAMPAIGN ROUTER API (D1-backed, shared audience config) =====
+    if (path === "/campaign-router/api/audiences") {
+      const SEED = [
+        { id: "nclex",      name: "NCLEX peeps",                              color: "#993C1D", bg: "#FAECE7", condition: "List: Nursing student (Final year / NCLEX prep)" },
+        { id: "repeat",     name: "Bought basically everything! (repeat customers)", color: "#534AB7", bg: "#EEEDFE", condition: "List: Customers who have purchased 2+ times" },
+        { id: "bundle",     name: "Bundle Buyers",                            color: "#0F6E56", bg: "#E1F5EE", condition: "List: Bundle Purchasers [Last 365 days]" },
+        { id: "nonbundle",  name: "Those who haven't purchased the Bundle",   color: "#854F0B", bg: "#FAEEDA", condition: "List: Engaged - 180 days" },
+        { id: "prenursing", name: "Pre-nursing / A&P student",               color: "#185FA5", bg: "#E6F1FB", condition: "" },
+        { id: "newgrad",    name: "New grad nurse (on the floor)",           color: "#993556", bg: "#FBEAF0", condition: "" },
+        { id: "otherhcp",   name: "Other healthcare professional",           color: "#3B6D11", bg: "#EAF3DE", condition: "" },
+      ];
+      try {
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS campaign_router_config (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)`).run();
+        if (request.method === "POST") {
+          const body = await request.json();
+          await env.DB.prepare(`INSERT OR REPLACE INTO campaign_router_config (key, value, updated_at) VALUES ('audiences', ?, datetime('now'))`).bind(JSON.stringify(body.audiences || [])).run();
+          return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+        }
+        const row = await env.DB.prepare(`SELECT value FROM campaign_router_config WHERE key = 'audiences'`).first();
+        if (!row) {
+          await env.DB.prepare(`INSERT OR REPLACE INTO campaign_router_config (key, value, updated_at) VALUES ('audiences', ?, datetime('now'))`).bind(JSON.stringify(SEED)).run();
+          return new Response(JSON.stringify({ audiences: SEED }), { headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ audiences: JSON.parse(row.value) }), { headers: { "Content-Type": "application/json" } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+      }
+    }
     // ===== INVENTORY =====
     if (path === "/inventory/api/shipfusion") { return handleShipFusionAPI(request, env); }
     // ===== CALENDAR =====

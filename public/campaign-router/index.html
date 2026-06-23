@@ -55,24 +55,19 @@
   </script>
 
   <script type="text/babel" data-presets="react-classic">
-const { useState, useMemo } = React;
+const { useState, useMemo, useEffect } = React;
 
 // CampaignAudienceRouter
-// Drop-in Ops Hub module. Audiences are editable IN the tool — click "Manage
-// audiences" to rename, edit conditions, add, or remove them. The priority logic
-// stays baked in: pick audiences for a campaign, drag to rank, and it generates
-// mutually-exclusive Klaviyo segment definitions + a "Don't send to" list.
+// Ops Hub module. Audiences are shared config stored in D1 — click "Manage
+// audiences" to rename, edit conditions, add, or remove them, then "Done" to
+// save. Edits persist server-side, so everyone (Kristine, Sam) sees the same
+// audiences on every device. The priority logic stays baked in: pick audiences
+// for a campaign, drag to rank, and it generates mutually-exclusive Klaviyo
+// segment definitions + a "Don't send to" list.
 //
-// PERSISTENCE: this version keeps edits in React state for the session. To make
-// edits stick across reloads in the Ops Hub, replace the useState initializer
-// with a fetch from D1 and POST `audiences` back in saveAudiences().
+// Loaded from / saved to: GET|POST /campaign-router/api/audiences
 
-const DEFAULT_AUDIENCES = [
-  { id: "vip", name: "VIP / repeat buyers", color: "#534AB7", bg: "#EEEDFE", condition: "Placed Order → at least 2 times → over all time" },
-  { id: "recent", name: "Recent one-time buyers", color: "#0F6E56", bg: "#E1F5EE", condition: "Placed Order → exactly 1 time → over all time" },
-  { id: "engaged", name: "Engaged non-buyers", color: "#854F0B", bg: "#FAEEDA", condition: "Opened Email → at least once → last 30 days  AND  Placed Order → zero times → over all time" },
-  { id: "cold", name: "Cold / re-engagement", color: "#993C1D", bg: "#FAECE7", condition: "Opened Email → zero times → in the last 30 days" },
-];
+const API = "/campaign-router/api/audiences";
 
 const SWATCHES = [
   { color: "#534AB7", bg: "#EEEDFE" }, { color: "#0F6E56", bg: "#E1F5EE" },
@@ -94,11 +89,22 @@ function CopyButton({ text, label = "Copy" }) {
 }
 
 function CampaignAudienceRouter() {
-  const [audiences, setAudiences] = useState(DEFAULT_AUDIENCES);
-  const [selected, setSelected] = useState(DEFAULT_AUDIENCES.map((a) => a.id));
+  const [audiences, setAudiences] = useState([]);
+  const [selected, setSelected] = useState([]);
   const [dragIdx, setDragIdx] = useState(null);
   const [campaignName, setCampaignName] = useState("");
   const [managing, setManaging] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saveState, setSaveState] = useState("");
+
+  // Load the shared audience config from D1 on mount; select all by default.
+  useEffect(() => {
+    fetch(API)
+      .then((r) => r.json())
+      .then((d) => { const a = d.audiences || []; setAudiences(a); setSelected(a.map((x) => x.id)); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
 
   const byId = useMemo(() => Object.fromEntries(audiences.map((a) => [a.id, a])), [audiences]);
   const label = { fontSize: 13, color: "rgba(0,0,0,0.55)" };
@@ -118,7 +124,12 @@ function CampaignAudienceRouter() {
     setSelected((prev) => prev.filter((x) => x !== id));
   };
 
-  const saveAudiences = () => { setManaging(false); /* fetch('/api/audiences', {method:'POST', body: JSON.stringify(audiences)}) */ };
+  const saveAudiences = () => {
+    setSaveState("Saving…");
+    fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audiences }) })
+      .then((r) => { if (!r.ok) throw new Error(); setSaveState("Saved ✓"); setManaging(false); setTimeout(() => setSaveState(""), 2000); })
+      .catch(() => setSaveState("Save failed — try again"));
+  };
 
   const toggle = (id) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   const onDrop = (pos) => {
@@ -144,12 +155,22 @@ function CampaignAudienceRouter() {
       return lines.join("\n");
     }).join("\n\n");
 
+  if (loading) {
+    return <p style={{ ...label, fontStyle: "italic" }}>Loading audiences…</p>;
+  }
+
   if (managing) {
     return (
       <div style={{ fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif", maxWidth: 720, lineHeight: 1.6 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <p style={{ margin: 0, fontWeight: 500, fontSize: 15, color: "rgba(0,0,0,0.8)" }}>Manage audiences</p>
-          <button onClick={saveAudiences} style={{ fontSize: 13, padding: "6px 14px", borderRadius: 8, border: "1.5px solid #0F6E56", background: "#E1F5EE", color: "#0F6E56", cursor: "pointer", fontWeight: 500 }}>Done</button>
+          <div>
+            <p style={{ margin: 0, fontWeight: 500, fontSize: 15, color: "rgba(0,0,0,0.8)" }}>Manage audiences</p>
+            <p style={{ ...label, margin: "2px 0 0", fontSize: 12 }}>Saved for everyone — Sam &amp; Kristine see these on every device.</p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {saveState && <span style={{ fontSize: 12, color: saveState.includes("failed") ? "#A32D2D" : "#0F6E56" }}>{saveState}</span>}
+            <button onClick={saveAudiences} style={{ fontSize: 13, padding: "6px 14px", borderRadius: 8, border: "1.5px solid #0F6E56", background: "#E1F5EE", color: "#0F6E56", cursor: "pointer", fontWeight: 500 }}>Done &amp; save</button>
+          </div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
