@@ -44,8 +44,17 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    // Force the classic JSX runtime (React.createElement using the global
+    // React) instead of Babel's default "automatic" runtime, which injects
+    // `import ... from "react/jsx-runtime"` — illegal in a plain browser
+    // script and would silently break the whole component before it renders.
+    Babel.registerPreset("react-classic", {
+      presets: [[Babel.availablePresets.react, { runtime: "classic" }]],
+    });
+  </script>
 
-  <script type="text/babel" data-presets="react">
+  <script type="text/babel" data-presets="react-classic">
 const { useState, useMemo } = React;
 
 // CampaignAudienceRouter
