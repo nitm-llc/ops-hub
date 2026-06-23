@@ -128,16 +128,21 @@ function CampaignAudienceRouter() {
   };
 
   const plan = selected.filter((id) => byId[id]).map((id, i) => ({
-    audience: byId[id], tier: i + 1, excludes: selected.slice(0, i).filter((x) => byId[x]).map((x) => byId[x].name),
+    audience: byId[id], tier: i + 1,
+    excludes: selected.slice(0, i).filter((x) => byId[x]).map((x) => ({ name: byId[x].name, condition: byId[x].condition })),
   }));
 
   const fullExport = () =>
-    (campaignName ? `Campaign: ${campaignName}\n\n` : "") +
-    plan.map((p) => [
-      `SEGMENT ${p.tier}: ${p.audience.name}`,
-      `Definition: ${p.audience.condition || "(define in Klaviyo)"}`,
-      `Don't send to: ${p.excludes.length ? p.excludes.join(", ") : "(nothing — highest priority)"}`,
-    ].join("\n")).join("\n\n");
+    (campaignName ? `CAMPAIGN: ${campaignName}\n${"=".repeat(40)}\n\n` : "") +
+    plan.map((p) => {
+      const lines = [
+        `EMAIL ${p.tier} — ${p.audience.name}`,
+        `  LIST (send to): ${p.audience.condition || "(define in Klaviyo)"}`,
+      ];
+      if (p.excludes.length) p.excludes.forEach((e) => lines.push(`  EXCLUDE: ${e.condition || e.name}`));
+      else lines.push(`  EXCLUDE: (nothing — highest priority)`);
+      return lines.join("\n");
+    }).join("\n\n");
 
   if (managing) {
     return (
@@ -217,15 +222,18 @@ function CampaignAudienceRouter() {
 
       {selected.length > 0 && (
         <div style={{ marginBottom: 24 }}>
-          <p style={{ ...label, margin: "0 0 8px", fontWeight: 500 }}>2 · Drag to rank priority (top wins when someone qualifies for two)</p>
+          <p style={{ ...label, margin: "0 0 4px", fontWeight: 500 }}>2 · Drag to rank priority</p>
+          <p style={{ ...label, margin: "0 0 10px", fontSize: 12 }}>Top = highest priority. Put your most specific audience first (e.g. NCLEX students, then your most-invested buyers). Each email below automatically excludes everyone in the emails above it — so no one ever gets two.</p>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {selected.filter((id) => byId[id]).map((id, pos) => {
               const a = byId[id];
+              const note = pos === 0 ? "wins ties" : "excludes all above";
               return (
                 <div key={id} draggable onDragStart={() => setDragIdx(pos)} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(pos)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "grab", background: a.bg, border: "0.5px solid " + a.color + "40" }}>
                   <span style={{ color: a.color, fontSize: 16 }}>⠿</span>
                   <span style={{ fontSize: 12, fontWeight: 500, color: a.color, minWidth: 44 }}>Tier {pos + 1}</span>
-                  <span style={{ fontSize: 14, fontWeight: 500, color: a.color }}>{a.name}</span>
+                  <span style={{ fontSize: 14, fontWeight: 500, color: a.color, flex: 1 }}>{a.name}</span>
+                  <span style={{ fontSize: 11, color: a.color, opacity: 0.7 }}>{note}</span>
                 </div>
               );
             })}
@@ -236,30 +244,33 @@ function CampaignAudienceRouter() {
       {selected.length > 0 && (
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
-            <p style={{ ...label, margin: 0, fontWeight: 500 }}>3 · Build these in Klaviyo</p>
+            <p style={{ ...label, margin: 0, fontWeight: 500 }}>3 · Hand this to Sam — set up in Klaviyo</p>
             <CopyButton text={fullExport()} label="Copy all" />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {plan.map((p) => (
               <div key={p.audience.id} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 12, padding: "14px 16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, fontWeight: 500, padding: "2px 8px", borderRadius: 8, background: p.audience.bg, color: p.audience.color }}>Segment {p.tier}</span>
-                  <span style={{ fontSize: 15, fontWeight: 500 }}>{p.audience.name}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 8, background: p.audience.bg, color: p.audience.color }}>EMAIL {p.tier}</span>
+                  <span style={{ fontSize: 15, fontWeight: 600 }}>{p.audience.name}</span>
                 </div>
-                <div style={{ fontSize: 13, marginBottom: 6 }}>
-                  <span style={label}>Definition: </span>{p.audience.condition || <em style={{ color: "rgba(0,0,0,0.4)" }}>define in Klaviyo</em>}
+                <div style={{ fontSize: 13, marginBottom: 8, display: "flex", gap: 6 }}>
+                  <span style={{ ...label, fontWeight: 600, minWidth: 90 }}>SEND TO:</span>
+                  <span>{p.audience.condition || <em style={{ color: "rgba(0,0,0,0.4)" }}>define list in Klaviyo</em>}</span>
                 </div>
-                <div style={{ fontSize: 13 }}>
-                  <span style={label}>Don't send to: </span>
-                  {p.excludes.length ? p.excludes.map((e) => (
-                    <span key={e} style={{ fontSize: 12, padding: "1px 7px", marginRight: 4, marginTop: 3, borderRadius: 8, display: "inline-block", background: "#FCEBEB", color: "#A32D2D" }}>{e}</span>
-                  )) : <span style={{ color: "#0F6E56" }}>nothing — highest priority</span>}
+                <div style={{ fontSize: 13, display: "flex", gap: 6 }}>
+                  <span style={{ ...label, fontWeight: 600, minWidth: 90 }}>DON'T SEND TO:</span>
+                  <span style={{ flex: 1 }}>
+                    {p.excludes.length ? p.excludes.map((e, i) => (
+                      <span key={i} title={e.name} style={{ fontSize: 12, padding: "2px 8px", marginRight: 5, marginBottom: 4, borderRadius: 8, display: "inline-block", background: "#FCEBEB", color: "#A32D2D" }}>{e.condition || e.name}</span>
+                    )) : <span style={{ color: "#0F6E56" }}>nothing — this email is highest priority</span>}
+                  </span>
                 </div>
               </div>
             ))}
           </div>
           <p style={{ ...label, marginTop: 16, fontSize: 12 }}>
-            When scheduling each send, set the audience to that segment, then add every "Don't send to" audience in Klaviyo's Don't send to field. That guarantees one email per person across the campaign.
+            For each email above: in Klaviyo, set the recipient list/segment to the <strong>SEND TO</strong> list, then add every <strong>DON'T SEND TO</strong> list to Klaviyo's "Don't send to" field. That guarantees each person gets exactly one email across the whole campaign.
           </p>
         </div>
       )}
