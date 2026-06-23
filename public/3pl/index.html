@@ -334,7 +334,7 @@
         <header class="header">
             <div class="header-left">
                 <h1>3PL Analytics</h1>
-                <p>ShipFusion fulfillment metrics & cost analysis</p>
+                <p>ShipMonk fulfillment metrics & cost analysis</p>
                 <div class="data-status empty" id="dataStatus">
                     <span class="dot"></span>
                     <span id="statusText">No data loaded</span>
@@ -344,20 +344,12 @@
 
         <div class="tab-nav">
             <button class="tab-btn active" data-tab="overview">Overview</button>
-            <button class="tab-btn" data-tab="delivery-analysis">Click to Delivery Analysis</button>
+            <button class="tab-btn" data-tab="delivery-analysis">Delivery Status</button>
         </div>
 
-        <div class="upload-zone" id="uploadZone">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-            <h3>Upload 3PL Export CSV</h3>
-            <p>Drag & drop or click to select • Data syncs to cloud for all users</p>
-            <input type="file" id="fileInput" accept=".csv" multiple>
-            <div class="upload-progress" id="uploadProgress">
-                <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-                <div class="progress-text" id="progressText">Uploading...</div>
-            </div>
+        <div class="sync-bar" style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+            <button id="syncBtn" style="background:#2563eb;color:#fff;border:none;padding:10px 18px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;">⟳ Sync from ShipMonk</button>
+            <span id="syncStatus" style="color:#6b7280;font-size:13px;">—</span>
         </div>
 
         <div class="controls-bar">
@@ -405,7 +397,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <h3>No data yet</h3>
-            <p>Upload your ShipFusion CSV exports to get started</p>
+            <p>Click "Sync from ShipMonk" to pull your latest orders</p>
         </div>
 
         <div class="dashboard-content" id="dashboardContent">
@@ -437,27 +429,11 @@
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
-                            <span class="metric-label">Avg Zone</span>
-                            <div class="metric-icon amber"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg></div>
-                        </div>
-                        <div class="metric-value" id="metricAvgZone">—</div>
-                        <div class="metric-comparison" id="compAvgZone"></div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-header">
                             <span class="metric-label">Avg Shipping Cost</span>
                             <div class="metric-icon green"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
                         </div>
                         <div class="metric-value" id="metricAvgCost">—</div>
                         <div class="metric-comparison" id="compAvgCost"></div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-header">
-                            <span class="metric-label">Click to Delivery</span>
-                            <div class="metric-icon amber"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
-                        </div>
-                        <div class="metric-value" id="metricClickToDelivery">—</div>
-                        <div class="metric-comparison" id="compClickToDelivery"></div>
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
@@ -539,46 +515,30 @@
 
             <div class="tab-content" id="tab-delivery-analysis">
                 <div class="analysis-header">
-                    <h2>Click to Delivery Analysis</h2>
-                    <p>Identify where delays are happening by zone, carrier, and region</p>
+                    <h2>Delivery Status</h2>
+                    <p>Live fulfillment status from ShipMonk (the API reports status, not delivery timestamps)</p>
                 </div>
 
                 <div class="analysis-summary">
-                    <div class="summary-card"><span class="summary-label">Overall Avg</span><span class="summary-value" id="analysisOverallAvg">—</span></div>
-                    <div class="summary-card"><span class="summary-label">Fastest</span><span class="summary-value good" id="analysisFastest">—</span></div>
-                    <div class="summary-card"><span class="summary-label">Slowest</span><span class="summary-value bad" id="analysisSlowest">—</span></div>
-                    <div class="summary-card"><span class="summary-label">Orders Analyzed</span><span class="summary-value" id="analysisCount">—</span></div>
+                    <div class="summary-card"><span class="summary-label">Delivered</span><span class="summary-value good" id="dsDelivered">—</span></div>
+                    <div class="summary-card"><span class="summary-label">In Transit</span><span class="summary-value" id="dsInTransit">—</span></div>
+                    <div class="summary-card"><span class="summary-label">Processing</span><span class="summary-value" id="dsProcessing">—</span></div>
+                    <div class="summary-card"><span class="summary-label">Issues</span><span class="summary-value bad" id="dsIssues">—</span></div>
                 </div>
 
                 <div class="analysis-section">
-                    <h3>By Zone</h3>
-                    <p class="section-desc">Lower zones = closer to warehouse</p>
+                    <h3>Status Breakdown</h3>
+                    <p class="section-desc">Every order's current ShipMonk processing status</p>
                     <div class="analysis-table-wrapper">
-                        <table class="analysis-table"><thead><tr><th>Zone</th><th>Orders</th><th>Avg Days</th><th>Min</th><th>Max</th><th>Avg Cost</th><th></th></tr></thead><tbody id="zoneTableBody"></tbody></table>
+                        <table class="analysis-table"><thead><tr><th>Status</th><th>Orders</th><th>% of Total</th></tr></thead><tbody id="dsTableBody"></tbody></table>
                     </div>
                 </div>
 
                 <div class="analysis-section">
-                    <h3>By Carrier & Service</h3>
-                    <p class="section-desc">Compare performance across shipping methods</p>
+                    <h3>Needs Attention</h3>
+                    <p class="section-desc">In-transit and undeliverable orders</p>
                     <div class="analysis-table-wrapper">
-                        <table class="analysis-table"><thead><tr><th>Carrier</th><th>Service</th><th>Orders</th><th>Avg Days</th><th>Min</th><th>Max</th><th>Avg Cost</th><th></th></tr></thead><tbody id="carrierServiceTableBody"></tbody></table>
-                    </div>
-                </div>
-
-                <div class="analysis-section">
-                    <h3>By State (Top 15)</h3>
-                    <p class="section-desc">Regional hotspots</p>
-                    <div class="analysis-table-wrapper">
-                        <table class="analysis-table"><thead><tr><th>State</th><th>Orders</th><th>Avg Days</th><th>Avg Zone</th><th></th></tr></thead><tbody id="stateTableBody"></tbody></table>
-                    </div>
-                </div>
-
-                <div class="analysis-section">
-                    <h3>Slowest Orders</h3>
-                    <p class="section-desc">Outliers to investigate</p>
-                    <div class="analysis-table-wrapper">
-                        <table class="analysis-table"><thead><tr><th>Order #</th><th>Days</th><th>Order Date</th><th>Delivered</th><th>Carrier/Service</th><th>Zone</th><th>State</th></tr></thead><tbody id="slowestTableBody"></tbody></table>
+                        <table class="analysis-table"><thead><tr><th>Order #</th><th>Status</th><th>Carrier</th><th>Service</th><th>State</th><th>Shipped</th></tr></thead><tbody id="dsAttentionBody"></tbody></table>
                     </div>
                 </div>
             </div>
@@ -703,8 +663,8 @@
                     masterData = result.data.map(row => ({
                         shipmentId: row.shipment_id,
                         orderNumber: row.order_number,
-                        shipDate: row.ship_date,
-                        orderDate: row.order_date,
+                        shipDate: (row.ship_date || '').slice(0, 10),
+                        orderDate: (row.order_date || '').slice(0, 10),
                         carrierDeliveryDate: row.carrier_delivery_date,
                         carrier: row.carrier,
                         service: row.service,
@@ -873,12 +833,8 @@
             });
             
             const costBreakdown = {
-                'Base Shipping': data.reduce((s, d) => s + (d.basePrice || 0), 0),
-                'Residential Fee': data.reduce((s, d) => s + (d.residentialFee || 0), 0),
-                'Fuel Fee': data.reduce((s, d) => s + (d.fuelFee || 0), 0),
-                'DAS Fee': data.reduce((s, d) => s + (d.dasFee || 0), 0),
-                'Peak Fee': data.reduce((s, d) => s + (d.peakFee || 0), 0),
-                'Pick Fees': data.reduce((s, d) => s + (d.firstPickFee || 0) + (d.additionalPickFee || 0) + (d.insertPickFee || 0), 0),
+                'Shipping': data.reduce((s, d) => s + (d.shippingCost || 0), 0),
+                'Pick & Pack': data.reduce((s, d) => s + (d.firstPickFee || 0), 0),
                 'Packaging': data.reduce((s, d) => s + (d.packagingCost || 0), 0),
             };
             
@@ -926,9 +882,7 @@
             document.getElementById('metricOrders').textContent = metrics.orders.toLocaleString();
             document.getElementById('metricUnits').textContent = metrics.units.toLocaleString();
             document.getElementById('metricUnitsPerOrder').textContent = metrics.unitsPerOrder.toFixed(2);
-            document.getElementById('metricAvgZone').textContent = metrics.avgZone.toFixed(1);
             document.getElementById('metricAvgCost').textContent = '$' + metrics.avgShippingCost.toFixed(2);
-            document.getElementById('metricClickToDelivery').textContent = metrics.clickToDelivery.toFixed(1) + ' days';
             document.getElementById('metricDeliveryRate').textContent = metrics.deliveryRate.toFixed(1) + '%';
             document.getElementById('metricUndelivered').textContent = metrics.undelivered.toLocaleString();
 
@@ -942,9 +896,7 @@
                 document.getElementById('compOrders').innerHTML = formatComparison(metrics.orders, compareMetrics.orders, formatNumber, false);
                 document.getElementById('compUnits').innerHTML = formatComparison(metrics.units, compareMetrics.units, formatNumber, false);
                 document.getElementById('compUnitsPerOrder').innerHTML = formatComparison(metrics.unitsPerOrder, compareMetrics.unitsPerOrder, n => n.toFixed(2), false);
-                document.getElementById('compAvgZone').innerHTML = formatComparison(metrics.avgZone, compareMetrics.avgZone, n => n.toFixed(1), true);
                 document.getElementById('compAvgCost').innerHTML = formatComparison(metrics.avgShippingCost, compareMetrics.avgShippingCost, formatCurrency, true);
-                document.getElementById('compClickToDelivery').innerHTML = formatComparison(metrics.clickToDelivery, compareMetrics.clickToDelivery, formatDays, true);
                 document.getElementById('compDeliveryRate').innerHTML = formatComparison(metrics.deliveryRate, compareMetrics.deliveryRate, formatPercent, false);
                 document.getElementById('compUndelivered').innerHTML = formatComparison(metrics.undelivered, compareMetrics.undelivered, formatNumber, true);
             } else {
@@ -959,6 +911,28 @@
             if (document.getElementById('toggleMultiCompare').classList.contains('active')) {
                 updateMultiPeriodTable();
             }
+        }
+
+        function updateDeliveryStatus() {
+            const data = filterByDateRange(masterData, dateFrom.value, dateTo.value);
+            const counts = {};
+            data.forEach(d => { const s = d.carrierStatus || 'unknown'; counts[s] = (counts[s] || 0) + 1; });
+            const total = data.length || 1;
+            const inTransit = ['en_route', 'awaiting_pick_up', 'awaiting_carrier_processing', 'shipped_untrackable'];
+            const processing = ['submitted', 'queued_to_submit', 'pick_in_progress', 'pack_in_progress', 'packed', 'on_hold', 'backorder', 'updating'];
+            const issues = ['undeliverable', 'unable_to_submit', 'cancellation_requested'];
+            const sumOf = (list) => Object.entries(counts).filter(([s]) => list.includes(s)).reduce((a, [, n]) => a + n, 0);
+            const delivered = Object.entries(counts).filter(([s]) => s.includes('delivered')).reduce((a, [, n]) => a + n, 0);
+            document.getElementById('dsDelivered').textContent = delivered.toLocaleString();
+            document.getElementById('dsInTransit').textContent = sumOf(inTransit).toLocaleString();
+            document.getElementById('dsProcessing').textContent = sumOf(processing).toLocaleString();
+            document.getElementById('dsIssues').textContent = sumOf(issues).toLocaleString();
+            const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([s, n]) =>
+                `<tr><td>${s.replace(/_/g, ' ')}</td><td>${n.toLocaleString()}</td><td>${(n / total * 100).toFixed(1)}%</td></tr>`).join('');
+            document.getElementById('dsTableBody').innerHTML = rows || '<tr><td colspan="3">No data</td></tr>';
+            const attention = data.filter(d => inTransit.includes(d.carrierStatus) || issues.includes(d.carrierStatus)).slice(0, 50);
+            document.getElementById('dsAttentionBody').innerHTML = attention.map(d =>
+                `<tr><td>${d.orderNumber || ''}</td><td>${(d.carrierStatus || '').replace(/_/g, ' ')}</td><td>${d.carrier || ''}</td><td>${d.service || ''}</td><td>${d.state || ''}</td><td>${d.shipDate || ''}</td></tr>`).join('') || '<tr><td colspan="6">Nothing in transit or flagged</td></tr>';
         }
 
         function updateCharts(data) {
@@ -1134,25 +1108,24 @@
         }
 
         // Event Listeners
-        uploadZone.addEventListener('click', () => fileInput.click());
-        uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
-        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
-        uploadZone.addEventListener('drop', (e) => { e.preventDefault(); uploadZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
-        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
-
-        function handleFiles(files) {
-            Array.from(files).forEach(file => {
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const rows = parseCSV(e.target.result);
-                    const processed = processData(rows);
-                    saveOrders(processed);
-                };
-                reader.readAsText(file);
-            });
+        const syncBtn = document.getElementById('syncBtn');
+        const syncStatus = document.getElementById('syncStatus');
+        async function syncFromShipmonk() {
+            syncBtn.disabled = true;
+            const orig = syncBtn.textContent;
+            syncBtn.textContent = '⟳ Syncing…';
+            syncStatus.textContent = 'Pulling latest orders from ShipMonk…';
+            try {
+                const r = await fetch(`${API_URL}/shipmonk-sync`).then(res => res.json());
+                if (r.success) { syncStatus.textContent = `Synced ${(r.synced || 0).toLocaleString()} orders · ${new Date().toLocaleString()}`; await loadData(); }
+                else { syncStatus.textContent = 'Sync failed: ' + (r.error || 'unknown error'); }
+            } catch (e) { syncStatus.textContent = 'Sync failed: ' + e.message; }
+            syncBtn.textContent = orig;
+            syncBtn.disabled = false;
         }
+        syncBtn.addEventListener('click', syncFromShipmonk);
 
-        toggleInternational.addEventListener('click', () => { toggleInternational.classList.toggle('active'); updateUI(); if (document.getElementById('tab-delivery-analysis').classList.contains('active')) updateDeliveryAnalysis(); });
+        toggleInternational.addEventListener('click', () => { toggleInternational.classList.toggle('active'); updateUI(); if (document.getElementById('tab-delivery-analysis').classList.contains('active')) updateDeliveryStatus(); });
         toggleCompare.addEventListener('click', () => { toggleCompare.classList.toggle('active'); compareFields.classList.toggle('visible'); updateUI(); });
         dateFrom.addEventListener('change', updateUI);
         dateTo.addEventListener('change', updateUI);
@@ -1166,7 +1139,7 @@
                 document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
                 btn.classList.add('active');
                 document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-                if (btn.dataset.tab === 'delivery-analysis') updateDeliveryAnalysis();
+                if (btn.dataset.tab === 'delivery-analysis') updateDeliveryStatus();
             });
         });
 

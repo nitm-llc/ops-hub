@@ -98,6 +98,192 @@ async function handleShipFusionAPI(request, env) {
   } catch (error) { return new Response(JSON.stringify({ error: "Failed to fetch from ShipFusion", details: error.message }), { status: 500, headers: corsHeaders }); }
 }
 
+// ===== SHIPMONK API CLIENT + SYNC =====
+// Auth: header `Api-Key: <key>`, base /v1/integrations, storeId on most calls.
+const SHIPMONK_BASE = "https://api.shipmonk.com/v1/integrations";
+
+// ShipMonk "MoneyOutput" fields can be a number or an object {amount|value|total}.
+function smMoney(v) {
+  if (v == null) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v === "object") return parseFloat(v.amount ?? v.value ?? v.total ?? 0) || 0;
+  return parseFloat(v) || 0;
+}
+
+async function smFetch(env, path, { method = "GET", query = null, body = null } = {}) {
+  if (!env.SHIPMONK_API_KEY) throw new Error("SHIPMONK_API_KEY not configured");
+  let url = path.startsWith("http") ? path : `${SHIPMONK_BASE}${path}`;
+  const q = new URLSearchParams();
+  if (query) for (const [k, v] of Object.entries(query)) if (v != null) q.set(k, v);
+  // Note: the API key is already scoped to a store — endpoints reject an extra storeId param.
+  const qs = q.toString();
+  if (qs) url += (url.includes("?") ? "&" : "?") + qs;
+  const headers = { "Api-Key": env.SHIPMONK_API_KEY, "Accept": "application/json" };
+  const opts = { method, headers };
+  if (body != null) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let json; try { json = text ? JSON.parse(text) : {}; } catch { json = { _raw: text }; }
+  if (!res.ok) throw new Error(`ShipMonk ${method} ${path} -> ${res.status}: ${text.slice(0, 300)}`);
+  return json;
+}
+
+// Key/value sync-state table (same pattern as campaign_router_config).
+async function smState(env, key, value) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shipmonk_sync_state (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)`).run();
+  if (value === undefined) {
+    const row = await env.DB.prepare(`SELECT value FROM shipmonk_sync_state WHERE key = ?`).bind(key).first();
+    return row ? row.value : null;
+  }
+  await env.DB.prepare(`INSERT OR REPLACE INTO shipmonk_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`).bind(key, String(value)).run();
+}
+
+// Pull orders-list pages (defensive about the list field name and pagination flag).
+async function smOrdersList(env, { updatedAtStart = null, maxPages = 50 } = {}) {
+  const all = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const query = { page, pageSize: 100, sortOrder: "DESC" };
+    if (updatedAtStart) query.updatedAtStart = updatedAtStart;
+    const data = await smFetch(env, "/orders-list", { method: "GET", query });
+    const root = data.data || data;
+    const items = root.orders || root.items || root.results || (Array.isArray(root) ? root : []);
+    all.push(...items);
+    if (items.length < 100) break;
+  }
+  return all;
+}
+
+// ShipMonk returns some fields as objects ({id,name}); reduce to a display string.
+function smName(v) { return (v && typeof v === "object") ? (v.name || v.identifier || v.code || "") : (v == null ? "" : String(v)); }
+
+function smMapOrderRow(o) {
+  const sd = o.shipment_data || {};
+  const sm = o.shipping_method || {};
+  const costs = o.order_costs || {};
+  const to = o.ship_to || {};
+  const items = o.items || [];
+  const units = items.reduce((s, it) => s + (parseInt(it.quantity ?? it.qty ?? 0) || 0), 0);
+  return {
+    shipmentId: smName(o.order_key) || smName(o.order_number) || (o.packages && o.packages[0] && smName(o.packages[0].tracking_number)) || "",
+    orderNumber: smName(o.order_number),
+    orderDate: smName(o.ordered_at),
+    shipDate: smName(o.shipped_at),
+    carrier: smName(sd.carrier) || smName(sm.carrier),
+    service: smName(sd.service) || smName(o.requested_shipping_service) || smName(sm),
+    carrierStatus: smName(o.processing_status) || smName(o.order_status),
+    state: smName(to.state),
+    country: smName(to.country_code) || smName(to.country),
+    numProducts: units,
+    shippingCost: smMoney(costs.estimated_shipping_related_charges) || smMoney(sd.estimated_shipping_cost),
+    packagingCost: smMoney(costs.estimated_packaging_material_charges),
+    pickPackCost: smMoney(costs.estimated_pick_and_pack_charges),
+    items: items.map(it => ({ sku: it.sku || it.SKU || "", qty: parseInt(it.quantity ?? it.qty ?? 0) || 0 })).filter(li => li.sku),
+  };
+}
+
+// Sync ShipMonk orders into tpl_orders + line items into shipmonk_order_items (for velocity).
+async function syncShipmonkOrders(env, { backfillDays = 60, full = false } = {}) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tpl_orders (shipment_id TEXT PRIMARY KEY, order_number TEXT, ship_date TEXT, order_date TEXT, carrier_delivery_date TEXT, carrier TEXT, service TEXT, carrier_status TEXT, zone TEXT, state TEXT, country TEXT, num_products INTEGER DEFAULT 0, shipping_cost REAL DEFAULT 0, base_price REAL DEFAULT 0, residential_fee REAL DEFAULT 0, das_fee REAL DEFAULT 0, peak_fee REAL DEFAULT 0, fuel_fee REAL DEFAULT 0, services_cost REAL DEFAULT 0, packaging_cost REAL DEFAULT 0, first_pick_fee REAL DEFAULT 0, additional_pick_fee REAL DEFAULT 0, insert_pick_fee REAL DEFAULT 0, updated_at TEXT DEFAULT (datetime('now')))`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shipmonk_order_items (order_key TEXT, sku TEXT, qty INTEGER, shipped_at TEXT, PRIMARY KEY (order_key, sku))`).run();
+
+  const last = full ? null : await smState(env, "orders_last_updated");
+  const since = last || new Date(Date.now() - backfillDays * 864e5).toISOString();
+  const orders = await smOrdersList(env, { updatedAtStart: since });
+  const rows = orders.map(smMapOrderRow).filter(r => r.shipmentId);
+
+  let written = 0;
+  for (let i = 0; i < rows.length; i += 20) {
+    const batch = rows.slice(i, i + 20);
+    const stmts = [];
+    for (const r of batch) {
+      stmts.push(env.DB.prepare(
+        `INSERT OR REPLACE INTO tpl_orders (shipment_id, order_number, ship_date, order_date, carrier, service, carrier_status, state, country, num_products, shipping_cost, packaging_cost, first_pick_fee, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`
+      ).bind(r.shipmentId, r.orderNumber, r.shipDate, r.orderDate, r.carrier, r.service, r.carrierStatus, r.state, r.country, r.numProducts, r.shippingCost, r.packagingCost, r.pickPackCost));
+      if (r.shipDate) {
+        stmts.push(env.DB.prepare(`DELETE FROM shipmonk_order_items WHERE order_key = ?`).bind(r.shipmentId));
+        for (const li of r.items) {
+          stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO shipmonk_order_items (order_key, sku, qty, shipped_at) VALUES (?,?,?,?)`).bind(r.shipmentId, li.sku, li.qty, r.shipDate));
+        }
+      }
+    }
+    await env.DB.batch(stmts);
+    written += batch.length;
+  }
+  await smState(env, "orders_last_updated", new Date().toISOString());
+  await smState(env, "orders_last_sync_at", new Date().toISOString());
+  return { synced: written, fetched: orders.length, since };
+}
+
+// Velocity (units/day) per SKU from shipped order line items.
+async function smVelocityBySku(env) {
+  const map = {};
+  try {
+    const q30 = await env.DB.prepare(`SELECT sku, SUM(qty) n FROM shipmonk_order_items WHERE shipped_at >= datetime('now','-30 day') GROUP BY sku`).all();
+    const q60 = await env.DB.prepare(`SELECT sku, SUM(qty) n FROM shipmonk_order_items WHERE shipped_at >= datetime('now','-60 day') GROUP BY sku`).all();
+    for (const r of (q30.results || [])) map[r.sku] = { velocity: (r.n || 0) / 30, velocity60: 0 };
+    for (const r of (q60.results || [])) { map[r.sku] = map[r.sku] || { velocity: 0, velocity60: 0 }; map[r.sku].velocity60 = (r.n || 0) / 60; }
+  } catch (e) { /* table may be empty before first sync */ }
+  return map;
+}
+
+// Pull live inventory from products-search (defensive about field names / pagination).
+async function smProductsSearch(env, { maxPages = 100 } = {}) {
+  const all = [];
+  const unwrap = (data) => { const r = data.data || data; return r.products || r.items || r.results || (Array.isArray(r) ? r : []); };
+  const init = await smFetch(env, "/products/search", { method: "POST", body: {} });
+  all.push(...unwrap(init));
+  let cursor = (init.data && init.data.cursor) || init.cursor || null;
+  for (let p = 0; p < maxPages && cursor; p++) {
+    const data = await smFetch(env, "/products/search/paginate", { method: "GET", query: { cursor, pageSize: 100 } });
+    const items = unwrap(data);
+    all.push(...items);
+    cursor = (data.data && data.data.cursor) || data.cursor || null;
+    if (!items.length) break;
+  }
+  return all;
+}
+
+function smMapInventoryItem(p) {
+  const sku = p.sku || "";
+  const name = p.name || sku;
+  const inv = p.inventory || {};
+  const locs = Array.isArray(inv.locations) ? inv.locations : [];
+  const warehouses = locs.map(l => ({
+    warehouse: (l.warehouse && (l.warehouse.name || l.warehouse.identifier)) || "WH",
+    code: (l.warehouse && l.warehouse.identifier) || "",
+    available: parseInt(l.quantity_available || 0) || 0,
+    onHand: parseInt(l.quantity_on_hand || 0) || 0,
+    unavailable: parseInt(l.quantity_unavailable || 0) || 0,
+  }));
+  const available = parseInt(inv.quantity_total_available || 0) || 0;
+  const onHand = parseInt(inv.quantity_total_on_hand || 0) || 0;
+  const unavailable = parseInt(inv.quantity_total_unavailable || 0) || 0;
+  const quarantined = parseInt(inv.quantity_total_quarantined || 0) || 0;
+  return {
+    id: sku, sku, name, active: p.is_active !== false,
+    warehouses, available, onHand, allocated: unavailable, quarantined,
+    stockOutDays: p.stock_out_days ?? null, totalAvailable: available,
+  };
+}
+
+async function getShipmonkInventory(env) {
+  const cors = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
+  try {
+    const raw = await smProductsSearch(env);
+    const vel = await smVelocityBySku(env);
+    const inventory = raw.map(smMapInventoryItem).filter(i => i.sku).map(i => ({
+      ...i,
+      velocity: (vel[i.sku] && vel[i.sku].velocity) || 0,
+      velocity60: (vel[i.sku] && vel[i.sku].velocity60) || 0,
+    }));
+    // distinct warehouse labels seen, for dynamic columns
+    const warehouseNames = [...new Set(inventory.flatMap(i => i.warehouses.map(w => w.warehouse)))];
+    return new Response(JSON.stringify({ success: true, source: "shipmonk", count: inventory.length, warehouses: warehouseNames, inventory, _debug: { sampleRaw: raw[0] || null, sampleFields: raw[0] ? Object.keys(raw[0]) : [] } }), { headers: cors });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: cors });
+  }
+}
+
 // ===== 3PL API (D1-backed) =====
 async function handle3plAPI(request, env, path) {
   const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Content-Type": "application/json" };
@@ -3355,6 +3541,19 @@ export default {
     if (path.startsWith("/growth/api/")) { return handleGrowthAPI(request, env, path); }
     // ===== CONTENT TRACKER API (D1-backed) =====
     if (path === "/tracker/api/data") { return handleTrackerAPI(request, env); }
+    // ===== SHIPMONK SYNC / PROBE =====
+    if (path === "/3pl/api/shipmonk-sync") {
+      try { const full = url.searchParams.get("full") === "1"; const r = await syncShipmonkOrders(env, { full }); return new Response(JSON.stringify({ success: true, ...r }), { headers: { "Content-Type": "application/json" } }); }
+      catch (e) { return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } }); }
+    }
+    if (path === "/3pl/api/shipmonk-probe") {
+      try {
+        let orders = null, products = null;
+        try { orders = await smFetch(env, "/orders-list", { method: "GET", query: { page: 1, pageSize: 2, sortOrder: "DESC" } }); } catch (e) { orders = { error: e.message }; }
+        try { products = await smProductsSearch(env, { maxPages: 1 }); } catch (e) { products = { error: e.message }; }
+        return new Response(JSON.stringify({ ordersSample: orders, productsSample: Array.isArray(products) ? products.slice(0, 2) : products }, null, 2), { headers: { "Content-Type": "application/json" } });
+      } catch (e) { return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } }); }
+    }
     // ===== 3PL API (D1-backed) =====
     if (path.startsWith("/3pl/api/")) { return handle3plAPI(request, env, path); }
     // ===== CAMPAIGN ROUTER API (D1-backed, shared audience config) =====
@@ -3386,6 +3585,7 @@ export default {
       }
     }
     // ===== INVENTORY =====
+    if (path === "/inventory/api/shipmonk") { return getShipmonkInventory(env); }
     if (path === "/inventory/api/shipfusion") { return handleShipFusionAPI(request, env); }
     // ===== CALENDAR =====
     if (path === "/calendar/api/config") { try { const { results } = await env.DB.prepare("SELECT key, value FROM config_cache").all(); const config = {}; results.forEach(r => { try { config[r.key] = JSON.parse(r.value); } catch { config[r.key] = r.value; } }); return new Response(JSON.stringify(config), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); } }
@@ -3416,7 +3616,19 @@ export default {
     const assetResp = await env.ASSETS.fetch(request);
     return addNoIndex(assetResp);
   },
-  async scheduled(event, env, ctx) { ctx.waitUntil(fullSync(env)); },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(fullSync(env));
+    // Incremental ShipMonk orders sync, gated to ~every 10 min (cron fires every 2 min).
+    ctx.waitUntil((async () => {
+      try {
+        if (!env.SHIPMONK_API_KEY) return;
+        const lastRun = await smState(env, "cron_last_run");
+        if (lastRun && (Date.now() - new Date(lastRun).getTime()) < 9 * 60 * 1000) return;
+        await smState(env, "cron_last_run", new Date().toISOString());
+        await syncShipmonkOrders(env, {});
+      } catch (e) { /* cron sync errors are non-fatal */ }
+    })());
+  },
 };
 function landingPageHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">

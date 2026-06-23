@@ -196,8 +196,8 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
         <tr>
           <th onclick="sortTable('sku')">SKU</th>
           <th onclick="sortTable('name')">Product</th>
-          <th onclick="sortTable('sfChicago')" style="text-align:center;color:var(--chicago)">Chicago</th>
-          <th onclick="sortTable('sfLasVegas')" style="text-align:center;color:var(--vegas)">Las Vegas</th>
+          <th onclick="sortTable('sfChicago')" style="text-align:center;color:var(--chicago)">Nevada</th>
+          <th onclick="sortTable('sfLasVegas')" style="text-align:center;color:var(--vegas)">Kentucky</th>
           <th style="text-align:center">Distribution</th>
           <th style="text-align:center">Balance</th>
           <th onclick="sortTable('velocity')" style="text-align:center">Velocity</th>
@@ -234,10 +234,10 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 <div id="settingsTab" class="tab-content">
   <div class="settings-section">
     <div class="settings-title">⚖️ Distribution Targets</div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Target: 75% Chicago / 25% Las Vegas</p>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Target split across ShipMonk warehouses (Nevada / Kentucky)</p>
     <div class="form-row" style="max-width:400px;">
-      <div class="form-group"><label class="form-label">Chicago %</label><input type="number" class="form-input" id="targetChicago" value="75" min="0" max="100"></div>
-      <div class="form-group"><label class="form-label">Las Vegas %</label><input type="number" class="form-input" id="targetVegas" value="25" min="0" max="100"></div>
+      <div class="form-group"><label class="form-label">Nevada %</label><input type="number" class="form-input" id="targetChicago" value="75" min="0" max="100"></div>
+      <div class="form-group"><label class="form-label">Kentucky %</label><input type="number" class="form-input" id="targetVegas" value="25" min="0" max="100"></div>
     </div>
     <button class="btn btn-primary" onclick="saveTargets()">Save Targets</button>
   </div>
@@ -246,7 +246,7 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
     <div class="settings-title">🔌 Data Sources</div>
     <div class="settings-grid">
       <div class="connection-card">
-        <div class="connection-status"><div class="connection-dot" id="sfConnectionDot"></div><span style="font-weight:600">ShipFusion API</span></div>
+        <div class="connection-status"><div class="connection-dot" id="sfConnectionDot"></div><span style="font-weight:600">ShipMonk API</span></div>
         <p style="font-size:12px;color:var(--text-muted)">3PL warehouse data via secure API</p>
       </div>
       <div class="connection-card">
@@ -286,14 +286,14 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
   </div>
 
   <div class="settings-section">
-    <div class="settings-title">🔗 SKU Mapping (ShipFusion → FBA)</div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Link your ShipFusion SKUs to Amazon FBA SKUs so inventory displays together</p>
+    <div class="settings-title">🔗 SKU Mapping (ShipMonk → FBA)</div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Link your ShipMonk SKUs to Amazon FBA SKUs so inventory displays together</p>
     <div id="skuMappingList"></div>
     <div style="display:flex;gap:12px;align-items:flex-end;margin-top:16px;">
       <div class="form-group" style="margin-bottom:0;flex:1;">
-        <label class="form-label">ShipFusion SKU</label>
+        <label class="form-label">ShipMonk SKU</label>
         <select class="form-select" id="newMapSfSku">
-          <option value="">Select ShipFusion SKU...</option>
+          <option value="">Select ShipMonk SKU...</option>
         </select>
       </div>
       <div style="padding-bottom:4px;color:var(--text-muted);">→</div>
@@ -327,7 +327,7 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
       </div>
       <div class="form-row">
         <div class="form-group"><label class="form-label">Supplier</label><select class="form-select" id="orderSupplier"><option value="">Select...</option><option>Round Color Printing</option><option>Corporate Graphics</option><option>Alibaba</option></select></div>
-        <div class="form-group"><label class="form-label">Destination</label><select class="form-select" id="orderDestination"><option value="sf-chicago">SF Chicago</option><option value="sf-lasvegas">SF Las Vegas</option><option value="amazon-fba">Amazon FBA</option></select></div>
+        <div class="form-group"><label class="form-label">Destination</label><select class="form-select" id="orderDestination"><option value="sf-chicago">ShipMonk Nevada</option><option value="sf-lasvegas">ShipMonk Kentucky</option><option value="amazon-fba">Amazon FBA</option></select></div>
       </div>
       <div class="form-row">
         <div class="form-group"><label class="form-label">Cost</label><input type="text" class="form-input" id="orderCost" placeholder="$0.00"></div>
@@ -389,12 +389,13 @@ async function refreshData() {
   indicator.className = 'status-indicator loading';
   indicator.textContent = '● Fetching...';
   try {
-    const res = await fetch('/inventory/api/shipfusion');
+    const res = await fetch('/inventory/api/shipmonk');
     const data = await res.json();
     if (data.success && data.inventory) {
-      inventoryData = data.inventory;
+      const whQty = (item, name) => { const w = (item.warehouses || []).find(w => (w.warehouse || '').toLowerCase().includes(name)); return w ? w.available : 0; };
+      inventoryData = data.inventory.map(item => ({ ...item, sfChicago: whQty(item, 'nevada'), sfLasVegas: whQty(item, 'kentucky') }));
       indicator.className = 'status-indicator';
-      indicator.innerHTML = `● <span style="color:var(--success)">ShipFusion</span> · ${data.count} SKUs`;
+      indicator.innerHTML = `● <span style="color:var(--success)">ShipMonk</span> · ${data.count} SKUs`;
       document.getElementById('sfConnectionDot').className = 'connection-dot connected';
     } else throw new Error(data.message || data.error);
     if (fbaData.length > 0) { mergeFbaData(); indicator.innerHTML += ` + <span style="color:var(--fba)">FBA</span>`; }
@@ -483,12 +484,12 @@ function processFbaCSV(file) {
 }
 function mergeFbaData() {
   fbaData.forEach(fp => {
-    // First check SKU mappings (ShipFusion SKU → FBA SKU)
+    // First check SKU mappings (ShipMonk SKU → FBA SKU)
     const mapping = skuMappings.find(m => m.fbaSku === fp.sku);
     let existing = null;
     
     if (mapping) {
-      // Found a mapping - look for the ShipFusion SKU
+      // Found a mapping - look for the ShipMonk SKU
       existing = inventoryData.find(i => i.sku === mapping.sfSku);
     } else {
       // No mapping - try exact match
@@ -589,10 +590,10 @@ function renderInventoryTable() {
     
     let balanceClass = 'balance-balanced', balanceText = 'BALANCED';
     if (total === 0) { balanceClass = 'balance-chi-empty'; balanceText = 'NO STOCK'; }
-    else if (veg === 0) { balanceClass = 'balance-vegas-empty'; balanceText = 'VEGAS EMPTY'; }
-    else if (chi === 0) { balanceClass = 'balance-chi-empty'; balanceText = 'CHI EMPTY'; }
-    else if (chiPct > targetChicago + 10) { balanceClass = 'balance-chi-heavy'; balanceText = 'CHI HEAVY'; }
-    else if (chiPct < targetChicago - 10) { balanceClass = 'balance-vegas-heavy'; balanceText = 'VEGAS HEAVY'; }
+    else if (veg === 0) { balanceClass = 'balance-vegas-empty'; balanceText = 'KY EMPTY'; }
+    else if (chi === 0) { balanceClass = 'balance-chi-empty'; balanceText = 'NV EMPTY'; }
+    else if (chiPct > targetChicago + 10) { balanceClass = 'balance-chi-heavy'; balanceText = 'NV HEAVY'; }
+    else if (chiPct < targetChicago - 10) { balanceClass = 'balance-vegas-heavy'; balanceText = 'KY HEAVY'; }
     
     let fbaHtml = '<span class="fba-empty">—</span>';
     if (item.hasFba || item.fbaQuantity > 0) {
@@ -619,7 +620,7 @@ function renderInventoryTable() {
       fbaHtml = `<div class="fba-value">${alertIcon}${fbaQ.toLocaleString()}</div><div class="fba-days ${daysClass}">${daysText}${velocityText ? ' · ' + velocityText : ''}</div>`;
     }
     
-    // ShipFusion velocity (30 day average)
+    // ShipMonk velocity (30 day average)
     const sfVelocity = item.velocity || 0;
     
     return `<tr>
@@ -725,7 +726,7 @@ function updateSkuMappingDropdowns() {
   const fbaSelect = document.getElementById('newMapFbaSku');
   if (!sfSelect || !fbaSelect) return;
   
-  // Get ShipFusion SKUs (not already mapped)
+  // Get ShipMonk SKUs (not already mapped)
   const mappedSfSkus = skuMappings.map(m => m.sfSku);
   const sfSkus = inventoryData
     .filter(i => !i.fbaOnly && !mappedSfSkus.includes(i.sku))
@@ -737,7 +738,7 @@ function updateSkuMappingDropdowns() {
     .filter(f => !mappedFbaSkus.includes(f.sku))
     .map(f => ({ sku: f.sku, name: f.name }));
   
-  sfSelect.innerHTML = '<option value="">Select ShipFusion SKU...</option>' + 
+  sfSelect.innerHTML = '<option value="">Select ShipMonk SKU...</option>' + 
     sfSkus.map(s => `<option value="${s.sku}">${s.sku} - ${s.name || 'Unknown'}</option>`).join('');
   
   fbaSelect.innerHTML = '<option value="">Select FBA SKU...</option>' + 
@@ -749,7 +750,7 @@ function renderSkuMappings() {
   if (!container) return;
   
   if (skuMappings.length === 0) {
-    container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:12px 0;">No SKU mappings configured. Add mappings below to link ShipFusion and FBA SKUs.</p>';
+    container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:12px 0;">No SKU mappings configured. Add mappings below to link ShipMonk and FBA SKUs.</p>';
     return;
   }
   
@@ -773,7 +774,7 @@ function addSkuMapping() {
   const fbaSku = document.getElementById('newMapFbaSku').value;
   
   if (!sfSku || !fbaSku) {
-    alert('Please select both a ShipFusion SKU and an FBA SKU');
+    alert('Please select both a ShipMonk SKU and an FBA SKU');
     return;
   }
   
