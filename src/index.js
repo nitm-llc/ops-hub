@@ -3439,7 +3439,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
 .app-name{font-size:17px;font-weight:700}
 .app-desc{font-size:13px;color:#64748b;text-align:center}
 @media(max-width:600px){.app-grid{grid-template-columns:1fr}.hub-title{font-size:28px}}
-</style></head><body>
+</style><script defer src="/shared/nav.js"></script></head><body>
 <nav class="top-nav">
   <span class="brand">NITM Ops</span>
   <a href="/" class="active">Hub</a>
