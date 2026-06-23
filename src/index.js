@@ -3424,51 +3424,61 @@ function landingPageHTML() {
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-height:100vh}
-.top-nav{background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #1e293b}
-.top-nav .brand{color:#f1f5f9;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px}
-.top-nav a{color:#64748b;text-decoration:none;font-size:13px;font-weight:500;transition:color 0.15s}
-.top-nav a:hover,.top-nav a.active{color:#f1f5f9}
-.hub-wrap{display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 49px);padding:40px 20px}
-.hub{text-align:center;max-width:760px;width:100%}
-.hub-title{font-size:36px;font-weight:700;letter-spacing:-0.5px;margin-bottom:44px}
-.app-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;max-width:680px;margin:0 auto}
-.app-card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:36px 24px;text-decoration:none;color:#f1f5f9;transition:all 0.2s;display:flex;flex-direction:column;align-items:center;gap:10px}
-.app-card:hover{background:#1e293b;border-color:#334155;transform:translateY(-2px)}
-.app-icon{font-size:40px}
-.app-name{font-size:17px;font-weight:700}
-.app-desc{font-size:13px;color:#64748b;text-align:center}
-@media(max-width:600px){.app-grid{grid-template-columns:1fr}.hub-title{font-size:28px}}
+body{background:#f7f7f5;color:#111827;font-family:'DM Sans',system-ui,-apple-system,sans-serif;min-height:100vh}
+.hub-wrap{max-width:1080px;margin:0 auto;padding:48px 24px 80px}
+.hub-head{margin-bottom:40px}
+.hub-title{font-size:30px;font-weight:700;letter-spacing:-0.4px;color:#111827}
+.hub-sub{font-size:15px;color:#6b7280;margin-top:6px}
+.hub-section{margin-bottom:34px}
+.hub-section-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:#9ca3af;margin-bottom:14px}
+.app-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:14px}
+.app-card{background:#fff;border:1px solid #e7e7e3;border-radius:14px;padding:18px;text-decoration:none;color:#111827;transition:all .15s;display:flex;align-items:flex-start;gap:14px}
+.app-card:hover{border-color:#c7ccd3;box-shadow:0 4px 14px rgba(17,24,39,0.06);transform:translateY(-2px)}
+.app-icon{font-size:26px;line-height:1;flex:0 0 auto}
+.app-text{display:flex;flex-direction:column;gap:3px}
+.app-name{font-size:15px;font-weight:600;color:#111827}
+.app-desc{font-size:13px;color:#6b7280;line-height:1.4}
+@media(max-width:600px){.app-grid{grid-template-columns:1fr}.hub-title{font-size:24px}}
 </style><script defer src="/shared/nav.js"></script></head><body>
-<nav class="top-nav">
-  <span class="brand">NITM Ops</span>
-  <a href="/" class="active">Hub</a>
-  <a href="/calendar/">Calendar</a>
-  <a href="/inventory/">Inventory</a>
-  <a href="/3pl/">3PL</a>
-  <a href="/tracker/">Tracker</a>
-  <a href="/ambassadors/">Ambassadors</a>
-  <a href="/cx-agent/">CX Agent</a>
-  <a href="/icp/">ICP</a>
-  <a href="/growth/">Growth</a>
-  <a href="/stage/">Stage Timing</a>
-  <a href="/campaign-router/">Campaign Router</a>
-</nav>
 <div class="hub-wrap">
-<div class="hub">
-  <h1 class="hub-title">Operations Hub</h1>
-  <div class="app-grid">
-    <a href="/calendar/" class="app-card"><div class="app-icon">\u{1F4C5}</div><div class="app-name">Content Calendar</div><div class="app-desc">Social media scheduling & tracking</div></a>
-    <a href="/inventory/" class="app-card"><div class="app-icon">\u{1F4CA}</div><div class="app-name">Inventory Dashboard</div><div class="app-desc">Stock levels, orders & forecasting</div></a>
-    <a href="/3pl/" class="app-card"><div class="app-icon">\u{1F4E6}</div><div class="app-name">3PL Dashboard</div><div class="app-desc">Warehouse & fulfillment</div></a>
-    <a href="/tracker/" class="app-card"><div class="app-icon">\u{1F3AF}</div><div class="app-name">Content Tracker</div><div class="app-desc">IG performance scoring & attribution</div></a>
-    <a href="/ambassadors/" class="app-card"><div class="app-icon">\u{1F91D}</div><div class="app-name">Ambassadors</div><div class="app-desc">Ambassador sales & commission tracking</div></a>
-    <a href="/cx-agent/" class="app-card"><div class="app-icon">\u{1F916}</div><div class="app-name">CX Agent</div><div class="app-desc">AI customer support automation</div></a>
-    <a href="/icp/" class="app-card"><div class="app-icon">\u{1F3AF}</div><div class="app-name">ICP Analytics</div><div class="app-desc">Klaviyo segment + product analysis</div></a>
-    <a href="/growth/" class="app-card"><div class="app-icon">\u{1F4C8}</div><div class="app-name">List Growth</div><div class="app-desc">Which Klaviyo lists are popping off</div></a>
-    <a href="/stage/" class="app-card"><div class="app-icon">\u{23F1}</div><div class="app-name">Stage Timing</div><div class="app-desc">How long tasks sit in each stage</div></a>
-    <a href="/campaign-router/" class="app-card"><div class="app-icon">\u{1F4E8}</div><div class="app-name">Campaign Router</div><div class="app-desc">Mutually-exclusive Klaviyo segments per send</div></a>
+  <div class="hub-head">
+    <h1 class="hub-title">NITM Operations Hub</h1>
+    <p class="hub-sub">Every tool to run the business, in one place. Pick where you're headed.</p>
   </div>
-</div>
+
+  <div class="hub-section">
+    <div class="hub-section-label">Content &amp; Social</div>
+    <div class="app-grid">
+      <a href="/calendar/" class="app-card"><div class="app-icon">\u{1F4C5}</div><div class="app-text"><div class="app-name">Content Calendar</div><div class="app-desc">Plan &amp; schedule social posts (ClickUp)</div></div></a>
+      <a href="/tracker/" class="app-card"><div class="app-icon">\u{1F3AF}</div><div class="app-text"><div class="app-name">Content Tracker</div><div class="app-desc">Instagram performance &amp; scoring</div></div></a>
+      <a href="/social/" class="app-card"><div class="app-icon">\u{1F4F1}</div><div class="app-text"><div class="app-name">Social Attribution</div><div class="app-desc">Tie revenue back to social posts</div></div></a>
+      <a href="/stage/" class="app-card"><div class="app-icon">\u{23F1}</div><div class="app-text"><div class="app-name">Stage Timing</div><div class="app-desc">How long tasks sit in each stage</div></div></a>
+    </div>
+  </div>
+
+  <div class="hub-section">
+    <div class="hub-section-label">Email &amp; Klaviyo</div>
+    <div class="app-grid">
+      <a href="/growth/" class="app-card"><div class="app-icon">\u{1F4C8}</div><div class="app-text"><div class="app-name">List Growth</div><div class="app-desc">Which Klaviyo lists are growing</div></div></a>
+      <a href="/icp/" class="app-card"><div class="app-icon">\u{1F50D}</div><div class="app-text"><div class="app-name">ICP Analytics</div><div class="app-desc">Klaviyo segment + product analysis</div></div></a>
+      <a href="/campaign-router/" class="app-card"><div class="app-icon">\u{1F4E8}</div><div class="app-text"><div class="app-name">Campaign Router</div><div class="app-desc">Build no-overlap Klaviyo sends</div></div></a>
+    </div>
+  </div>
+
+  <div class="hub-section">
+    <div class="hub-section-label">Inventory &amp; Fulfillment</div>
+    <div class="app-grid">
+      <a href="/inventory/" class="app-card"><div class="app-icon">\u{1F4CA}</div><div class="app-text"><div class="app-name">Inventory Dashboard</div><div class="app-desc">Stock levels, orders &amp; forecasting</div></div></a>
+      <a href="/3pl/" class="app-card"><div class="app-icon">\u{1F4E6}</div><div class="app-text"><div class="app-name">3PL Dashboard</div><div class="app-desc">Warehouse &amp; fulfillment</div></div></a>
+    </div>
+  </div>
+
+  <div class="hub-section">
+    <div class="hub-section-label">Customers &amp; Partners</div>
+    <div class="app-grid">
+      <a href="/cx-agent/" class="app-card"><div class="app-icon">\u{1F916}</div><div class="app-text"><div class="app-name">CX Agent</div><div class="app-desc">AI customer support automation</div></div></a>
+      <a href="/ambassadors/" class="app-card"><div class="app-icon">\u{1F91D}</div><div class="app-text"><div class="app-name">Ambassadors</div><div class="app-desc">Ambassador sales &amp; commission tracking</div></div></a>
+    </div>
+  </div>
 </div></body></html>`;
 }
