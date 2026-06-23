@@ -8,13 +8,13 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg-primary: #0a0f1a;
-  --bg-secondary: #111827;
-  --bg-tertiary: #1e293b;
-  --border: #1f2937;
-  --border-light: #334155;
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
+  --bg-primary: #f7f7f5;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f1f3f5;
+  --border: #e7e7e3;
+  --border-light: #d6dae0;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
   --text-muted: #64748b;
   --accent: #3b82f6;
   --success: #10b981;
@@ -84,11 +84,11 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 .dist-vegas { background: var(--vegas); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 700; min-width: 30px; }
 
 .balance-badge { display: inline-flex; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
-.balance-balanced { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+.balance-balanced { background: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); }
 .balance-chi-heavy { background: rgba(249, 115, 22, 0.15); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.3); }
 .balance-vegas-heavy { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
-.balance-vegas-empty { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-.balance-chi-empty { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+.balance-vegas-empty { background: rgba(239, 68, 68, 0.15); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.3); }
+.balance-chi-empty { background: rgba(239, 68, 68, 0.15); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.3); }
 
 .fba-value { color: var(--fba); font-weight: 600; }
 .fba-days { font-size: 11px; margin-top: 2px; }
@@ -162,7 +162,7 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 </head>
 <body>
 
-<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #1e293b;font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:#f1f5f9;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#f1f5f9;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
+<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #f1f3f5;font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:#111827;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#111827;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
 
 <header class="header">
   <h1 class="app-title">Inventory Dashboard</h1>

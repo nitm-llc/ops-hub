@@ -6,10 +6,10 @@
   <title>NITM Content Tracker</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0c0e12; }
+    body { background: #f7f7f5; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #14171e; }
-    ::-webkit-scrollbar-thumb { background: #242832; border-radius: 3px; }
+    ::-webkit-scrollbar-track { background: #ffffff; }
+    ::-webkit-scrollbar-thumb { background: #e7e7e3; border-radius: 3px; }
     input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
   </style>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -55,7 +55,7 @@ const autoClassify = (post) => {
   return { intent:'grow', cta:'', confidence:'low', reason:'Default' };
 };
 
-const C = { bg:'#0c0e12', card:'#14171e', border:'#242832', text:'#e2e4e9', dim:'#7a7f8e', muted:'#4e5362', accent:'#3b82f6', green:'#22c55e', amber:'#f59e0b', red:'#ef4444', purple:'#a78bfa', teal:'#2dd4bf' };
+const C = { bg:'#f7f7f5', card:'#ffffff', border:'#e7e7e3', text:'#e2e4e9', dim:'#6b7280', muted:'#6b7280', accent:'#3b82f6', green:'#22c55e', amber:'#f59e0b', red:'#ef4444', purple:'#a78bfa', teal:'#2dd4bf' };
 const intentC = { sell:C.green, grow:C.accent };
 const ctaC = { hard:C.red, soft:C.amber, none:C.muted };
 const confC = { high:C.green, medium:C.amber, low:C.red };

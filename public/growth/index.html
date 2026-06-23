@@ -6,83 +6,83 @@
   <title>NITM List Growth</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0a0f1a; color: #f1f5f9; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; min-height: 100vh; }
-    .top-nav { background: linear-gradient(180deg,#1a2332 0%,#141c28 100%); padding: 12px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 1px solid #1e293b; }
-    .top-nav .brand { color: #f1f5f9; font-weight: 700; font-size: 14px; text-decoration: none; letter-spacing: 0.5px; }
+    body { background: #f7f7f5; color: #111827; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; min-height: 100vh; }
+    .top-nav { background: linear-gradient(180deg,#1a2332 0%,#141c28 100%); padding: 12px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 1px solid #f1f3f5; }
+    .top-nav .brand { color: #111827; font-weight: 700; font-size: 14px; text-decoration: none; letter-spacing: 0.5px; }
     .top-nav a { color: #64748b; text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.15s; }
-    .top-nav a:hover, .top-nav a.active { color: #f1f5f9; }
+    .top-nav a:hover, .top-nav a.active { color: #111827; }
     .wrap { max-width: 1400px; margin: 0 auto; padding: 32px 24px 80px; }
     h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 8px; }
     .subtitle { color: #64748b; font-size: 14px; margin-bottom: 28px; }
-    .panel { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
-    .panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #e2e8f0; }
+    .panel { background: #ffffff; border: 1px solid #e7e7e3; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+    .panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #111827; }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    button { background: #334155; color: #f1f5f9; border: none; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; font-family: inherit; }
-    button:hover:not(:disabled) { background: #475569; }
+    button { background: #d6dae0; color: #111827; border: none; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; font-family: inherit; }
+    button:hover:not(:disabled) { background: #c7ccd3; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.primary { background: #2563eb; }
+    button.primary { background: #2563eb; color: #fff; }
     button.primary:hover:not(:disabled) { background: #1d4ed8; }
     button.small { padding: 6px 12px; font-size: 12px; }
-    select, input { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: inherit; }
+    select, input { background: #f1f3f5; color: #111827; border: 1px solid #d6dae0; padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: inherit; }
     input[type="text"] { width: 100%; max-width: 280px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 10px 12px; background: #1e293b; color: #94a3b8; font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid #334155; position: sticky; top: 0; cursor: pointer; user-select: none; }
-    th:hover { color: #cbd5e1; }
-    td { padding: 10px 12px; border-bottom: 1px solid #1e293b; color: #cbd5e1; vertical-align: middle; }
-    tr:hover td { background: #161e2e; }
+    th { text-align: left; padding: 10px 12px; background: #f1f3f5; color: #6b7280; font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid #d6dae0; position: sticky; top: 0; cursor: pointer; user-select: none; }
+    th:hover { color: #374151; }
+    td { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; color: #374151; vertical-align: middle; }
+    tr:hover td { background: #f3f4f6; }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .pct { color: #94a3b8; font-size: 12px; }
-    .pct.positive { color: #34d399; }
-    .pct.negative { color: #f87171; }
+    .pct { color: #6b7280; font-size: 12px; }
+    .pct.positive { color: #059669; }
+    .pct.negative { color: #dc2626; }
     .status-line { font-size: 12px; color: #64748b; margin-top: 8px; }
-    .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid #1f2937; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid #e7e7e3; }
     .tab { padding: 10px 16px; cursor: pointer; color: #64748b; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s; }
-    .tab.active { color: #f1f5f9; border-bottom-color: #2563eb; }
-    .tab:hover { color: #cbd5e1; }
+    .tab.active { color: #111827; border-bottom-color: #2563eb; }
+    .tab:hover { color: #374151; }
     .empty { text-align: center; padding: 60px 20px; color: #64748b; }
-    .error { background: #2d1414; border: 1px solid #7f1d1d; color: #fca5a5; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; font-family: monospace; word-break: break-word; }
-    .warning { background: #2d2414; border: 1px solid #7f5a1d; color: #fcd34d; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+    .error { background: #fdeaea; border: 1px solid #f5c2c2; color: #b42318; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; font-family: monospace; word-break: break-word; }
+    .warning { background: #fdf6e3; border: 1px solid #f5e0a3; color: #92610a; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
     .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-    .stat { background: #1e293b; padding: 16px; border-radius: 8px; }
+    .stat { background: #f1f3f5; padding: 16px; border-radius: 8px; }
     .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin-bottom: 6px; }
-    .stat-value { font-size: 22px; font-weight: 700; color: #f1f5f9; font-variant-numeric: tabular-nums; }
-    .badge { display: inline-block; background: #1e293b; color: #94a3b8; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
-    .badge.lead_magnet { background: #14342d; color: #6ee7b7; }
-    .badge.purchaser { background: #1e2a3d; color: #93c5fd; }
-    .badge.system { background: #2a2a3d; color: #c4b5fd; }
-    .badge.other { background: #1e293b; color: #94a3b8; }
+    .stat-value { font-size: 22px; font-weight: 700; color: #111827; font-variant-numeric: tabular-nums; }
+    .badge { display: inline-block; background: #f1f3f5; color: #6b7280; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+    .badge.lead_magnet { background: #dcfce7; color: #15803d; }
+    .badge.purchaser { background: #dbeafe; color: #1d4ed8; }
+    .badge.system { background: #ede9fe; color: #6d28d9; }
+    .badge.other { background: #f1f3f5; color: #6b7280; }
     /* Pill filter bar above the leaderboard */
     .pill-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-    .pill { background: #1e293b; color: #94a3b8; border: 1px solid #334155; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: inherit; display: inline-flex; align-items: center; gap: 6px; }
-    .pill:hover { background: #283447; color: #cbd5e1; }
-    .pill.active { background: #2563eb; color: #f1f5f9; border-color: #3b82f6; }
+    .pill { background: #f1f3f5; color: #6b7280; border: 1px solid #d6dae0; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: inherit; display: inline-flex; align-items: center; gap: 6px; }
+    .pill:hover { background: #e7eaee; color: #374151; }
+    .pill.active { background: #2563eb; color: #fff; border-color: #2563eb; }
     .pill .pill-count { background: rgba(0,0,0,0.25); color: inherit; padding: 1px 6px; border-radius: 8px; font-size: 11px; font-variant-numeric: tabular-nums; }
     .pill.active .pill-count { background: rgba(255,255,255,0.18); }
     /* Manage categories panel */
-    .cat-manage { background: #161e2e; border: 1px solid #1f2937; border-radius: 8px; padding: 14px; margin-bottom: 16px; }
-    .cat-manage h3 { font-size: 13px; font-weight: 600; color: #cbd5e1; margin-bottom: 10px; }
-    .cat-chip { display: inline-flex; align-items: center; gap: 6px; background: #1e293b; border: 1px solid #334155; color: #cbd5e1; padding: 4px 8px 4px 10px; border-radius: 6px; font-size: 12px; margin: 0 6px 6px 0; }
+    .cat-manage { background: #f3f4f6; border: 1px solid #e7e7e3; border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+    .cat-manage h3 { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 10px; }
+    .cat-chip { display: inline-flex; align-items: center; gap: 6px; background: #f1f3f5; border: 1px solid #d6dae0; color: #374151; padding: 4px 8px 4px 10px; border-radius: 6px; font-size: 12px; margin: 0 6px 6px 0; }
     .cat-chip .cat-count { color: #64748b; font-size: 11px; }
-    .cat-chip .cat-del { background: transparent; color: #f87171; border: none; padding: 0 4px; cursor: pointer; font-size: 14px; line-height: 1; }
-    .cat-chip .cat-del:hover { color: #fca5a5; }
-    .cat-chip .cat-del:disabled { color: #475569; cursor: not-allowed; }
-    .cat-chip.default { background: #14342d; border-color: #14532d; }
-    .cat-chip.default .cat-count { color: #6ee7b7; opacity: 0.7; }
-    .label-input { background: #1e293b; border: 1px solid #334155; color: #f1f5f9; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; width: 100%; max-width: 240px; }
-    .category-select { background: #1e293b; border: 1px solid #334155; color: #f1f5f9; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; }
+    .cat-chip .cat-del { background: transparent; color: #dc2626; border: none; padding: 0 4px; cursor: pointer; font-size: 14px; line-height: 1; }
+    .cat-chip .cat-del:hover { color: #b42318; }
+    .cat-chip .cat-del:disabled { color: #c7ccd3; cursor: not-allowed; }
+    .cat-chip.default { background: #dcfce7; border-color: #bbf7d0; }
+    .cat-chip.default .cat-count { color: #15803d; opacity: 0.7; }
+    .label-input { background: #f1f3f5; border: 1px solid #d6dae0; color: #111827; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; width: 100%; max-width: 240px; }
+    .category-select { background: #f1f3f5; border: 1px solid #d6dae0; color: #111827; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-family: inherit; }
     .help { font-size: 12px; color: #64748b; line-height: 1.5; margin-top: 12px; }
-    .help code { background: #1e293b; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+    .help code { background: #f1f3f5; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
     .loading { color: #64748b; padding: 20px; text-align: center; font-size: 13px; }
     .movers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .mover-card { background: #1a1f2e; border: 1px solid #1f2937; border-radius: 8px; padding: 14px; }
-    .mover-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: #cbd5e1; }
-    .mover-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1f2937; font-size: 12px; }
+    .mover-card { background: #ffffff; border: 1px solid #e7e7e3; border-radius: 8px; padding: 14px; }
+    .mover-card h3 { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: #374151; }
+    .mover-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #e7e7e3; font-size: 12px; }
     .mover-row:last-child { border-bottom: none; }
-    .mover-name { color: #cbd5e1; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mover-name { color: #374151; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .chart-container { width: 100%; height: 320px; position: relative; }
     .sparkline { display: inline-block; vertical-align: middle; }
     .caveat-toggle { color: #64748b; font-size: 12px; cursor: pointer; text-decoration: underline; }
-    .caveat-toggle:hover { color: #94a3b8; }
+    .caveat-toggle:hover { color: #6b7280; }
     @media(max-width:900px){ .movers-grid{grid-template-columns:1fr} }
     @media(max-width:700px){ .wrap{padding:20px 12px 60px} .panel{padding:16px} h1{font-size:22px} }
   </style>
@@ -106,7 +106,7 @@
     <a href="/growth/" class="active">Growth</a>
   </nav>
   <div id="root"></div>
-  <div id="boot-error" style="display:none;padding:24px;color:#fca5a5;font-family:monospace;font-size:12px;white-space:pre-wrap;"></div>
+  <div id="boot-error" style="display:none;padding:24px;color:#b42318;font-family:monospace;font-size:12px;white-space:pre-wrap;"></div>
 
 <script>
 // Surface any boot-time errors so we don't get a blank page silently.
@@ -263,8 +263,8 @@ function Leaderboard({ days, setDays, category, setCategory, categories, refresh
       {data && data.rows.length === 0 && <div className="empty">No subscription data yet. Run a backfill to populate.</div>}
       {data && data.rows.length > 0 && (
         <>
-          <div style={{marginBottom:12,fontSize:13,color:"#94a3b8"}}>
-            <strong style={{color:"#f1f5f9"}}>{fmtNum(data.total_subs)}</strong> total new subs across <strong style={{color:"#f1f5f9"}}>{data.rows.length}</strong> lists{category ? <> in <span className={"badge " + category}>{category}</span></> : null} · window {data.window_start} → {data.window_end}
+          <div style={{marginBottom:12,fontSize:13,color:"#6b7280"}}>
+            <strong style={{color:"#111827"}}>{fmtNum(data.total_subs)}</strong> total new subs across <strong style={{color:"#111827"}}>{data.rows.length}</strong> lists{category ? <> in <span className={"badge " + category}>{category}</span></> : null} · window {data.window_start} → {data.window_end}
           </div>
           <div style={{overflowX:"auto"}}>
             <table>
@@ -282,7 +282,7 @@ function Leaderboard({ days, setDays, category, setCategory, categories, refresh
                 {sorted.map(r => (
                   <tr key={r.list_name}>
                     <td>
-                      <div style={{fontWeight:500,color:"#f1f5f9"}}>{r.label}</div>
+                      <div style={{fontWeight:500,color:"#111827"}}>{r.label}</div>
                       {r.label !== r.list_name && <div style={{fontSize:11,color:"#64748b"}}>{r.list_name}</div>}
                     </td>
                     <td><span className={"badge " + (r.category || 'other')}>{r.category || 'other'}</span></td>
@@ -403,7 +403,7 @@ function GrowthChart({ days }) {
           {/* Grid + Y ticks */}
           {ticks.map((t, i) => (
             <g key={i}>
-              <line x1={P.left} x2={W - P.right} y1={t.y} y2={t.y} stroke="#1f2937" strokeDasharray="3 3" />
+              <line x1={P.left} x2={W - P.right} y1={t.y} y2={t.y} stroke="#e7e7e3" strokeDasharray="3 3" />
               <text x={P.left - 8} y={t.y + 4} textAnchor="end" fill="#64748b" fontSize="11">{Math.round(t.v).toLocaleString()}</text>
             </g>
           ))}
@@ -428,7 +428,7 @@ function GrowthChart({ days }) {
           ))}
           {/* Hover indicator */}
           {hover && (
-            <line x1={hover.x} x2={hover.x} y1={P.top} y2={P.top + innerH} stroke="#475569" strokeDasharray="2 2" />
+            <line x1={hover.x} x2={hover.x} y1={P.top} y2={P.top + innerH} stroke="#c7ccd3" strokeDasharray="2 2" />
           )}
         </svg>
         {hover && (
@@ -436,18 +436,18 @@ function GrowthChart({ days }) {
             position:"absolute",
             left: Math.min(hover.x + 12, W - 260),
             top: 16,
-            background:"#1e293b",
-            border:"1px solid #334155",
+            background:"#f1f3f5",
+            border:"1px solid #d6dae0",
             borderRadius:"6px",
             padding:"10px 12px",
             fontSize:"12px",
-            color:"#cbd5e1",
+            color:"#374151",
             pointerEvents:"none",
             minWidth:"220px",
             zIndex:10,
           }}>
-            <div style={{color:"#f1f5f9",fontWeight:600,marginBottom:6}}>{hover.row.date}</div>
-            <div style={{color:"#94a3b8",marginBottom:6,fontSize:11}}>Total: {fmtNum(hover.row.total)}</div>
+            <div style={{color:"#111827",fontWeight:600,marginBottom:6}}>{hover.row.date}</div>
+            <div style={{color:"#6b7280",marginBottom:6,fontSize:11}}>Total: {fmtNum(hover.row.total)}</div>
             {hover.row.layers.slice().reverse().filter(l => l.value > 0).map(l => {
               const li = keys.findIndex(k => k.key === l.key);
               return (
@@ -464,7 +464,7 @@ function GrowthChart({ days }) {
         )}
       </div>
       {/* Legend */}
-      <div style={{display:"flex",flexWrap:"wrap",gap:12,marginTop:12,fontSize:11,color:"#94a3b8"}}>
+      <div style={{display:"flex",flexWrap:"wrap",gap:12,marginTop:12,fontSize:11,color:"#6b7280"}}>
         {keys.map((k, i) => (
           <div key={k.key} style={{display:"flex",alignItems:"center",gap:6,maxWidth:240}}>
             <span style={{width:10,height:10,background:COLORS[i % COLORS.length],borderRadius:2,flexShrink:0}}></span>
@@ -492,7 +492,7 @@ function Movers() {
             <div className="mover-row" key={m.list_name}>
               <span className="mover-name" title={m.list_name}>{m.label}</span>
               <span>
-                <span style={{color:"#cbd5e1"}}>{fmtNum(m.prev_subs)} → {fmtNum(m.curr_subs)}</span>
+                <span style={{color:"#374151"}}>{fmtNum(m.prev_subs)} → {fmtNum(m.curr_subs)}</span>
                 <span className="pct positive" style={{marginLeft:8}}>
                   {m.pct_change != null ? `+${fmtPct(m.pct_change)}` : "new"}
                 </span>
@@ -507,7 +507,7 @@ function Movers() {
             <div className="mover-row" key={m.list_name}>
               <span className="mover-name" title={m.list_name}>{m.label}</span>
               <span>
-                <span style={{color:"#cbd5e1"}}>{fmtNum(m.prev_subs)} → {fmtNum(m.curr_subs)}</span>
+                <span style={{color:"#374151"}}>{fmtNum(m.prev_subs)} → {fmtNum(m.curr_subs)}</span>
                 <span className="pct negative" style={{marginLeft:8}}>
                   {m.pct_change != null ? fmtPct(m.pct_change) : ""}
                 </span>
@@ -681,7 +681,7 @@ function RegistryRow({ list, categories, onSave, saving }) {
 
   return (
     <tr>
-      <td><div style={{fontSize:12,color:"#cbd5e1"}}>{list.name}</div></td>
+      <td><div style={{fontSize:12,color:"#374151"}}>{list.name}</div></td>
       <td>
         <input className="label-input" type="text" placeholder="(optional)" value={label} onChange={e => setLabel(e.target.value)} />
       </td>
@@ -742,7 +742,7 @@ function App() {
       <div className="subtitle">Which Klaviyo lists are pulling, by gross new subscribers.</div>
 
       {syncMsg && (
-        <div className={syncMsg.ok ? "warning" : "error"} style={syncMsg.ok ? {borderColor:"#14532d",background:"#14342d",color:"#86efac"} : null}>
+        <div className={syncMsg.ok ? "warning" : "error"} style={syncMsg.ok ? {borderColor:"#bbf7d0",background:"#dcfce7",color:"#86efac"} : null}>
           {syncMsg.text}
         </div>
       )}
