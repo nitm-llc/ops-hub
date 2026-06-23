@@ -3424,6 +3424,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
   <a href="/icp/">ICP</a>
   <a href="/growth/">Growth</a>
   <a href="/stage/">Stage Timing</a>
+  <a href="/campaign-router/">Campaign Router</a>
 </nav>
 <div class="hub-wrap">
 <div class="hub">
@@ -3438,6 +3439,7 @@ body{background:#0a0f1a;color:#f1f5f9;font-family:'DM Sans',sans-serif;min-heigh
     <a href="/icp/" class="app-card"><div class="app-icon">\u{1F3AF}</div><div class="app-name">ICP Analytics</div><div class="app-desc">Klaviyo segment + product analysis</div></a>
     <a href="/growth/" class="app-card"><div class="app-icon">\u{1F4C8}</div><div class="app-name">List Growth</div><div class="app-desc">Which Klaviyo lists are popping off</div></a>
     <a href="/stage/" class="app-card"><div class="app-icon">\u{23F1}</div><div class="app-name">Stage Timing</div><div class="app-desc">How long tasks sit in each stage</div></a>
+    <a href="/campaign-router/" class="app-card"><div class="app-icon">\u{1F4E8}</div><div class="app-name">Campaign Router</div><div class="app-desc">Mutually-exclusive Klaviyo segments per send</div></a>
   </div>
 </div>
 </div></body></html>`;

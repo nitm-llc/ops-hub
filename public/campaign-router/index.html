@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campaign Audience Router — NITM Ops</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #f7f7f5; color: #1a1a1a; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; min-height: 100vh; }
+    .top-nav { background: linear-gradient(180deg,#1a2332 0%,#141c28 100%); padding: 12px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 1px solid #1e293b; flex-wrap: wrap; }
+    .top-nav .brand { color: #f1f5f9; font-weight: 700; font-size: 14px; text-decoration: none; letter-spacing: 0.5px; }
+    .top-nav a { color: #64748b; text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.15s; }
+    .top-nav a:hover, .top-nav a.active { color: #f1f5f9; }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 80px; }
+    .page-title { font-size: 24px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 6px; }
+    .page-sub { color: #6b7280; font-size: 14px; margin-bottom: 28px; }
+    .card-host { background: #fff; border: 1px solid #e7e7e3; border-radius: 16px; padding: 28px; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav">
+    <span class="brand">NITM Ops</span>
+    <a href="/">Hub</a>
+    <a href="/calendar/">Calendar</a>
+    <a href="/inventory/">Inventory</a>
+    <a href="/3pl/">3PL</a>
+    <a href="/tracker/">Tracker</a>
+    <a href="/ambassadors/">Ambassadors</a>
+    <a href="/cx-agent/">CX Agent</a>
+    <a href="/icp/">ICP</a>
+    <a href="/growth/">Growth</a>
+    <a href="/stage/">Stage Timing</a>
+    <a href="/campaign-router/" class="active">Campaign Router</a>
+  </nav>
+
+  <div class="wrap">
+    <h1 class="page-title">Campaign Audience Router</h1>
+    <p class="page-sub">Pick the audiences a campaign is going to, rank them by priority, and get mutually-exclusive Klaviyo segment definitions plus a "Don't send to" list — one email per person across the whole campaign.</p>
+    <div class="card-host">
+      <div id="root"></div>
+    </div>
+  </div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel" data-presets="react">
+const { useState, useMemo } = React;
+
+// CampaignAudienceRouter
+// Drop-in Ops Hub module. Audiences are editable IN the tool — click "Manage
+// audiences" to rename, edit conditions, add, or remove them. The priority logic
+// stays baked in: pick audiences for a campaign, drag to rank, and it generates
+// mutually-exclusive Klaviyo segment definitions + a "Don't send to" list.
+//
+// PERSISTENCE: this version keeps edits in React state for the session. To make
+// edits stick across reloads in the Ops Hub, replace the useState initializer
+// with a fetch from D1 and POST `audiences` back in saveAudiences().
+
+const DEFAULT_AUDIENCES = [
+  { id: "vip", name: "VIP / repeat buyers", color: "#534AB7", bg: "#EEEDFE", condition: "Placed Order → at least 2 times → over all time" },
+  { id: "recent", name: "Recent one-time buyers", color: "#0F6E56", bg: "#E1F5EE", condition: "Placed Order → exactly 1 time → over all time" },
+  { id: "engaged", name: "Engaged non-buyers", color: "#854F0B", bg: "#FAEEDA", condition: "Opened Email → at least once → last 30 days  AND  Placed Order → zero times → over all time" },
+  { id: "cold", name: "Cold / re-engagement", color: "#993C1D", bg: "#FAECE7", condition: "Opened Email → zero times → in the last 30 days" },
+];
+
+const SWATCHES = [
+  { color: "#534AB7", bg: "#EEEDFE" }, { color: "#0F6E56", bg: "#E1F5EE" },
+  { color: "#854F0B", bg: "#FAEEDA" }, { color: "#993C1D", bg: "#FAECE7" },
+  { color: "#185FA5", bg: "#E6F1FB" }, { color: "#993556", bg: "#FBEAF0" },
+  { color: "#3B6D11", bg: "#EAF3DE" }, { color: "#5F5E5A", bg: "#F1EFE8" },
+];
+
+function CopyButton({ text, label = "Copy" }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); })}
+      style={{ fontSize: 13, padding: "5px 12px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", background: "transparent", cursor: "pointer", color: copied ? "#0F6E56" : "inherit", whiteSpace: "nowrap" }}
+    >
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+function CampaignAudienceRouter() {
+  const [audiences, setAudiences] = useState(DEFAULT_AUDIENCES);
+  const [selected, setSelected] = useState(DEFAULT_AUDIENCES.map((a) => a.id));
+  const [dragIdx, setDragIdx] = useState(null);
+  const [campaignName, setCampaignName] = useState("");
+  const [managing, setManaging] = useState(false);
+
+  const byId = useMemo(() => Object.fromEntries(audiences.map((a) => [a.id, a])), [audiences]);
+  const label = { fontSize: 13, color: "rgba(0,0,0,0.55)" };
+
+  const updateAudience = (id, patch) =>
+    setAudiences((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+
+  const addAudience = () => {
+    const sw = SWATCHES[audiences.length % SWATCHES.length];
+    const id = "aud_" + Date.now();
+    setAudiences((prev) => [...prev, { id, name: "New audience", condition: "", ...sw }]);
+    setSelected((prev) => [...prev, id]);
+  };
+
+  const removeAudience = (id) => {
+    setAudiences((prev) => prev.filter((a) => a.id !== id));
+    setSelected((prev) => prev.filter((x) => x !== id));
+  };
+
+  const saveAudiences = () => { setManaging(false); /* fetch('/api/audiences', {method:'POST', body: JSON.stringify(audiences)}) */ };
+
+  const toggle = (id) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const onDrop = (pos) => {
+    if (dragIdx === null || dragIdx === pos) return;
+    setSelected((prev) => { const next = [...prev]; const [m] = next.splice(dragIdx, 1); next.splice(pos, 0, m); return next; });
+    setDragIdx(null);
+  };
+
+  const plan = selected.filter((id) => byId[id]).map((id, i) => ({
+    audience: byId[id], tier: i + 1, excludes: selected.slice(0, i).filter((x) => byId[x]).map((x) => byId[x].name),
+  }));
+
+  const fullExport = () =>
+    (campaignName ? `Campaign: ${campaignName}\n\n` : "") +
+    plan.map((p) => [
+      `SEGMENT ${p.tier}: ${p.audience.name}`,
+      `Definition: ${p.audience.condition || "(define in Klaviyo)"}`,
+      `Don't send to: ${p.excludes.length ? p.excludes.join(", ") : "(nothing — highest priority)"}`,
+    ].join("\n")).join("\n\n");
+
+  if (managing) {
+    return (
+      <div style={{ fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif", maxWidth: 720, lineHeight: 1.6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <p style={{ margin: 0, fontWeight: 500, fontSize: 15, color: "rgba(0,0,0,0.8)" }}>Manage audiences</p>
+          <button onClick={saveAudiences} style={{ fontSize: 13, padding: "6px 14px", borderRadius: 8, border: "1.5px solid #0F6E56", background: "#E1F5EE", color: "#0F6E56", cursor: "pointer", fontWeight: 500 }}>Done</button>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {audiences.map((a) => (
+            <div key={a.id} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+                <input
+                  value={a.name}
+                  onChange={(e) => updateAudience(a.id, { name: e.target.value })}
+                  placeholder="Audience name"
+                  style={{ flex: 1, height: 36, padding: "0 10px", fontSize: 14, fontWeight: 500, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", color: a.color, background: a.bg, boxSizing: "border-box" }}
+                />
+                <button onClick={() => removeAudience(a.id)} aria-label="Remove audience" style={{ height: 36, width: 36, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.18)", background: "transparent", cursor: "pointer", color: "#A32D2D", fontSize: 16 }}>✕</button>
+              </div>
+
+              <textarea
+                value={a.condition}
+                onChange={(e) => updateAudience(a.id, { condition: e.target.value })}
+                placeholder="Klaviyo definition, e.g. Placed Order → at least 2 times → over all time"
+                rows={2}
+                style={{ width: "100%", padding: "8px 10px", fontSize: 13, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.2)", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+              />
+
+              <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                {SWATCHES.map((sw) => (
+                  <button
+                    key={sw.color}
+                    onClick={() => updateAudience(a.id, sw)}
+                    aria-label="Set color"
+                    style={{ width: 24, height: 24, borderRadius: 6, cursor: "pointer", background: sw.bg, border: a.color === sw.color ? "2px solid " + sw.color : "0.5px solid rgba(0,0,0,0.2)" }}
+                  >
+                    <span style={{ display: "block", width: 10, height: 10, borderRadius: 3, background: sw.color, margin: "0 auto" }} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={addAudience} style={{ marginTop: 12, fontSize: 14, padding: "9px 14px", borderRadius: 8, border: "0.5px dashed rgba(0,0,0,0.35)", background: "transparent", cursor: "pointer", width: "100%", color: "rgba(0,0,0,0.7)" }}>+ Add audience</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif", maxWidth: 720, lineHeight: 1.6 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <input
+          value={campaignName}
+          onChange={(e) => setCampaignName(e.target.value)}
+          placeholder="Campaign name (e.g. Nurses Week — flash sale)"
+          style={{ flex: 1, height: 38, padding: "0 12px", fontSize: 14, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", boxSizing: "border-box" }}
+        />
+        <button onClick={() => setManaging(true)} style={{ fontSize: 13, padding: "0 14px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", background: "transparent", cursor: "pointer", whiteSpace: "nowrap" }}>Manage audiences</button>
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <p style={{ ...label, margin: "0 0 8px", fontWeight: 500 }}>1 · Which audiences is this campaign going to?</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+          {audiences.map((a) => {
+            const on = selected.includes(a.id);
+            return (
+              <button key={a.id} onClick={() => toggle(a.id)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 8, cursor: "pointer", border: on ? "1.5px solid " + a.color : "0.5px solid rgba(0,0,0,0.18)", background: on ? a.bg : "transparent", color: on ? a.color : "rgba(0,0,0,0.7)", fontSize: 14, fontWeight: 500 }}>
+                {on ? "✓ " : ""}{a.name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {selected.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <p style={{ ...label, margin: "0 0 8px", fontWeight: 500 }}>2 · Drag to rank priority (top wins when someone qualifies for two)</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {selected.filter((id) => byId[id]).map((id, pos) => {
+              const a = byId[id];
+              return (
+                <div key={id} draggable onDragStart={() => setDragIdx(pos)} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(pos)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 8, cursor: "grab", background: a.bg, border: "0.5px solid " + a.color + "40" }}>
+                  <span style={{ color: a.color, fontSize: 16 }}>⠿</span>
+                  <span style={{ fontSize: 12, fontWeight: 500, color: a.color, minWidth: 44 }}>Tier {pos + 1}</span>
+                  <span style={{ fontSize: 14, fontWeight: 500, color: a.color }}>{a.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {selected.length > 0 && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
+            <p style={{ ...label, margin: 0, fontWeight: 500 }}>3 · Build these in Klaviyo</p>
+            <CopyButton text={fullExport()} label="Copy all" />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {plan.map((p) => (
+              <div key={p.audience.id} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 12, padding: "14px 16px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 500, padding: "2px 8px", borderRadius: 8, background: p.audience.bg, color: p.audience.color }}>Segment {p.tier}</span>
+                  <span style={{ fontSize: 15, fontWeight: 500 }}>{p.audience.name}</span>
+                </div>
+                <div style={{ fontSize: 13, marginBottom: 6 }}>
+                  <span style={label}>Definition: </span>{p.audience.condition || <em style={{ color: "rgba(0,0,0,0.4)" }}>define in Klaviyo</em>}
+                </div>
+                <div style={{ fontSize: 13 }}>
+                  <span style={label}>Don't send to: </span>
+                  {p.excludes.length ? p.excludes.map((e) => (
+                    <span key={e} style={{ fontSize: 12, padding: "1px 7px", marginRight: 4, marginTop: 3, borderRadius: 8, display: "inline-block", background: "#FCEBEB", color: "#A32D2D" }}>{e}</span>
+                  )) : <span style={{ color: "#0F6E56" }}>nothing — highest priority</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p style={{ ...label, marginTop: 16, fontSize: 12 }}>
+            When scheduling each send, set the audience to that segment, then add every "Don't send to" audience in Klaviyo's Don't send to field. That guarantees one email per person across the campaign.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<CampaignAudienceRouter />);
+  </script>
+</body>
+</html>
