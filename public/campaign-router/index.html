@@ -192,7 +192,7 @@ function CampaignAudienceRouter() {
     plan.map((p) => {
       const lines = [
         `EMAIL ${p.tier} — ${p.audience.name}`,
-        `  LIST (send to): ${p.audience.condition || "(define in Klaviyo)"}`,
+        `  LIST (send to): ${p.audience.condition || "(define in Klaviyo)"}${sizeFor(p.audience) != null ? ` (~${fmt(sizeFor(p.audience))} members)` : ""}`,
       ];
       if (p.excludes.length) p.excludes.forEach((e) => lines.push(`  EXCLUDE: ${e.condition || e.name}`));
       else lines.push(`  EXCLUDE: (nothing — highest priority)`);
@@ -319,7 +319,8 @@ function CampaignAudienceRouter() {
                   <span style={{ color: a.color, fontSize: 16 }}>⠿</span>
                   <span style={{ fontSize: 12, fontWeight: 500, color: a.color, minWidth: 44 }}>Tier {pos + 1}</span>
                   <span style={{ fontSize: 14, fontWeight: 500, color: a.color, flex: 1 }}>{a.name}</span>
-                  <span style={{ fontSize: 11, color: a.color, opacity: 0.7 }}>{note}</span>
+                  {sizeFor(a) != null && <span style={{ fontSize: 12, fontWeight: 600, color: a.color }}>{fmt(sizeFor(a))}</span>}
+                  <span style={{ fontSize: 11, color: a.color, opacity: 0.7, minWidth: 92, textAlign: "right" }}>{note}</span>
                 </div>
               );
             })}
