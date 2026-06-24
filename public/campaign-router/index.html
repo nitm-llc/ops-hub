@@ -129,10 +129,17 @@ function CampaignAudienceRouter() {
   useEffect(() => {
     fetch(API)
       .then((r) => r.json())
-      .then((d) => { const a = d.audiences || []; setAudiences(a); setSelected(a.map((x) => x.id)); loadSizes(a); })
+      .then((d) => { const a = d.audiences || []; setAudiences(a); setSelected(a.map((x) => x.id)); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  // Fetch a size for every linked audience that doesn't have one yet — runs on
+  // load and whenever an audience gets linked to a Klaviyo list/segment.
+  useEffect(() => {
+    const missing = audiences.filter((a) => a.klId && a.klType && sizes[a.klId] === undefined);
+    if (missing.length) loadSizes(missing);
+  }, [audiences]);
 
   const sizeFor = (a) => (a && a.klId && sizes[a.klId] != null ? sizes[a.klId] : null);
   const calcNetReach = () => {
