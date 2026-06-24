@@ -69,6 +69,10 @@ const { useState, useMemo, useEffect } = React;
 // Loaded from / saved to: GET|POST /campaign-router/api/audiences
 
 const API = "/campaign-router/api/audiences";
+const OPTIONS_API = "/campaign-router/api/klaviyo-options";
+const SIZES_API = "/campaign-router/api/klaviyo-sizes";
+const NET_API = "/campaign-router/api/klaviyo-net-reach";
+const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString());
 
 const SWATCHES = [
   { color: "#534AB7", bg: "#EEEDFE" }, { color: "#0F6E56", bg: "#E1F5EE" },
@@ -97,15 +101,38 @@ function CampaignAudienceRouter() {
   const [managing, setManaging] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState("");
+  const [klOptions, setKlOptions] = useState([]);   // Klaviyo lists+segments for the picker
+  const [sizes, setSizes] = useState({});           // raw member counts, keyed by Klaviyo id
+  const [netResult, setNetResult] = useState(null); // { tiers:[{net,raw,capped,error}], totalReach }
+  const [netLoading, setNetLoading] = useState(false);
+
+  const loadSizes = (auds) => {
+    const refs = auds.filter((a) => a.klId && a.klType).map((a) => ({ type: a.klType, id: a.klId }));
+    if (!refs.length) return;
+    fetch(SIZES_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ refs }) })
+      .then((r) => r.json()).then((d) => setSizes((s) => ({ ...s, ...(d.sizes || {}) }))).catch(() => {});
+  };
+  const loadKlOptions = () => {
+    if (klOptions.length) return;
+    fetch(OPTIONS_API).then((r) => r.json()).then((d) => setKlOptions(d.options || [])).catch(() => {});
+  };
 
   // Load the shared audience config from D1 on mount; select all by default.
   useEffect(() => {
     fetch(API)
       .then((r) => r.json())
-      .then((d) => { const a = d.audiences || []; setAudiences(a); setSelected(a.map((x) => x.id)); })
+      .then((d) => { const a = d.audiences || []; setAudiences(a); setSelected(a.map((x) => x.id)); loadSizes(a); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const sizeFor = (a) => (a && a.klId && sizes[a.klId] != null ? sizes[a.klId] : null);
+  const calcNetReach = () => {
+    setNetLoading(true); setNetResult(null);
+    const tiers = plan.map((p) => ({ type: p.audience.klType, id: p.audience.klId }));
+    fetch(NET_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiers }) })
+      .then((r) => r.json()).then((d) => setNetResult(d)).catch(() => setNetResult({ error: true })).finally(() => setNetLoading(false));
+  };
 
   const byId = useMemo(() => Object.fromEntries(audiences.map((a) => [a.id, a])), [audiences]);
   const label = { fontSize: 13, color: "rgba(0,0,0,0.55)" };
@@ -128,13 +155,14 @@ function CampaignAudienceRouter() {
   const saveAudiences = () => {
     setSaveState("Saving…");
     fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audiences }) })
-      .then((r) => { if (!r.ok) throw new Error(); setSaveState("Saved ✓"); setManaging(false); setTimeout(() => setSaveState(""), 2000); })
+      .then((r) => { if (!r.ok) throw new Error(); setSaveState("Saved ✓"); setManaging(false); loadSizes(audiences); setTimeout(() => setSaveState(""), 2000); })
       .catch(() => setSaveState("Save failed — try again"));
   };
 
-  const toggle = (id) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const toggle = (id) => { setNetResult(null); setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])); };
   const onDrop = (pos) => {
     if (dragIdx === null || dragIdx === pos) return;
+    setNetResult(null);
     setSelected((prev) => { const next = [...prev]; const [m] = next.splice(dragIdx, 1); next.splice(pos, 0, m); return next; });
     setDragIdx(null);
   };
@@ -195,6 +223,20 @@ function CampaignAudienceRouter() {
                 style={{ width: "100%", padding: "8px 10px", fontSize: 13, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.2)", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
               />
 
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+                <span style={{ ...label, fontSize: 12, minWidth: 110 }}>Klaviyo audience</span>
+                <select
+                  value={a.klId ? `${a.klType}:${a.klId}` : ""}
+                  onChange={(e) => { const v = e.target.value; if (!v) { updateAudience(a.id, { klType: null, klId: null }); return; } const ci = v.indexOf(":"); updateAudience(a.id, { klType: v.slice(0, ci), klId: v.slice(ci + 1) }); }}
+                  style={{ flex: 1, height: 34, fontSize: 13, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", padding: "0 8px", background: "#fff", fontFamily: "inherit" }}
+                >
+                  <option value="">{klOptions.length ? "— Not linked —" : "Loading Klaviyo…"}</option>
+                  <optgroup label="Lists">{klOptions.filter((o) => o.type === "list").map((o) => <option key={o.id} value={`list:${o.id}`}>{o.name}</option>)}</optgroup>
+                  <optgroup label="Segments">{klOptions.filter((o) => o.type === "segment").map((o) => <option key={o.id} value={`segment:${o.id}`}>{o.name}</option>)}</optgroup>
+                </select>
+                {sizeFor(a) != null && <span style={{ fontSize: 12, color: "#0F6E56", fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(sizeFor(a))} ppl</span>}
+              </div>
+
               <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
                 {SWATCHES.map((sw) => (
                   <button
@@ -225,7 +267,7 @@ function CampaignAudienceRouter() {
           placeholder="Campaign name (e.g. Nurses Week — flash sale)"
           style={{ flex: 1, height: 38, padding: "0 12px", fontSize: 14, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", boxSizing: "border-box" }}
         />
-        <button onClick={() => setManaging(true)} style={{ fontSize: 13, padding: "0 14px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", background: "transparent", cursor: "pointer", whiteSpace: "nowrap" }}>Manage audiences</button>
+        <button onClick={() => { setManaging(true); loadKlOptions(); }} style={{ fontSize: 13, padding: "0 14px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", background: "transparent", cursor: "pointer", whiteSpace: "nowrap" }}>Manage audiences</button>
       </div>
 
       <div style={{ marginBottom: 24 }}>
@@ -235,7 +277,7 @@ function CampaignAudienceRouter() {
             const on = selected.includes(a.id);
             return (
               <button key={a.id} onClick={() => toggle(a.id)} style={{ textAlign: "left", padding: "10px 12px", borderRadius: 8, cursor: "pointer", border: on ? "1.5px solid " + a.color : "0.5px solid rgba(0,0,0,0.18)", background: on ? a.bg : "transparent", color: on ? a.color : "rgba(0,0,0,0.7)", fontSize: 14, fontWeight: 500 }}>
-                {on ? "✓ " : ""}{a.name}
+                {on ? "✓ " : ""}{a.name}{sizeFor(a) != null ? ` · ${fmt(sizeFor(a))}` : ""}
               </button>
             );
           })}
@@ -267,7 +309,10 @@ function CampaignAudienceRouter() {
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
             <p style={{ ...label, margin: 0, fontWeight: 500 }}>3 · Hand this to Sam — set up in Klaviyo</p>
-            <CopyButton text={fullExport()} label="Copy all" />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={calcNetReach} disabled={netLoading} style={{ fontSize: 13, padding: "5px 12px", borderRadius: 8, border: "0.5px solid #185FA5", background: "#E6F1FB", color: "#185FA5", cursor: netLoading ? "default" : "pointer", fontWeight: 500, whiteSpace: "nowrap" }}>{netLoading ? "Calculating…" : "Calculate net reach"}</button>
+              <CopyButton text={fullExport()} label="Copy all" />
+            </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {plan.map((p) => (
@@ -278,7 +323,7 @@ function CampaignAudienceRouter() {
                 </div>
                 <div style={{ fontSize: 13, marginBottom: 8, display: "flex", gap: 6 }}>
                   <span style={{ ...label, fontWeight: 600, minWidth: 90 }}>SEND TO:</span>
-                  <span>{p.audience.condition || <em style={{ color: "rgba(0,0,0,0.4)" }}>define list in Klaviyo</em>}</span>
+                  <span>{p.audience.condition || <em style={{ color: "rgba(0,0,0,0.4)" }}>define list in Klaviyo</em>}{sizeFor(p.audience) != null ? <span style={{ color: "#0F6E56", fontWeight: 600 }}> · ~{fmt(sizeFor(p.audience))} members</span> : null}</span>
                 </div>
                 <div style={{ fontSize: 13, display: "flex", gap: 6 }}>
                   <span style={{ ...label, fontWeight: 600, minWidth: 90 }}>DON'T SEND TO:</span>
@@ -288,9 +333,26 @@ function CampaignAudienceRouter() {
                     )) : <span style={{ color: "#0F6E56" }}>nothing — this email is highest priority</span>}
                   </span>
                 </div>
+                {netResult && netResult.tiers && netResult.tiers[p.tier - 1] && (
+                  <div style={{ fontSize: 13, display: "flex", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "0.5px dashed rgba(0,0,0,0.12)" }}>
+                    <span style={{ ...label, fontWeight: 600, minWidth: 90 }}>NET REACH:</span>
+                    <span>
+                      {netResult.tiers[p.tier - 1].error
+                        ? <em style={{ color: "#A32D2D" }}>link this audience to a Klaviyo list/segment</em>
+                        : <span style={{ fontWeight: 600, color: "#185FA5" }}>{fmt(netResult.tiers[p.tier - 1].net)} people get this email{netResult.tiers[p.tier - 1].raw != null ? ` (of ${fmt(netResult.tiers[p.tier - 1].raw)} in the list)` : ""}</span>}
+                      {netResult.tiers[p.tier - 1].capped && <span style={{ color: "#854F0B", fontSize: 11 }}> · capped, audience too large to fully count</span>}
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
+          {netResult && netResult.totalReach != null && (
+            <p style={{ ...label, marginTop: 12, fontSize: 13 }}>Total unique people across all {plan.length} emails: <strong style={{ color: "#185FA5" }}>{fmt(netResult.totalReach)}</strong> — no one gets two.</p>
+          )}
+          {netResult && netResult.error && (
+            <p style={{ ...label, marginTop: 12, fontSize: 13, color: "#A32D2D" }}>Couldn't calculate net reach. Make sure audiences are linked to Klaviyo (in Manage audiences).</p>
+          )}
           <p style={{ ...label, marginTop: 16, fontSize: 12 }}>
             For each email above: in Klaviyo, set the recipient list/segment to the <strong>SEND TO</strong> list, then add every <strong>DON'T SEND TO</strong> list to Klaviyo's "Don't send to" field. That guarantees each person gets exactly one email across the whole campaign.
           </p>

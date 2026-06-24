@@ -3584,6 +3584,72 @@ export default {
         return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
       }
     }
+    // ===== CAMPAIGN ROUTER — KLAVIYO SIZES =====
+    if (path.startsWith("/campaign-router/api/klaviyo")) {
+      const cj = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { "Content-Type": "application/json" } });
+      if (!env.KLAVIYO_API_KEY) return cj({ error: "KLAVIYO_API_KEY not configured" }, 500);
+      // Pull every page of a Klaviyo collection endpoint, following links.next.
+      const klAll = async (startUrl, pageCap = 50) => {
+        const items = []; let next = startUrl; let pages = 0;
+        while (next && pages < pageCap) { const d = await klaviyoFetch(next, env); items.push(...(d.data || [])); next = d.links && d.links.next; pages++; }
+        return { items, capped: !!next };
+      };
+      try {
+        // List every Klaviyo list + segment for the audience picker.
+        if (path === "/campaign-router/api/klaviyo-options") {
+          const [lists, segs] = await Promise.all([
+            klAll(`${KLAVIYO_API}/lists/?page[size]=100`),
+            klAll(`${KLAVIYO_API}/segments/?page[size]=100`),
+          ]);
+          const options = [
+            ...lists.items.map(l => ({ type: "list", id: l.id, name: (l.attributes && l.attributes.name) || l.id })),
+            ...segs.items.map(s => ({ type: "segment", id: s.id, name: (s.attributes && s.attributes.name) || s.id })),
+          ].sort((a, b) => a.name.localeCompare(b.name));
+          return cj({ options });
+        }
+        // Raw member counts for a set of refs: { refs: [{type,id}] }.
+        if (path === "/campaign-router/api/klaviyo-sizes" && request.method === "POST") {
+          const { refs = [] } = await request.json();
+          const sizes = {};
+          await Promise.all(refs.filter(r => r && r.id && r.type).map(async r => {
+            try {
+              const af = `additional-fields[${r.type}]=profile_count`;
+              const d = await klaviyoFetch(`${KLAVIYO_API}/${r.type}s/${r.id}/?${af}`, env);
+              sizes[r.id] = (d.data && d.data.attributes && d.data.attributes.profile_count) ?? null;
+            } catch (e) { sizes[r.id] = null; }
+          }));
+          return cj({ sizes });
+        }
+        // Exact mutually-exclusive net reach. Body: { tiers: [{id,type,name}] } in priority order.
+        if (path === "/campaign-router/api/klaviyo-net-reach" && request.method === "POST") {
+          const { tiers = [] } = await request.json();
+          const seen = new Set();
+          const out = [];
+          let pagesUsed = 0; const GLOBAL_PAGE_CAP = 800; // ~80k profiles across all tiers
+          for (const t of tiers) {
+            if (!t || !t.id || !t.type) { out.push({ id: t && t.id, raw: null, net: null, error: "not linked" }); continue; }
+            const ids = []; let capped = false, error = null;
+            let next = `${KLAVIYO_API}/${t.type}s/${t.id}/profiles/?fields[profile]=id&page[size]=100`;
+            try {
+              while (next) {
+                if (pagesUsed >= GLOBAL_PAGE_CAP) { capped = true; break; }
+                const d = await klaviyoFetch(next, env); pagesUsed++;
+                for (const p of (d.data || [])) ids.push(p.id);
+                next = d.links && d.links.next;
+              }
+            } catch (e) { error = e.message; }
+            let net = 0;
+            for (const id of ids) if (!seen.has(id)) net++;
+            for (const id of ids) seen.add(id);
+            out.push({ id: t.id, raw: ids.length, net, capped, error });
+          }
+          return cj({ tiers: out, totalReach: seen.size });
+        }
+        return cj({ error: "unknown klaviyo route" }, 404);
+      } catch (err) {
+        return cj({ error: err.message }, 500);
+      }
+    }
     // ===== INVENTORY =====
     if (path === "/inventory/api/shipmonk") { return getShipmonkInventory(env); }
     if (path === "/inventory/api/shipfusion") { return handleShipFusionAPI(request, env); }
