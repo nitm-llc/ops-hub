@@ -225,6 +225,7 @@
       <option value="">All</option>
     </select>
     <button class="save-btn" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;" onclick="loadTraining()">Refresh</button>
+    <button id="backfill-btn" class="save-btn" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;margin-left:auto;" onclick="backfillReplies()" title="Pull historical human replies from Zendesk for processed tickets so you can rate them">⤓ Backfill replies</button>
   </div>
 
   <div id="training-list">
@@ -692,6 +693,34 @@ function ratingLabel(r) {
 }
 function ratingClass(r) {
   return ({good:'pill-success', minor:'pill-info', rewrite:'pill-warn', flag:'pill-error'})[r] || 'pill-neutral';
+}
+
+async function backfillReplies() {
+  const btn = document.getElementById('backfill-btn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  let totalProcessed = 0, totalCaptured = 0, cursor = null;
+  try {
+    while (true) {
+      btn.textContent = `⤓ Backfilling… ${totalCaptured} found`;
+      const q = '/training/backfill?batch=20' + (cursor ? '&before_id=' + cursor : '');
+      const r = await api(q, { method: 'POST' });
+      totalProcessed += r.processed || 0;
+      totalCaptured += r.captured || 0;
+      cursor = r.next_cursor;
+      if (!r.processed || !cursor) {
+        toast(`Backfill done — captured ${totalCaptured} replies from ${totalProcessed} tickets scanned`, 'success');
+        break;
+      }
+    }
+  } catch (e) {
+    toast('Backfill stopped: ' + e.message + ` (captured ${totalCaptured} so far)`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⤓ Backfill replies';
+    loadTraining();
+    loadTrainingInsights();
+  }
 }
 
 async function rateReply(replyId, rating) {

@@ -662,7 +662,8 @@ async function initCxAgentTables(db) {
       db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('shopify_store_domain', 'nurseinthemaking.myshopify.com', 'string', 'Shopify store domain'),
       db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('zendesk_subdomain', 'nurseinthemaking', 'string', 'Zendesk subdomain'),
       db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('n8n_code_generation_webhook', 'https://nurseinthemaking.app.n8n.cloud/webhook/shopify-order-paid', 'string', 'n8n webhook for code regeneration'),
-      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('anthropic_model', 'claude-opus-4-7', 'string', 'Claude model'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('anthropic_model', 'claude-opus-4-8', 'string', 'Claude model for drafting/escalation'),
+      db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('classifier_model', 'claude-haiku-4-5-20251001', 'string', 'Cheaper/faster Claude model for intent classification'),
       db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('support_staff_ids', '[29324864593179,16129176780315,32863955019931,14117981153307]', 'json', 'Zendesk support staff IDs'),
       db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('max_order_age_days', '90', 'number', 'Max age (days) of orders the agent will auto-respond about'),
       db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind('require_email_match', 'true', 'boolean', 'If true, require Zendesk email matches Shopify order email (unless order number in ticket)'),
@@ -702,6 +703,18 @@ async function initCxAgentTables(db) {
         arr.push('social_engagement');
         await db.prepare("UPDATE agent_config SET value = ?, updated_at = datetime('now') WHERE key = 'suggested_intents'").bind(JSON.stringify(arr)).run();
       }
+    }
+  } catch {}
+
+  // v4.6 migration: model split + Opus 4.8 upgrade.
+  // - Bump anthropic_model 4.7 -> 4.8, but ONLY if still the old default (never clobber a manual choice).
+  // - Add classifier_model (Haiku) so classification stops paying Opus rates.
+  try {
+    await db.prepare("UPDATE agent_config SET value = 'claude-opus-4-8', updated_at = datetime('now') WHERE key = 'anthropic_model' AND value = 'claude-opus-4-7'").run();
+    const hasClassifier = await db.prepare("SELECT 1 FROM agent_config WHERE key = 'classifier_model'").first();
+    if (!hasClassifier) {
+      await db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)")
+        .bind('classifier_model', 'claude-haiku-4-5-20251001', 'string', 'Cheaper/faster Claude model for intent classification').run();
     }
   } catch {}
 
@@ -823,7 +836,7 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
     const resp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${zendeskTicketId}/comments.json`, {
       headers: { Authorization: `Basic ${auth}` }
     });
-    if (!resp.ok) return;
+    if (!resp.ok) return { captured: false, reason: `zendesk ${resp.status}` };
     const { comments = [] } = await resp.json();
 
     // Build set of comments we've already captured for this ticket so we don't duplicate
@@ -838,7 +851,7 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
       .filter(c => !existingIds.has(String(c.id)))              // not already captured
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) return { captured: false, reason: 'no team reply' };
     const reply = candidates[0];
 
     // Pull author name (best-effort)
@@ -865,8 +878,10 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
       reply.plain_body || reply.body || '',
       reply.created_at
     ).run();
+    return { captured: true };
   } catch (err) {
     console.error('captureHumanReply error:', err);
+    return { captured: false, reason: err.message };
   }
 }
 
@@ -921,7 +936,9 @@ async function runCxAgentPipeline(ticketId, ticketData, db, env) {
 }
 
 async function cxClassifyIntent(ticketData, db, env) {
-  const model = await cxGetConfig(db, 'anthropic_model');
+  // Classification is a cheap structured task — run it on the (much cheaper/faster)
+  // classifier_model (Haiku) and reserve the Opus drafter for actual reply writing.
+  const model = (await cxGetConfig(db, 'classifier_model')) || (await cxGetConfig(db, 'anthropic_model'));
   const systemPrompt = `You are an intent classifier for Nurse In The Making, a nursing education ecommerce company. Classify the customer's message into exactly ONE of these intents:
 
 - digital_access: Customer asking about ebook access codes, how to redeem codes, missing ebook codes, can't find their code, ebook not working. ALSO includes customers who bought ebooks and are asking when they'll receive them.
@@ -1437,6 +1454,31 @@ async function cxSearchHelpCenter(query, db, env, maxResults = 3) {
 // v4.4: GENERAL AI SUGGESTION (uses Help Center context)
 // ==========================================================================
 
+// v4.6: Few-shot training loop.
+// Pulls vetted past human replies for this intent to use as voice/style examples.
+// A rating (good/minor/rewrite) means a human has confirmed the captured reply IS the
+// gold-standard answer for that ticket — so it's safe to learn Kristine's voice from it.
+// 'flag' is excluded (the interaction was problematic). Returns [] until replies are rated,
+// so this is a no-op on a cold DB and turns on automatically as ratings accumulate.
+async function cxFetchExampleReplies(db, intent, limit = 3) {
+  try {
+    const rows = await db.prepare(`
+      SELECT t.first_customer_message AS customer_msg, hr.body AS human_reply
+      FROM agent_human_replies hr
+      JOIN agent_tickets t ON t.id = hr.ticket_id
+      WHERE hr.rating IN ('good','minor','rewrite')
+        AND t.classified_intent = ?
+        AND hr.body IS NOT NULL AND length(trim(hr.body)) > 20
+      ORDER BY hr.rated_at DESC
+      LIMIT ?
+    `).bind(intent, limit).all();
+    return rows.results || [];
+  } catch (err) {
+    console.error('cxFetchExampleReplies error:', err);
+    return [];
+  }
+}
+
 async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, tracer) {
   // STEP: Look up any orders for context (non-blocking — suggestion works without them)
   const orderContext = await tracer.trace('shopify_context_lookup', async () => {
@@ -1478,6 +1520,12 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
     return { count: results.length, titles: results.map(a => a.title), _raw: results };
   });
 
+  // STEP: Pull vetted past human replies for this intent as few-shot voice examples
+  const examples = await tracer.trace('training_examples', async () => {
+    const rows = await cxFetchExampleReplies(db, intent.intent, 3);
+    return { count: rows.length, _rows: rows };
+  });
+
   // STEP: Draft the response with Claude
   const response = await tracer.trace('draft_suggestion', async () => {
     const model = await cxGetConfig(db, 'anthropic_model');
@@ -1497,6 +1545,16 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
     const articlesContext = articles._raw?.length
       ? articles._raw.map((a, i) => `[Article ${i+1}] ${a.title}\nURL: ${a.url}\nContent: ${a.body}\n`).join('\n---\n')
       : '(no relevant help center articles found)';
+
+    // Few-shot block: real, human-vetted replies Kristine sent for this same intent.
+    // These are the strongest signal for matching her actual voice — when present, they
+    // override generic tone rules. Empty until replies are captured + rated.
+    const examplesBlock = examples._rows?.length
+      ? `\n\nHere are real replies Kristine has sent for "${intent.intent}" tickets. Match this voice, length, and structure closely — these are the gold standard, more authoritative than the generic tone rules above:\n\n` +
+        examples._rows.map((ex, i) =>
+          `--- Example ${i + 1} ---\nCustomer wrote:\n${(ex.customer_msg || '').substring(0, 600)}\n\nKristine replied:\n${(ex.human_reply || '').substring(0, 1200)}`
+        ).join('\n\n')
+      : '';
 
     const systemPrompt = `You are Kristine, founder of Nurse In The Making (NITM), a nursing education company. Write a helpful customer service reply in Kristine's warm, supportive tone.
 
@@ -1519,7 +1577,7 @@ Response rules:
 - DO NOT promise refunds, exceptions, or account changes — say you'll check with the team
 - If unsure, say so — it's better to suggest a human follow-up than make something up
 
-Return ONLY the reply body. No subject line, no JSON, no commentary.`;
+Return ONLY the reply body. No subject line, no JSON, no commentary.${examplesBlock}`;
 
     const channelLabel = ticketData.isMessagingChannel
       ? `${ticketData.channel} (social DM — keep reply short and casual)`
@@ -1560,7 +1618,8 @@ Write the reply as Kristine.`;
       data_sources: {
         intent: intent.intent,
         orders_found: orderContext.orders?.length || 0,
-        articles_used: articles._raw?.length || 0
+        articles_used: articles._raw?.length || 0,
+        training_examples_used: examples._rows?.length || 0
       },
       _tokens: claudeResp.tokens,
       _cost: claudeResp.cost
@@ -1817,19 +1876,44 @@ async function cxFetchOrderMetafields(orderId, db, env) {
   return metafields;
 }
 
+// Per-MTok pricing keyed by model family. Used for accurate cost logging once we run
+// different models for different steps (Haiku classifier vs Opus drafter).
+function cxModelPricing(model) {
+  const m = (model || '').toLowerCase();
+  if (m.includes('opus'))   return { in: 15e-6, out: 75e-6 };
+  if (m.includes('haiku'))  return { in: 1e-6,  out: 5e-6  };
+  if (m.includes('sonnet')) return { in: 3e-6,  out: 15e-6 };
+  return { in: 15e-6, out: 75e-6 }; // safe default = Opus
+}
+
 async function cxCallClaude(env, model, systemPrompt, userPrompt, maxTokens = 1024) {
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] })
+    body: JSON.stringify({
+      model, max_tokens: maxTokens,
+      // System prompt as a cacheable block. Caching is a no-op below the model's
+      // cache minimum (~1024 tok), but kicks in once prompts grow (e.g. few-shot examples).
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: userPrompt }]
+    })
   });
   if (!resp.ok) { const errText = await resp.text(); throw new Error(`Claude API error ${resp.status}: ${errText}`); }
   const data = await resp.json();
   const content = data.content?.[0]?.text || '';
   const inputTokens = data.usage?.input_tokens || 0;
   const outputTokens = data.usage?.output_tokens || 0;
-  const cost = (inputTokens * 0.000015) + (outputTokens * 0.000075);
-  return { content, tokens: inputTokens + outputTokens, inputTokens, outputTokens, cost };
+  const cacheWriteTokens = data.usage?.cache_creation_input_tokens || 0;
+  const cacheReadTokens = data.usage?.cache_read_input_tokens || 0;
+  const p = cxModelPricing(model);
+  // Cache writes cost 1.25× input, cache reads cost 0.1× input.
+  const cost = (inputTokens * p.in) + (outputTokens * p.out)
+    + (cacheWriteTokens * p.in * 1.25) + (cacheReadTokens * p.in * 0.1);
+  return {
+    content,
+    tokens: inputTokens + outputTokens + cacheWriteTokens + cacheReadTokens,
+    inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, cost
+  };
 }
 
 async function verifyZendeskSignature(body, timestamp, signature, secret) {
@@ -1990,7 +2074,7 @@ async function handleCxAgentAPI(request, env, path) {
           hr.rating, hr.rating_note, hr.rated_by, hr.rated_at
         FROM agent_tickets t
         LEFT JOIN (
-          SELECT ticket_id, draft_body, response_confidence, MAX(created_at) as latest
+          SELECT ticket_id, id, draft_body, response_confidence, MAX(created_at) as latest
           FROM agent_responses GROUP BY ticket_id
         ) r ON r.ticket_id = t.id
         LEFT JOIN (
@@ -2054,6 +2138,40 @@ async function handleCxAgentAPI(request, env, path) {
       if (!ticket) return new Response(JSON.stringify({ error: 'ticket not found' }), { status: 404, headers: cors });
       await captureHumanReply(ticket.id, ticket.zendesk_ticket_id, db, env);
       return new Response(JSON.stringify({ captured: true }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/training/backfill?batch=20&before_id=<cursor>
+    // Pulls historical human replies from Zendesk for processed tickets that don't yet
+    // have one captured. Walks tickets newest-first by id using a descending cursor so
+    // each batch strictly advances — tickets with no public team reply never get a row,
+    // so a NOT-EXISTS-only filter would re-select them forever. The UI passes next_cursor
+    // back until it's null. Batched to stay within Worker time / Zendesk rate limits.
+    if (path === '/cx-agent/api/training/backfill' && request.method === 'POST') {
+      const url = new URL(request.url);
+      const batch = Math.min(Math.max(parseInt(url.searchParams.get('batch') || '20'), 1), 50);
+      const beforeId = parseInt(url.searchParams.get('before_id') || '0') || Number.MAX_SAFE_INTEGER;
+
+      const todo = await db.prepare(`
+        SELECT id, zendesk_ticket_id FROM agent_tickets
+        WHERE status IN ('drafted','escalated') AND id < ?
+          AND NOT EXISTS (SELECT 1 FROM agent_human_replies hr WHERE hr.ticket_id = agent_tickets.id)
+        ORDER BY id DESC LIMIT ?
+      `).bind(beforeId, batch).all();
+
+      const rows = todo.results || [];
+      let captured = 0, nextCursor = null;
+      for (const t of rows) {
+        const r = await captureHumanReply(t.id, t.zendesk_ticket_id, db, env);
+        if (r?.captured) captured++;
+        nextCursor = t.id; // rows are id-descending, so the last one is the lowest id seen
+      }
+
+      return new Response(JSON.stringify({
+        processed: rows.length,
+        captured,
+        // Null when this batch wasn't full → no older candidates remain → UI stops looping.
+        next_cursor: rows.length === batch ? nextCursor : null
+      }), { headers: cors });
     }
 
     // GET /cx-agent/api/training/insights
