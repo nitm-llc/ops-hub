@@ -657,8 +657,6 @@ async function loadTraining() {
     }
 
     container.innerHTML = tickets.map(t => renderTrainingCard(t)).join('');
-    // After rating Rewrote/Flag we auto-open the note editor so Amanda can say what changed.
-    if (openNoteFor != null) { const id = openNoteFor; openNoteFor = null; openNote(id); }
   } catch (e) {
     container.innerHTML = '<div class="loading">Could not load: ' + escape(e.message) + '</div>';
   }
@@ -668,7 +666,7 @@ function renderTrainingCard(t) {
   const ratingPill = t.rating ? `<span class="pill ${ratingClass(t.rating)}" style="font-size:11px">${ratingLabel(t.rating)}</span>` : '<span class="pill pill-neutral" style="font-size:11px">unrated</span>';
   const intentPill = t.classified_intent ? `<span class="pill pill-info mono">${t.classified_intent}</span>` : '';
   return `
-    <div class="card" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px">
+    <div class="card" id="card-${t.reply_id}" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:10px">
         <div>
           <div style="font-weight:500;font-size:14px">#${t.zendesk_ticket_id} · ${escape(t.subject || '(no subject)').substring(0, 80)}</div>
@@ -690,20 +688,16 @@ function renderTrainingCard(t) {
       </div>
       <div style="display:flex;gap:6px;margin-top:14px;align-items:center;flex-wrap:wrap">
         <span style="font-size:12px;color:var(--text-muted);margin-right:4px">Rate:</span>
-        <button onclick="rateReply(${t.reply_id}, 'good')" class="rate-btn ${t.rating==='good'?'active':''}" data-rating="good">👍 Good</button>
-        <button onclick="rateReply(${t.reply_id}, 'minor')" class="rate-btn ${t.rating==='minor'?'active':''}" data-rating="minor">✏️ Minor edits</button>
-        <button onclick="rateReply(${t.reply_id}, 'rewrite')" class="rate-btn ${t.rating==='rewrite'?'active':''}" data-rating="rewrite">❌ Rewrote</button>
-        <button onclick="rateReply(${t.reply_id}, 'flag')" class="rate-btn ${t.rating==='flag'?'active':''}" data-rating="flag">🚩 Flag</button>
-        <button onclick="toggleNote(${t.reply_id})" style="font-size:12px;padding:4px 10px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;margin-left:auto">📝 ${t.rating_note ? 'Edit note' : 'Add note'}</button>
+        <button onclick="selectRating(${t.reply_id}, 'good')" class="rate-btn ${t.rating==='good'?'active':''}" data-rating="good">👍 Good</button>
+        <button onclick="selectRating(${t.reply_id}, 'minor')" class="rate-btn ${t.rating==='minor'?'active':''}" data-rating="minor">✏️ Minor edits</button>
+        <button onclick="selectRating(${t.reply_id}, 'rewrite')" class="rate-btn ${t.rating==='rewrite'?'active':''}" data-rating="rewrite">❌ Rewrote</button>
+        <button onclick="selectRating(${t.reply_id}, 'flag')" class="rate-btn ${t.rating==='flag'?'active':''}" data-rating="flag">🚩 Flag</button>
       </div>
-      <div id="note-display-${t.reply_id}" style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:4px;font-size:12px;color:var(--text-muted);font-style:italic;${t.rating_note ? '' : 'display:none'}">${t.rating_note ? '"' + escape(t.rating_note) + '"' : ''}</div>
-      <div id="note-editor-${t.reply_id}" style="display:none;margin-top:10px">
-        <textarea id="note-input-${t.reply_id}" data-rating="${t.rating || ''}" rows="3" placeholder="What did you change and why? e.g. 'AI didn't mention we offer free shipping over $50' or 'tone too formal for a DM'" style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;resize:vertical">${escape(t.rating_note || '')}</textarea>
-        <div style="display:flex;gap:6px;margin-top:6px">
-          <button onclick="saveNote(${t.reply_id}, '${t.rating || ''}')" class="save-btn" style="font-size:12px;padding:5px 14px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer">Save note</button>
-          <button onclick="toggleNote(${t.reply_id})" style="font-size:12px;padding:5px 14px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">Cancel</button>
-          <span style="font-size:11px;color:var(--text-dim);align-self:center;margin-left:4px">⌘/Ctrl+Enter to save</span>
-        </div>
+      <textarea id="note-input-${t.reply_id}" rows="2" onkeydown="if((event.metaKey||event.ctrlKey)&&event.key==='Enter'){event.preventDefault();submitRating(${t.reply_id})}" placeholder="Add a note (optional) — what did you change and why? e.g. 'AI didn't mention free shipping over $50' or 'tone too formal for a DM'" style="width:100%;box-sizing:border-box;margin-top:10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;resize:vertical">${escape(t.rating_note || '')}</textarea>
+      <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+        <button onclick="submitRating(${t.reply_id})" class="save-btn" style="font-size:12px;padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600">Submit</button>
+        ${t.rating ? `<button onclick="unrate(${t.reply_id})" style="font-size:12px;padding:6px 14px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">Unrate</button>` : ''}
+        <span style="font-size:11px;color:var(--text-dim);margin-left:4px">${t.rating ? 'Currently: ' + ratingLabel(t.rating) + ' · ' : ''}⌘/Ctrl+Enter to submit</span>
       </div>
     </div>
   `;
@@ -744,55 +738,33 @@ async function backfillReplies() {
   }
 }
 
-// Which reply's note editor to auto-open after the next re-render (set when rating
-// Rewrote/Flag). Cleared by loadTraining once it opens.
-let openNoteFor = null;
+// Selecting a rating is client-side only (highlights the button) — nothing is saved
+// until Submit, so you can pick a rating, type a note, then commit both together.
+function selectRating(replyId, rating) {
+  const card = document.getElementById('card-' + replyId);
+  if (!card) return;
+  card.querySelectorAll('.rate-btn').forEach(b => b.classList.toggle('active', b.dataset.rating === rating));
+}
 
-async function rateReply(replyId, rating) {
+async function submitRating(replyId) {
+  const card = document.getElementById('card-' + replyId);
+  const active = card?.querySelector('.rate-btn.active');
+  if (!active) { toast('Pick a rating first', 'error'); return; }
+  const rating = active.dataset.rating;
+  const note = (document.getElementById('note-input-' + replyId)?.value || '').trim();
   try {
-    // Note intentionally omitted so the rate endpoint preserves any existing note.
-    await api('/training/rate', { method: 'POST', body: JSON.stringify({ reply_id: replyId, rating }) });
-    toast('Rating saved', 'success');
-    // Rewrote/Flag almost always wants a "what changed" note — pop the editor open.
-    if (rating === 'rewrite' || rating === 'flag') openNoteFor = replyId;
+    await api('/training/rate', { method: 'POST', body: JSON.stringify({ reply_id: replyId, rating, rating_note: note }) });
+    toast('Saved', 'success');
     loadTraining();
     loadTrainingInsights();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
-function openNote(replyId) {
-  const editor = document.getElementById('note-editor-' + replyId);
-  const display = document.getElementById('note-display-' + replyId);
-  if (!editor) return;
-  editor.style.display = 'block';
-  if (display) display.style.display = 'none';
-  const ta = document.getElementById('note-input-' + replyId);
-  if (ta) {
-    ta.focus();
-    ta.setSelectionRange(ta.value.length, ta.value.length);
-    ta.onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); saveNote(replyId, ta.dataset.rating || ''); } };
-  }
-}
-
-function toggleNote(replyId) {
-  const editor = document.getElementById('note-editor-' + replyId);
-  if (!editor) return;
-  if (editor.style.display === 'none' || !editor.style.display) { openNote(replyId); }
-  else {
-    editor.style.display = 'none';
-    const display = document.getElementById('note-display-' + replyId);
-    if (display && display.textContent.trim()) display.style.display = '';
-  }
-}
-
-async function saveNote(replyId, currentRating) {
-  const ta = document.getElementById('note-input-' + replyId);
-  const note = (ta?.value || '').trim();
-  // A note needs a rating to attach to; default to 'rewrite' since that's the common case.
-  const rating = currentRating || 'rewrite';
+async function unrate(replyId) {
   try {
-    await api('/training/rate', { method: 'POST', body: JSON.stringify({ reply_id: replyId, rating, rating_note: note }) });
-    toast('Note saved', 'success');
+    // rating:null clears the rating + timestamps so it returns to "Needs review".
+    await api('/training/rate', { method: 'POST', body: JSON.stringify({ reply_id: replyId, rating: null }) });
+    toast('Rating cleared', 'success');
     loadTraining();
     loadTrainingInsights();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }

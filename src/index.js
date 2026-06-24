@@ -2125,22 +2125,29 @@ async function handleCxAgentAPI(request, env, path) {
     // Body: { reply_id, rating: 'good'|'minor'|'rewrite'|'flag', rating_note?, rated_by? }
     if (path === '/cx-agent/api/training/rate' && request.method === 'POST') {
       const body = await request.json();
-      if (!body.reply_id || !body.rating) {
-        return new Response(JSON.stringify({ error: 'reply_id and rating required' }), { status: 400, headers: cors });
+      if (!body.reply_id) {
+        return new Response(JSON.stringify({ error: 'reply_id required' }), { status: 400, headers: cors });
       }
       const allowed = ['good', 'minor', 'rewrite', 'flag', null];
-      if (!allowed.includes(body.rating)) {
+      const rating = body.rating ?? null;
+      if (!allowed.includes(rating)) {
         return new Response(JSON.stringify({ error: 'invalid rating' }), { status: 400, headers: cors });
       }
-      // Only touch rating_note when the caller actually sends one — otherwise just
-      // changing a rating (e.g. clicking a different button) would wipe an existing note.
+      const replyId = parseInt(body.reply_id);
       const hasNote = Object.prototype.hasOwnProperty.call(body, 'rating_note');
-      if (hasNote) {
+
+      if (rating === null) {
+        // Unrate: clear rating + timestamps so it returns to "Needs review". Keep the note.
+        await db.prepare(`UPDATE agent_human_replies SET rating = NULL, rated_by = NULL, rated_at = NULL WHERE id = ?`)
+          .bind(replyId).run();
+      } else if (hasNote) {
+        // Only touch rating_note when the caller sends one, so changing just a rating
+        // never wipes an existing note.
         await db.prepare(`UPDATE agent_human_replies SET rating = ?, rating_note = ?, rated_by = ?, rated_at = datetime('now') WHERE id = ?`)
-          .bind(body.rating, body.rating_note, body.rated_by ?? 'unknown', parseInt(body.reply_id)).run();
+          .bind(rating, body.rating_note, body.rated_by ?? 'unknown', replyId).run();
       } else {
         await db.prepare(`UPDATE agent_human_replies SET rating = ?, rated_by = ?, rated_at = datetime('now') WHERE id = ?`)
-          .bind(body.rating, body.rated_by ?? 'unknown', parseInt(body.reply_id)).run();
+          .bind(rating, body.rated_by ?? 'unknown', replyId).run();
       }
       return new Response(JSON.stringify({ updated: true }), { headers: cors });
     }
