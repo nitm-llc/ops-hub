@@ -3596,16 +3596,20 @@ export default {
       };
       try {
         // List every Klaviyo list + segment for the audience picker.
+        // Note: Klaviyo's /lists/ and /segments/ endpoints cap page[size] at 10,
+        // so we page through with size 10. Each type is fetched independently so
+        // one failure can't blank the whole picker.
         if (path === "/campaign-router/api/klaviyo-options") {
-          const [lists, segs] = await Promise.all([
-            klAll(`${KLAVIYO_API}/lists/?page[size]=100`),
-            klAll(`${KLAVIYO_API}/segments/?page[size]=100`),
-          ]);
-          const options = [
-            ...lists.items.map(l => ({ type: "list", id: l.id, name: (l.attributes && l.attributes.name) || l.id })),
-            ...segs.items.map(s => ({ type: "segment", id: s.id, name: (s.attributes && s.attributes.name) || s.id })),
-          ].sort((a, b) => a.name.localeCompare(b.name));
-          return cj({ options });
+          const fetchType = async (kind, t) => {
+            try {
+              const r = await klAll(`${KLAVIYO_API}/${kind}/?page[size]=10`, 200);
+              return { options: r.items.map(x => ({ type: t, id: x.id, name: (x.attributes && x.attributes.name) || x.id })) };
+            } catch (e) { return { error: `${kind}: ${e.message}` }; }
+          };
+          const [L, S] = await Promise.all([fetchType("lists", "list"), fetchType("segments", "segment")]);
+          const options = [...(L.options || []), ...(S.options || [])].sort((a, b) => a.name.localeCompare(b.name));
+          const errors = [L.error, S.error].filter(Boolean);
+          return cj({ options, errors });
         }
         // Raw member counts for a set of refs: { refs: [{type,id}] }.
         if (path === "/campaign-router/api/klaviyo-sizes" && request.method === "POST") {

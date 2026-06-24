@@ -102,6 +102,8 @@ function CampaignAudienceRouter() {
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState("");
   const [klOptions, setKlOptions] = useState([]);   // Klaviyo lists+segments for the picker
+  const [klState, setKlState] = useState("idle");   // idle | loading | loaded | error
+  const [klError, setKlError] = useState("");
   const [sizes, setSizes] = useState({});           // raw member counts, keyed by Klaviyo id
   const [netResult, setNetResult] = useState(null); // { tiers:[{net,raw,capped,error}], totalReach }
   const [netLoading, setNetLoading] = useState(false);
@@ -113,8 +115,14 @@ function CampaignAudienceRouter() {
       .then((r) => r.json()).then((d) => setSizes((s) => ({ ...s, ...(d.sizes || {}) }))).catch(() => {});
   };
   const loadKlOptions = () => {
-    if (klOptions.length) return;
-    fetch(OPTIONS_API).then((r) => r.json()).then((d) => setKlOptions(d.options || [])).catch(() => {});
+    if (klOptions.length || klState === "loading") return;
+    setKlState("loading"); setKlError("");
+    fetch(OPTIONS_API).then((r) => r.json()).then((d) => {
+      setKlOptions(d.options || []);
+      if (d.errors && d.errors.length) setKlError(d.errors.join(" · "));
+      if (d.error) setKlError(d.error);
+      setKlState((d.options && d.options.length) ? "loaded" : "error");
+    }).catch((e) => { setKlState("error"); setKlError(String(e.message || e)); });
   };
 
   // Load the shared audience config from D1 on mount; select all by default.
@@ -202,6 +210,13 @@ function CampaignAudienceRouter() {
           </div>
         </div>
 
+        {klState === "error" && (
+          <div style={{ marginBottom: 12, padding: "10px 12px", borderRadius: 8, background: "#FCEBEB", border: "0.5px solid #f5c2c2", fontSize: 12, color: "#A32D2D", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <span>Couldn't load Klaviyo lists/segments{klError ? `: ${klError}` : ""}</span>
+            <button onClick={() => { setKlOptions([]); setKlState("idle"); loadKlOptions(); }} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: "0.5px solid #A32D2D", background: "#fff", color: "#A32D2D", cursor: "pointer", whiteSpace: "nowrap" }}>Retry</button>
+          </div>
+        )}
+
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {audiences.map((a) => (
             <div key={a.id} style={{ border: "0.5px solid rgba(0,0,0,0.15)", borderRadius: 12, padding: "14px 16px" }}>
@@ -230,7 +245,7 @@ function CampaignAudienceRouter() {
                   onChange={(e) => { const v = e.target.value; if (!v) { updateAudience(a.id, { klType: null, klId: null }); return; } const ci = v.indexOf(":"); updateAudience(a.id, { klType: v.slice(0, ci), klId: v.slice(ci + 1) }); }}
                   style={{ flex: 1, height: 34, fontSize: 13, borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.25)", padding: "0 8px", background: "#fff", fontFamily: "inherit" }}
                 >
-                  <option value="">{klOptions.length ? "— Not linked —" : "Loading Klaviyo…"}</option>
+                  <option value="">{klState === "loading" ? "Loading Klaviyo…" : klState === "error" ? "Couldn't load Klaviyo" : "— Not linked —"}</option>
                   <optgroup label="Lists">{klOptions.filter((o) => o.type === "list").map((o) => <option key={o.id} value={`list:${o.id}`}>{o.name}</option>)}</optgroup>
                   <optgroup label="Segments">{klOptions.filter((o) => o.type === "segment").map((o) => <option key={o.id} value={`segment:${o.id}`}>{o.name}</option>)}</optgroup>
                 </select>
