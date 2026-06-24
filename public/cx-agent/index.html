@@ -152,6 +152,7 @@
   <button class="tab" data-tab="training">Training Review</button>
   <button class="tab" data-tab="config">Configuration</button>
   <button class="tab" data-tab="templates">Response Templates</button>
+  <button class="tab" data-tab="products">Products</button>
 </div>
 
 <!-- TICKETS TAB -->
@@ -247,6 +248,25 @@
   </div>
 </div>
 
+<!-- PRODUCTS TAB -->
+<div class="tab-panel" id="tab-products">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:4px">📚 Product Knowledge Base</div>
+    <div style="color:var(--text-muted);font-size:13px;margin-bottom:14px">Upload a product PDF — we extract an <b>IP-safe coverage map</b> (what topics it covers, not the actual content) the agent uses to answer "do your materials cover X?" questions.</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="prod-name" placeholder="Product name (e.g. Med-Surg Study Guide)" style="flex:1;min-width:240px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit">
+      <label class="save-btn" style="padding:8px 16px;background:var(--accent);color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">
+        Choose PDF & extract<input type="file" id="prod-pdf" accept="application/pdf" style="display:none" onchange="uploadProductPdf()">
+      </label>
+    </div>
+    <div id="prod-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>
+    <div id="prod-review" style="display:none;margin-top:14px"></div>
+  </div>
+  <div id="products-list">
+    <div class="loading">Loading products...</div>
+  </div>
+</div>
+
 </div>
 
 <!-- TICKET DETAIL MODAL -->
@@ -259,6 +279,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 const api = (path, opts = {}) => fetch('/cx-agent/api' + path, {
   ...opts,
@@ -283,6 +304,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'templates') loadTemplates();
     if (tab.dataset.tab === 'tickets') { loadStats(); loadTickets(); }
     if (tab.dataset.tab === 'training') { loadTrainingInsights(); loadTraining(); }
+    if (tab.dataset.tab === 'products') loadProducts();
   });
 });
 
@@ -491,6 +513,132 @@ async function saveTemplate(id) {
   } catch (e) {
     toast('Failed: ' + e.message, 'error');
   }
+}
+
+// ============ PRODUCTS (knowledge base) ============
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+let pendingProduct = null;
+const fieldStyle = 'background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;box-sizing:border-box';
+
+async function loadProducts() {
+  const el = document.getElementById('products-list');
+  el.innerHTML = '<div class="loading">Loading products...</div>';
+  try {
+    const products = (await api('/products')).products || [];
+    if (!products.length) { el.innerHTML = '<div class="loading" style="padding:30px;text-align:center">No products yet. Upload a PDF above to build your first coverage map.</div>'; return; }
+    el.innerHTML = products.map(renderProductCard).join('');
+  } catch (e) { el.innerHTML = '<div class="loading">Could not load: ' + escape(e.message) + '</div>'; }
+}
+
+function renderProductCard(p) {
+  let topics = []; try { topics = JSON.parse(p.topics || '[]'); } catch {}
+  return `
+    <div class="card" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+        <div>
+          <div style="font-weight:600;font-size:14px">${escape(p.name)}${p.is_active ? '' : ' <span class="pill pill-neutral" style="font-size:10px">inactive</span>'}</div>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:2px">${p.version ? 'v' + escape(p.version) + ' · ' : ''}${topics.length} topics · updated ${formatDate(p.updated_at)}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button onclick="editProduct(${p.id})" style="font-size:12px;padding:5px 12px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">Edit</button>
+          <button onclick="deleteProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, '&quot;')})" style="font-size:12px;padding:5px 12px;background:transparent;border:1px solid var(--border);color:var(--red,#e5484d);border-radius:4px;cursor:pointer">Delete</button>
+        </div>
+      </div>
+      <div style="margin-top:10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;max-height:240px;overflow-y:auto">${escape(p.coverage_outline || '')}</div>
+      ${topics.length ? `<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">${topics.map(t => `<span class="pill pill-info" style="font-size:10px">${escape(t)}</span>`).join('')}</div>` : ''}
+    </div>`;
+}
+
+async function uploadProductPdf() {
+  const fileInput = document.getElementById('prod-pdf');
+  const file = fileInput.files[0];
+  if (!file) return;
+  const name = document.getElementById('prod-name').value.trim() || file.name.replace(/\.pdf$/i, '');
+  const status = document.getElementById('prod-upload-status');
+  if (!window.pdfjsLib) { status.textContent = 'PDF library failed to load — refresh and try again.'; return; }
+  try {
+    status.textContent = 'Reading PDF…';
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let text = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      status.textContent = `Reading PDF… page ${i}/${pdf.numPages}`;
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(it => it.str).join(' ') + '\n';
+      if (text.length > 400000) { text += '\n[truncated]'; break; }
+    }
+    if (text.trim().length < 50) { status.textContent = "Couldn't extract text (scanned PDF?). Try a text-based PDF, or paste the table of contents."; return; }
+    status.textContent = 'Extracting coverage map with AI… (this can take ~10–20s)';
+    const result = await api('/products/extract', { method: 'POST', body: JSON.stringify({ name, text }) });
+    status.textContent = '';
+    fileInput.value = '';
+    showProductEditor({ name, source_filename: file.name, coverage_outline: result.coverage_outline, topics: result.topics || [] });
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  }
+}
+
+function showProductEditor(p) {
+  pendingProduct = p;
+  const review = document.getElementById('prod-review');
+  review.style.display = 'block';
+  review.innerHTML = `
+    <div style="border:1px solid var(--accent);border-radius:8px;padding:14px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:10px">${p.id ? '✏️ Edit product' : '✅ Review the extracted coverage map'} — edit anything, then save</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <input id="edit-prod-name" value="${escape(p.name || '')}" placeholder="Product name" style="flex:1;min-width:200px;${fieldStyle}">
+        <input id="edit-prod-version" value="${escape(p.version || '')}" placeholder="Version (optional)" style="width:160px;${fieldStyle}">
+      </div>
+      <label style="font-size:11px;color:var(--text-muted)">Coverage outline (IP-safe — topic labels only, no actual content)</label>
+      <textarea id="edit-prod-outline" rows="12" style="width:100%;margin-top:4px;${fieldStyle};resize:vertical">${escape(p.coverage_outline || '')}</textarea>
+      <label style="font-size:11px;color:var(--text-muted);margin-top:8px;display:block">Search topics (comma-separated — include synonyms like cancer, oncology)</label>
+      <textarea id="edit-prod-topics" rows="2" style="width:100%;margin-top:4px;${fieldStyle};resize:vertical">${escape((p.topics || []).join(', '))}</textarea>
+      <div style="display:flex;gap:6px;margin-top:10px">
+        <button onclick="saveProduct()" class="save-btn" style="font-size:13px;padding:7px 18px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">${p.id ? 'Save changes' : 'Save product'}</button>
+        <button onclick="cancelProductEdit()" style="font-size:13px;padding:7px 16px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;cursor:pointer">Cancel</button>
+      </div>
+    </div>`;
+  review.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function cancelProductEdit() {
+  pendingProduct = null;
+  const r = document.getElementById('prod-review');
+  r.style.display = 'none'; r.innerHTML = '';
+}
+
+async function saveProduct() {
+  const name = document.getElementById('edit-prod-name').value.trim();
+  const version = document.getElementById('edit-prod-version').value.trim();
+  const coverage_outline = document.getElementById('edit-prod-outline').value.trim();
+  const topics = document.getElementById('edit-prod-topics').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!name || !coverage_outline) { toast('Name and outline are required', 'error'); return; }
+  const payload = { name, version, coverage_outline, topics };
+  if (pendingProduct?.id) payload.id = pendingProduct.id;
+  if (pendingProduct?.source_filename) payload.source_filename = pendingProduct.source_filename;
+  try {
+    await api('/products', { method: 'POST', body: JSON.stringify(payload) });
+    toast('Product saved', 'success');
+    cancelProductEdit();
+    document.getElementById('prod-name').value = '';
+    loadProducts();
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function editProduct(id) {
+  try {
+    const p = ((await api('/products')).products || []).find(x => x.id === id);
+    if (!p) { toast('Product not found', 'error'); return; }
+    let topics = []; try { topics = JSON.parse(p.topics || '[]'); } catch {}
+    showProductEditor({ id: p.id, name: p.name, version: p.version, coverage_outline: p.coverage_outline, topics });
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function deleteProduct(id, name) {
+  if (!confirm('Delete "' + name + '" from the knowledge base?')) return;
+  try { await api('/products/' + id + '/delete', { method: 'POST' }); toast('Product deleted', 'success'); loadProducts(); }
+  catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
 // ============ HELPERS ============

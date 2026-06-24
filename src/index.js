@@ -648,6 +648,22 @@ async function initCxAgentTables(db) {
     )`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_human_replies_ticket ON agent_human_replies(ticket_id)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_human_replies_comment ON agent_human_replies(zendesk_comment_id)`),
+    // v4.7: product knowledge base. Stores an IP-safe COVERAGE MAP per product (what
+    // topics are covered, chapter/topic level) — never the actual study content — so the
+    // drafter can answer "do your materials cover X?" without leaking IP.
+    db.prepare(`CREATE TABLE IF NOT EXISTS agent_products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      sku TEXT,
+      description TEXT,
+      coverage_outline TEXT,
+      topics TEXT,
+      source_filename TEXT,
+      version TEXT,
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`),
   ]);
 
   const existing = await db.prepare("SELECT COUNT(*) as c FROM agent_config").first();
@@ -717,6 +733,18 @@ async function initCxAgentTables(db) {
         .bind('classifier_model', 'claude-haiku-4-5-20251001', 'string', 'Cheaper/faster Claude model for intent classification').run();
     }
   } catch {}
+
+  // v4.7 migration: product knowledge base config
+  const v47Keys = [
+    ['product_kb_enabled', 'true', 'boolean', 'Reference the product knowledge base when drafting coverage/product questions'],
+    ['product_kb_max_products', '4', 'number', 'Max products to include as context per draft'],
+  ];
+  for (const [key, value, value_type, description] of v47Keys) {
+    const exists = await db.prepare("SELECT 1 FROM agent_config WHERE key = ?").bind(key).first();
+    if (!exists) {
+      await db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind(key, value, value_type, description).run();
+    }
+  }
 
   const existingTpl = await db.prepare("SELECT COUNT(*) as c FROM agent_templates").first();
   if (existingTpl.c === 0) {
@@ -1509,6 +1537,31 @@ async function cxFetchExampleReplies(db, intent, limit = 3) {
   }
 }
 
+// v4.7: find products whose coverage is relevant to a customer's question. Uses the cheap
+// classifier model to match by meaning (so "cancer" matches a product tagged "oncology").
+// Returns the full coverage_outline for the matched products (capped at `max`).
+async function cxFindRelevantProducts(db, env, query, max = 4) {
+  const enabled = await cxGetConfig(db, 'product_kb_enabled');
+  if (enabled === false) return [];
+  const rows = (await db.prepare("SELECT id, name, topics, coverage_outline FROM agent_products WHERE is_active = 1").all()).results || [];
+  if (!rows.length) return [];
+
+  const catalog = rows.map(p => {
+    let topics = []; try { topics = JSON.parse(p.topics || '[]'); } catch {}
+    return `ID ${p.id}: ${p.name}${topics.length ? ` — topics: ${topics.join(', ')}` : ''}`;
+  }).join('\n');
+  const model = (await cxGetConfig(db, 'classifier_model')) || (await cxGetConfig(db, 'anthropic_model'));
+  const sys = `You match a customer's question to relevant products. Given a catalog and a question, return ONLY the IDs of products whose coverage is genuinely relevant (match by meaning — e.g. "cancer" matches a product about "oncology"). Return JSON: {"ids": [1,2]}. If none are relevant, return {"ids": []}.`;
+  const user = `Catalog:\n${catalog}\n\nCustomer question:\n${(query || '').substring(0, 1500)}`;
+  let ids = [];
+  try {
+    const resp = await cxCallClaude(env, model, sys, user, 150);
+    const parsed = cxExtractJson(resp.content);
+    if (Array.isArray(parsed?.ids)) ids = parsed.ids.map(Number);
+  } catch {}
+  return rows.filter(p => ids.includes(p.id)).slice(0, max);
+}
+
 async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, tracer) {
   // STEP: Look up any orders for context (non-blocking — suggestion works without them)
   const orderContext = await tracer.trace('shopify_context_lookup', async () => {
@@ -1556,6 +1609,15 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
     return { count: rows.length, _rows: rows };
   });
 
+  // STEP: For product/coverage questions, find relevant products from the knowledge base
+  const products = await tracer.trace('product_kb_lookup', async () => {
+    const productIntents = ['product_info', 'education_content'];
+    if (!productIntents.includes(intent.intent)) return { count: 0, _rows: [] };
+    const maxP = await cxGetConfig(db, 'product_kb_max_products') || 4;
+    const rows = await cxFindRelevantProducts(db, env, `${ticketData.subject || ''}\n${ticketData.firstMessage || ''}`, maxP);
+    return { count: rows.length, names: rows.map(r => r.name), _rows: rows };
+  });
+
   // STEP: Draft the response with Claude
   const response = await tracer.trace('draft_suggestion', async () => {
     const model = await cxGetConfig(db, 'anthropic_model');
@@ -1575,6 +1637,11 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
     const articlesContext = articles._raw?.length
       ? articles._raw.map((a, i) => `[Article ${i+1}] ${a.title}\nURL: ${a.url}\nContent: ${a.body}\n`).join('\n---\n')
       : '(no relevant help center articles found)';
+
+    // Product coverage maps (IP-safe topic outlines) for products relevant to the question.
+    const productsContext = products._rows?.length
+      ? products._rows.map(p => `### ${p.name}\n${p.coverage_outline}`).join('\n\n')
+      : '';
 
     // Few-shot block: real, human-vetted replies Kristine sent for this same intent.
     // These are the strongest signal for matching her actual voice — when present, they
@@ -1607,6 +1674,13 @@ Response rules:
 - DO NOT promise refunds, exceptions, or account changes — say you'll check with the team
 - If unsure, say so — it's better to suggest a human follow-up than make something up
 
+Product coverage rules (when a "Product coverage" section is provided below):
+- Use it to answer "do your products/materials cover X?" questions — confirm whether the topic is covered and name the specific product it's in
+- Describe coverage at a HIGH LEVEL only (e.g. "yes, our Med-Surg guide covers oncology including cancer types and chemo nursing")
+- NEVER reproduce the actual study content, definitions, values, mnemonics, or teaching material — that's our intellectual property. Describe what's covered, then encourage them to grab the product
+- Keep it short and enticing — enough to answer their question, not so much that you give the material away
+- If the product coverage section is empty or doesn't cover their topic, say you're not sure it's included and offer to check
+
 Return ONLY the reply body. No subject line, no JSON, no commentary.${examplesBlock}`;
 
     const channelLabel = ticketData.isMessagingChannel
@@ -1634,7 +1708,11 @@ ${ordersContext}
 ---
 Help Center articles that might be relevant:
 ${articlesContext}
-
+${productsContext ? `
+---
+Product coverage (what our products include — answer "do you cover X?" at a high level, never reproduce the content):
+${productsContext}
+` : ''}
 ---
 Intent classified as: ${intent.intent} (confidence ${intent.confidence})${intentGuidance}
 
@@ -1649,7 +1727,8 @@ Write the reply as Kristine.`;
         intent: intent.intent,
         orders_found: orderContext.orders?.length || 0,
         articles_used: articles._raw?.length || 0,
-        training_examples_used: examples._rows?.length || 0
+        training_examples_used: examples._rows?.length || 0,
+        products_used: products._rows?.length || 0
       },
       _tokens: claudeResp.tokens,
       _cost: claudeResp.cost
@@ -1946,6 +2025,33 @@ async function cxCallClaude(env, model, systemPrompt, userPrompt, maxTokens = 10
   };
 }
 
+// Turn raw product text (extracted from an uploaded PDF) into an IP-SAFE coverage map:
+// a topic/chapter-level outline of WHAT is covered, with no actual study content. This is
+// the only thing we store + ever feed the drafter, so IP can't leak.
+async function cxExtractProductCoverage(env, db, name, text) {
+  const model = await cxGetConfig(db, 'anthropic_model');
+  const systemPrompt = `You build an IP-SAFE "coverage map" for a nursing-education product sold by Nurse In The Making. The goal: let customer support confirm WHAT TOPICS a product covers, WITHOUT exposing the actual study content.
+
+CRITICAL — never include actual teaching material: no definitions, explanations, full sentences of content, lab values, dosages, mnemonics, or step-by-step processes. Only topic LABELS — the kind of thing you'd see in a detailed table of contents.
+
+Produce two things:
+1. "coverage_outline": a concise markdown outline of what the product covers — sections/chapters with the topics inside each as short labels. Example line:
+   "- **Oncology & Cancer Care**: cancer types, TNM staging, chemotherapy nursing, common cancers, side-effect management"
+   Keep it scannable. Topic labels only — NOT the material itself.
+2. "topics": a flat array of 15–40 lowercase search keywords customers might use, INCLUDING synonyms (e.g. both "cancer" and "oncology", "heart" and "cardiac").
+
+Return ONLY valid JSON: {"coverage_outline": "...markdown...", "topics": ["...", ...]}`;
+  const userPrompt = `Product name: ${name}\n\nProduct content (may be truncated):\n${(text || '').substring(0, 200000)}`;
+  const resp = await cxCallClaude(env, model, systemPrompt, userPrompt, 3000);
+  const parsed = cxExtractJson(resp.content);
+  return {
+    coverage_outline: parsed?.coverage_outline || '',
+    topics: Array.isArray(parsed?.topics) ? parsed.topics : [],
+    _tokens: resp.tokens,
+    _cost: resp.cost
+  };
+}
+
 async function verifyZendeskSignature(body, timestamp, signature, secret) {
   try {
     const encoder = new TextEncoder();
@@ -2076,6 +2182,51 @@ async function handleCxAgentAPI(request, env, path) {
       const body = await request.json();
       await db.prepare("UPDATE agent_templates SET body = ?, updated_at = datetime('now') WHERE id = ?").bind(body.body, parseInt(tplMatch[1])).run();
       return new Response(JSON.stringify({ updated: true }), { headers: cors });
+    }
+
+    // ==========================================================================
+    // v4.7: PRODUCT KNOWLEDGE BASE APIs
+    // ==========================================================================
+
+    // GET /cx-agent/api/products  — list all products (coverage maps, not raw content)
+    if (path === '/cx-agent/api/products' && request.method === 'GET') {
+      const result = await db.prepare('SELECT * FROM agent_products ORDER BY name').all();
+      return new Response(JSON.stringify({ products: result.results || [] }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/extract — { name, text }  (text = PDF text extracted client-side)
+    // Runs Claude to produce an IP-safe coverage outline + topic keywords. Does NOT save —
+    // the UI shows it for review/edit first.
+    if (path === '/cx-agent/api/products/extract' && request.method === 'POST') {
+      const body = await request.json();
+      if (!body.text || !body.text.trim()) return new Response(JSON.stringify({ error: 'text required' }), { status: 400, headers: cors });
+      const extracted = await cxExtractProductCoverage(env, db, body.name || '(untitled)', body.text);
+      return new Response(JSON.stringify(extracted), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products — create or update. Body: { id?, name, sku?, description?,
+    //   coverage_outline, topics?(array|json string), version? }
+    if (path === '/cx-agent/api/products' && request.method === 'POST') {
+      const body = await request.json();
+      if (!body.name || !body.coverage_outline) {
+        return new Response(JSON.stringify({ error: 'name and coverage_outline required' }), { status: 400, headers: cors });
+      }
+      const topicsJson = Array.isArray(body.topics) ? JSON.stringify(body.topics) : (body.topics || '[]');
+      if (body.id) {
+        await db.prepare(`UPDATE agent_products SET name=?, sku=?, description=?, coverage_outline=?, topics=?, version=?, is_active=?, updated_at=datetime('now') WHERE id=?`)
+          .bind(body.name, body.sku ?? null, body.description ?? null, body.coverage_outline, topicsJson, body.version ?? null, body.is_active === false ? 0 : 1, parseInt(body.id)).run();
+        return new Response(JSON.stringify({ updated: true, id: parseInt(body.id) }), { headers: cors });
+      }
+      const res = await db.prepare(`INSERT INTO agent_products (name, sku, description, coverage_outline, topics, source_filename, version) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(body.name, body.sku ?? null, body.description ?? null, body.coverage_outline, topicsJson, body.source_filename ?? null, body.version ?? null).run();
+      return new Response(JSON.stringify({ created: true, id: res.meta.last_row_id }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/:id/delete
+    const prodDelMatch = path.match(/^\/cx-agent\/api\/products\/(\d+)\/delete$/);
+    if (prodDelMatch && request.method === 'POST') {
+      await db.prepare('DELETE FROM agent_products WHERE id = ?').bind(parseInt(prodDelMatch[1])).run();
+      return new Response(JSON.stringify({ deleted: true }), { headers: cors });
     }
 
     // ==========================================================================
