@@ -828,6 +828,23 @@ async function handleCxAgentReplyWebhook(request, env, ctx) {
   return new Response(JSON.stringify({ accepted: true, ticket_id: ticket.id }), { headers: cors });
 }
 
+// Zendesk comment bodies are HTML (or plain_body with stray entities). Convert to clean
+// plain text so the Training Review UI is readable AND the few-shot examples we feed the
+// drafter aren't polluted with markup/entities.
+function cxCleanReplyText(s) {
+  if (!s) return '';
+  let t = String(s)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<[^>]+>/g, '');                 // strip remaining tags
+  const named = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+    rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“',
+    mdash: '—', ndash: '–', hellip: '…' };
+  t = t.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+       .replace(/&([a-zA-Z]+);/g, (m, name) => name.toLowerCase() in named ? named[name.toLowerCase()] : m);
+  return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
 async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
   try {
     const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
@@ -888,7 +905,7 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
       String(reply.id),
       String(reply.author_id),
       authorName,
-      reply.plain_body || reply.body || '',
+      cxCleanReplyText(reply.plain_body || reply.body || ''),
       reply.created_at
     ).run();
     return { captured: true };

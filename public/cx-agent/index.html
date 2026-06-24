@@ -529,6 +529,17 @@ function escape(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Strip HTML tags + decode entities from captured Zendesk replies (legacy rows captured
+// before server-side cleaning). Mirrors cxCleanReplyText in the Worker.
+function cleanReply(s) {
+  if (s == null) return '';
+  let t = String(s).replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li)>/gi, '\n').replace(/<[^>]+>/g, '');
+  const named = {nbsp:' ',amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",rsquo:'’',lsquo:'‘',rdquo:'”',ldquo:'“',mdash:'—',ndash:'–',hellip:'…'};
+  t = t.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+       .replace(/&([a-zA-Z]+);/g, (m, name) => name.toLowerCase() in named ? named[name.toLowerCase()] : m);
+  return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
 function tryParse(s) { try { return JSON.parse(s); } catch { return s; } }
 
 function toast(msg, type = '') {
@@ -672,7 +683,7 @@ function renderTrainingCard(t) {
         </div>
         <div>
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">👤 Actual Reply ${t.author_name ? `· ${escape(t.author_name)}` : ''}</div>
-          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;max-height:280px;overflow-y:auto">${escape((t.human_reply || '(not captured yet)').substring(0, 4000))}</div>
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;max-height:280px;overflow-y:auto">${escape((cleanReply(t.human_reply) || '(not captured yet)').substring(0, 4000))}</div>
         </div>
       </div>
       <div style="display:flex;gap:6px;margin-top:14px;align-items:center;flex-wrap:wrap">
