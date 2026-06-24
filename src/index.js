@@ -3643,29 +3643,47 @@ export default {
           }
           return cj({ sizes });
         }
-        // Exact mutually-exclusive net reach. Body: { tiers: [{id,type,name}] } in priority order.
+        // Exact mutually-exclusive net reach. Body: { tiers: [{id,type}] } in priority order.
+        // Pull each audience's member ids (cached 6h in D1) in parallel, then apply
+        // the waterfall: each tier's net = members not already counted by higher tiers.
         if (path === "/campaign-router/api/klaviyo-net-reach" && request.method === "POST") {
           const { tiers = [] } = await request.json();
-          const seen = new Set();
-          const out = [];
-          let pagesUsed = 0; const GLOBAL_PAGE_CAP = 800; // ~80k profiles across all tiers
-          for (const t of tiers) {
-            if (!t || !t.id || !t.type) { out.push({ id: t && t.id, raw: null, net: null, error: "not linked" }); continue; }
-            const ids = []; let capped = false, error = null;
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS campaign_router_members (ref TEXT PRIMARY KEY, ids TEXT, n INTEGER, updated_at TEXT)`).run();
+          const PER_TIER_PAGE_CAP = 400; // up to ~40k profiles per audience
+
+          const pullIds = async (t) => {
+            if (!t || !t.id || !t.type) return { error: "not linked" };
+            const refKey = `${t.type}:${t.id}`;
+            try {
+              const cached = await env.DB.prepare(`SELECT ids, n FROM campaign_router_members WHERE ref = ? AND updated_at > datetime('now','-6 hours')`).bind(refKey).first();
+              if (cached && cached.ids) return { ids: JSON.parse(cached.ids), raw: cached.n };
+            } catch (e) { /* cache miss / parse error — fall through to live pull */ }
+            const ids = []; let capped = false, error = null, pages = 0;
             let next = `${KLAVIYO_API}/${t.type}s/${t.id}/profiles/?fields[profile]=id&page[size]=100`;
             try {
               while (next) {
-                if (pagesUsed >= GLOBAL_PAGE_CAP) { capped = true; break; }
-                const d = await klaviyoFetch(next, env); pagesUsed++;
+                if (pages >= PER_TIER_PAGE_CAP) { capped = true; break; }
+                const d = await klaviyoFetch(next, env); pages++;
                 for (const p of (d.data || [])) ids.push(p.id);
                 next = d.links && d.links.next;
               }
             } catch (e) { error = e.message; }
+            if (!error && !capped) {
+              try { if (ids.length <= 60000) await env.DB.prepare(`INSERT OR REPLACE INTO campaign_router_members (ref, ids, n, updated_at) VALUES (?, ?, ?, datetime('now'))`).bind(refKey, JSON.stringify(ids), ids.length).run(); } catch (e) { /* too large to cache — ignore */ }
+            }
+            return { ids, raw: ids.length, capped, error };
+          };
+
+          const pulled = await Promise.all(tiers.map(pullIds));
+          const seen = new Set();
+          const out = pulled.map((res, i) => {
+            const id = tiers[i] && tiers[i].id;
+            if (res.error) return { id, raw: res.raw ?? null, net: null, error: res.error };
             let net = 0;
-            for (const id of ids) if (!seen.has(id)) net++;
-            for (const id of ids) seen.add(id);
-            out.push({ id: t.id, raw: ids.length, net, capped, error });
-          }
+            for (const x of res.ids) if (!seen.has(x)) net++;
+            for (const x of res.ids) seen.add(x);
+            return { id, raw: res.raw, net, capped: res.capped };
+          });
           return cj({ tiers: out, totalReach: seen.size });
         }
         return cj({ error: "unknown klaviyo route" }, 404);

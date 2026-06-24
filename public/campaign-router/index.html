@@ -145,8 +145,12 @@ function CampaignAudienceRouter() {
   const calcNetReach = () => {
     setNetLoading(true); setNetResult(null);
     const tiers = plan.map((p) => ({ type: p.audience.klType, id: p.audience.klId }));
-    fetch(NET_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiers }) })
-      .then((r) => r.json()).then((d) => setNetResult(d)).catch(() => setNetResult({ error: true })).finally(() => setNetLoading(false));
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 110000);
+    fetch(NET_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiers }), signal: ctrl.signal })
+      .then((r) => r.json()).then((d) => setNetResult(d))
+      .catch((e) => setNetResult({ error: true, message: (e && e.name === "AbortError") ? "Timed out — these audiences may be too large to count live. Try again (results cache once computed)." : "Couldn't reach Klaviyo." }))
+      .finally(() => { clearTimeout(to); setNetLoading(false); });
   };
 
   const byId = useMemo(() => Object.fromEntries(audiences.map((a) => [a.id, a])), [audiences]);
@@ -374,7 +378,10 @@ function CampaignAudienceRouter() {
             <p style={{ ...label, marginTop: 12, fontSize: 13 }}>Total unique people across all {plan.length} emails: <strong style={{ color: "#185FA5" }}>{fmt(netResult.totalReach)}</strong> — no one gets two.</p>
           )}
           {netResult && netResult.error && (
-            <p style={{ ...label, marginTop: 12, fontSize: 13, color: "#A32D2D" }}>Couldn't calculate net reach. Make sure audiences are linked to Klaviyo (in Manage audiences).</p>
+            <p style={{ ...label, marginTop: 12, fontSize: 13, color: "#A32D2D" }}>{netResult.message || "Couldn't calculate net reach. Make sure audiences are linked to Klaviyo (in Manage audiences)."}</p>
+          )}
+          {netLoading && (
+            <p style={{ ...label, marginTop: 12, fontSize: 12, fontStyle: "italic" }}>Counting members across your audiences… large lists can take up to a minute the first time (results cache after).</p>
           )}
           <p style={{ ...label, marginTop: 16, fontSize: 12 }}>
             For each email above: in Klaviyo, set the recipient list/segment to the <strong>SEND TO</strong> list, then add every <strong>DON'T SEND TO</strong> list to Klaviyo's "Don't send to" field. That guarantees each person gets exactly one email across the whole campaign.
