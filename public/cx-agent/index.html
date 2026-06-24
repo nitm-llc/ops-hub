@@ -676,6 +676,10 @@ function renderTrainingCard(t) {
         </div>
         <div>${ratingPill}</div>
       </div>
+      <div style="margin-top:12px">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">💬 Customer Asked</div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:13px;white-space:pre-wrap;max-height:180px;overflow-y:auto">${escape((cleanReply(t.customer_message) || '(message not stored)').substring(0, 4000))}</div>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
         <div>
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px">🤖 Agent Draft</div>

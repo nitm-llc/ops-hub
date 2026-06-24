@@ -2099,6 +2099,7 @@ async function handleCxAgentAPI(request, env, path) {
         SELECT
           t.id as ticket_id, t.zendesk_ticket_id, t.subject, t.customer_email, t.channel,
           t.classified_intent, t.intent_confidence, t.final_action, t.received_at,
+          t.first_customer_message as customer_message,
           r.draft_body as agent_draft, r.response_confidence as draft_confidence,
           hr.id as reply_id, hr.body as human_reply, hr.author_name, hr.reply_created_at,
           hr.rating, hr.rating_note, hr.rated_by, hr.rated_at
