@@ -839,16 +839,29 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
     if (!resp.ok) return { captured: false, reason: `zendesk ${resp.status}` };
     const { comments = [] } = await resp.json();
 
+    // Identify the customer (requester) so we can treat ANY other public author as a team
+    // member — support_staff_ids is a fragile hardcoded allowlist that misses new agents.
+    // Falls back to the allowlist if the ticket fetch fails.
+    let requesterId = null;
+    try {
+      const tResp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${zendeskTicketId}.json`, { headers: { Authorization: `Basic ${auth}` } });
+      if (tResp.ok) { const { ticket } = await tResp.json(); requesterId = ticket?.requester_id ?? null; }
+    } catch {}
+
     // Build set of comments we've already captured for this ticket so we don't duplicate
     const existing = await db.prepare("SELECT zendesk_comment_id FROM agent_human_replies WHERE ticket_id = ?").bind(agentTicketId).all();
     const existingIds = new Set((existing.results || []).map(r => r.zendesk_comment_id).filter(Boolean));
 
-    // Find the most recent public reply from a team member that we haven't captured yet
-    // Reverse so newest first
+    // Most recent public team reply we haven't captured yet (newest first).
+    // - author_id > 0 excludes Messaging/chat transcripts (Zendesk stamps those as -1).
+    // - "not the requester" = a team member; falls back to the staff allowlist if we
+    //   couldn't resolve the requester. (Safe in internal_note mode since the AI posts
+    //   only private notes; revisit if auto_reply mode ever posts public replies.)
     const candidates = comments
-      .filter(c => c.public === true)                          // public, not internal note
-      .filter(c => supportStaffIds.includes(c.author_id))       // from team, not customer
-      .filter(c => !existingIds.has(String(c.id)))              // not already captured
+      .filter(c => c.public === true)
+      .filter(c => typeof c.author_id === 'number' && c.author_id > 0)
+      .filter(c => requesterId != null ? c.author_id !== requesterId : supportStaffIds.includes(c.author_id))
+      .filter(c => !existingIds.has(String(c.id)))
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     if (candidates.length === 0) return { captured: false, reason: 'no team reply' };
@@ -2207,6 +2220,69 @@ async function handleCxAgentAPI(request, env, path) {
         by_intent: byIntent.results || [],
         recent_flags: flags.results || [],
         estimated_time_saved_minutes: timeSavedMin
+      }, null, 2), { headers: cors });
+    }
+
+    // GET /cx-agent/api/diag/reply-capture?ticket=<zendesk_ticket_id>
+    // Mirrors captureHumanReply WITHOUT inserting — shows exactly why a reply did or
+    // didn't get captured (ticket-in-DB? which comments are public? which author_ids
+    // match support_staff_ids?). If no ticket given, picks the most recent drafted ticket.
+    if (path === '/cx-agent/api/diag/reply-capture' && request.method === 'GET') {
+      const url = new URL(request.url);
+      let zid = url.searchParams.get('ticket');
+      if (!zid) {
+        const recent = await db.prepare("SELECT zendesk_ticket_id FROM agent_tickets WHERE status='drafted' ORDER BY id DESC LIMIT 1").first();
+        zid = recent?.zendesk_ticket_id;
+      }
+      if (!zid) return new Response(JSON.stringify({ error: 'no ticket to inspect' }), { status: 400, headers: cors });
+
+      const ticketRow = await db.prepare("SELECT id, classified_intent, status FROM agent_tickets WHERE zendesk_ticket_id = ?").bind(String(zid)).first();
+      const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
+      const supportStaffIds = await cxGetConfig(db, 'support_staff_ids');
+      const auth = btoa(`${env.ZENDESK_EMAIL}/token:${env.ZENDESK_API_TOKEN}`);
+
+      const resp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${zid}/comments.json`, { headers: { Authorization: `Basic ${auth}` } });
+      const zendeskStatus = resp.status;
+      let comments = [];
+      if (resp.ok) ({ comments = [] } = await resp.json());
+
+      // Resolve the requester — mirrors the live capture rule ("public, not -1, not the customer").
+      let requesterId = null;
+      try {
+        const tResp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${zid}.json`, { headers: { Authorization: `Basic ${auth}` } });
+        if (tResp.ok) { const { ticket } = await tResp.json(); requesterId = ticket?.requester_id ?? null; }
+      } catch {}
+
+      const isTeam = (c) => c.public === true && typeof c.author_id === 'number' && c.author_id > 0
+        && (requesterId != null ? c.author_id !== requesterId : supportStaffIds.includes(c.author_id));
+      const analyzed = comments.map(c => ({
+        id: c.id,
+        author_id: c.author_id,
+        public: c.public,
+        in_support_staff_ids: supportStaffIds.includes(c.author_id),
+        would_capture: isTeam(c),
+        created_at: c.created_at,
+        snippet: (c.plain_body || c.body || '').substring(0, 120)
+      }));
+      const wouldCapture = analyzed.filter(c => c.would_capture);
+      const hasMessagingTranscript = analyzed.some(c => c.public && c.author_id === -1);
+
+      return new Response(JSON.stringify({
+        zendesk_ticket_id: zid,
+        ticket_in_agent_db: !!ticketRow,
+        agent_ticket: ticketRow || null,
+        zendesk_comments_status: zendeskStatus,
+        requester_id: requesterId,
+        configured_support_staff_ids: supportStaffIds,
+        total_comments: analyzed.length,
+        public_comment_author_ids: [...new Set(analyzed.filter(c => c.public).map(c => c.author_id))],
+        would_capture_count: wouldCapture.length,
+        diagnosis: !ticketRow ? 'TICKET NOT IN AGENT DB — webhook skips it'
+          : zendeskStatus !== 200 ? `Zendesk comments API returned ${zendeskStatus}`
+          : wouldCapture.length > 0 ? 'Would capture OK'
+          : hasMessagingTranscript ? 'Only a Messaging/chat transcript (author_id -1) — not captured by design'
+          : 'No public team reply found',
+        comments: analyzed
       }, null, 2), { headers: cors });
     }
 
