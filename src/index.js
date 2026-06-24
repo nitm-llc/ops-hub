@@ -3594,6 +3594,7 @@ export default {
         while (next && pages < pageCap) { const d = await klaviyoFetch(next, env); items.push(...(d.data || [])); next = d.links && d.links.next; pages++; }
         return { items, capped: !!next };
       };
+      const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
       try {
         // List every Klaviyo list + segment for the audience picker.
         // Note: Klaviyo's /lists/ and /segments/ endpoints cap page[size] at 10,
@@ -3611,17 +3612,35 @@ export default {
           const errors = [L.error, S.error].filter(Boolean);
           return cj({ options, errors });
         }
-        // Raw member counts for a set of refs: { refs: [{type,id}] }.
+        // Raw member counts for a set of refs: { refs: [{type,id}], force? }.
+        // Klaviyo's profile_count field has a strict burst limit, so we fetch
+        // sequentially with retry/backoff and cache results in D1 for 30 min.
         if (path === "/campaign-router/api/klaviyo-sizes" && request.method === "POST") {
-          const { refs = [] } = await request.json();
+          const { refs = [], force = false } = await request.json();
+          await env.DB.prepare(`CREATE TABLE IF NOT EXISTS campaign_router_sizes (ref TEXT PRIMARY KEY, count INTEGER, updated_at TEXT)`).run();
           const sizes = {};
-          await Promise.all(refs.filter(r => r && r.id && r.type).map(async r => {
+          const getCount = async (r, attempt = 0) => {
             try {
               const af = `additional-fields[${r.type}]=profile_count`;
               const d = await klaviyoFetch(`${KLAVIYO_API}/${r.type}s/${r.id}/?${af}`, env);
-              sizes[r.id] = (d.data && d.data.attributes && d.data.attributes.profile_count) ?? null;
+              return (d.data && d.data.attributes && d.data.attributes.profile_count) ?? null;
+            } catch (e) {
+              if (attempt < 5 && /429|rate.?limit/i.test(e.message)) { await sleep(700 * (attempt + 1)); return getCount(r, attempt + 1); }
+              throw e;
+            }
+          };
+          for (const r of refs.filter(r => r && r.id && r.type)) {
+            const refKey = `${r.type}:${r.id}`;
+            if (!force) {
+              const cached = await env.DB.prepare(`SELECT count FROM campaign_router_sizes WHERE ref = ? AND updated_at > datetime('now','-30 minutes')`).bind(refKey).first();
+              if (cached) { sizes[r.id] = cached.count; continue; }
+            }
+            try {
+              const c = await getCount(r);
+              sizes[r.id] = c;
+              if (c != null) await env.DB.prepare(`INSERT OR REPLACE INTO campaign_router_sizes (ref, count, updated_at) VALUES (?, ?, datetime('now'))`).bind(refKey, c).run();
             } catch (e) { sizes[r.id] = null; }
-          }));
+          }
           return cj({ sizes });
         }
         // Exact mutually-exclusive net reach. Body: { tiers: [{id,type,name}] } in priority order.
