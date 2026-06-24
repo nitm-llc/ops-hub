@@ -259,6 +259,9 @@
         Choose PDF & extract<input type="file" id="prod-pdf" accept="application/pdf" style="display:none" onchange="uploadProductPdf()">
       </label>
     </div>
+    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);margin-top:10px;cursor:pointer">
+      <input type="checkbox" id="prod-force-vision"> Read with AI vision (for image-heavy / diagram-heavy products — slower, reads the pages as images). Auto-enabled if little text is found.
+    </label>
     <div id="prod-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>
     <div id="prod-review" style="display:none;margin-top:14px"></div>
   </div>
@@ -555,20 +558,32 @@ async function uploadProductPdf() {
   if (!file) return;
   const name = document.getElementById('prod-name').value.trim() || file.name.replace(/\.pdf$/i, '');
   const status = document.getElementById('prod-upload-status');
+  const forceVision = document.getElementById('prod-force-vision').checked;
   if (!window.pdfjsLib) { status.textContent = 'PDF library failed to load — refresh and try again.'; return; }
   try {
     status.textContent = 'Reading PDF…';
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
     let text = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      status.textContent = `Reading PDF… page ${i}/${pdf.numPages}`;
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      text += content.items.map(it => it.str).join(' ') + '\n';
-      if (text.length > 400000) { text += '\n[truncated]'; break; }
+    if (!forceVision) {
+      for (let i = 1; i <= pdf.numPages; i++) {
+        status.textContent = `Reading PDF… page ${i}/${pdf.numPages}`;
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map(it => it.str).join(' ') + '\n';
+        if (text.length > 700000) { text += '\n[truncated]'; break; }
+      }
     }
-    if (text.trim().length < 50) { status.textContent = "Couldn't extract text (scanned PDF?). Try a text-based PDF, or paste the table of contents."; return; }
+
+    // Route to AI vision if forced, or if the text layer is sparse (image-heavy / scanned).
+    const charsPerPage = text.trim().length / Math.max(pdf.numPages, 1);
+    if (forceVision || charsPerPage < 120) {
+      await runVisionExtraction(file, name, pdf, status);
+      fileInput.value = '';
+      return;
+    }
+
     status.textContent = 'Extracting coverage map with AI… (this can take ~10–20s)';
     const result = await api('/products/extract', { method: 'POST', body: JSON.stringify({ name, text }) });
     status.textContent = '';
@@ -577,6 +592,36 @@ async function uploadProductPdf() {
   } catch (e) {
     status.textContent = 'Failed: ' + e.message;
   }
+}
+
+// Render PDF pages to JPEG images and have Claude read them in batches (handles
+// image-heavy/scanned PDFs and any length). Renders per-batch to keep memory low.
+async function runVisionExtraction(file, name, pdf, status) {
+  const BATCH = 20, TARGET_W = 1100;
+  const totalBatches = Math.ceil(pdf.numPages / BATCH);
+  const partials = [], allTopics = [];
+  for (let b = 0; b < totalBatches; b++) {
+    const images = [];
+    for (let i = b * BATCH + 1; i <= Math.min((b + 1) * BATCH, pdf.numPages); i++) {
+      status.textContent = `Rendering page ${i}/${pdf.numPages}…`;
+      const page = await pdf.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const scale = Math.min(1.5, TARGET_W / base.width);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      images.push(canvas.toDataURL('image/jpeg', 0.65).split(',')[1]);
+    }
+    status.textContent = `AI reading pages with vision… batch ${b + 1}/${totalBatches} (this can take a few minutes for a long product)`;
+    const res = await api('/products/vision-batch', { method: 'POST', body: JSON.stringify({ name, images, batch: b + 1, totalBatches }) });
+    if (res.partial_outline) partials.push(res.partial_outline);
+    if (Array.isArray(res.topics)) allTopics.push(...res.topics);
+  }
+  status.textContent = 'Merging into one coverage map…';
+  const merged = await api('/products/vision-merge', { method: 'POST', body: JSON.stringify({ name, partials, topics: allTopics }) });
+  status.textContent = '';
+  showProductEditor({ name, source_filename: file.name, coverage_outline: merged.coverage_outline, topics: merged.topics || [] });
 }
 
 function showProductEditor(p) {

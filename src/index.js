@@ -738,6 +738,7 @@ async function initCxAgentTables(db) {
   const v47Keys = [
     ['product_kb_enabled', 'true', 'boolean', 'Reference the product knowledge base when drafting coverage/product questions'],
     ['product_kb_max_products', '4', 'number', 'Max products to include as context per draft'],
+    ['product_extract_model', 'claude-opus-4-8', 'string', 'Model used to extract product coverage maps (text + vision)'],
   ];
   for (const [key, value, value_type, description] of v47Keys) {
     const exists = await db.prepare("SELECT 1 FROM agent_config WHERE key = ?").bind(key).first();
@@ -2029,7 +2030,7 @@ async function cxCallClaude(env, model, systemPrompt, userPrompt, maxTokens = 10
 // a topic/chapter-level outline of WHAT is covered, with no actual study content. This is
 // the only thing we store + ever feed the drafter, so IP can't leak.
 async function cxExtractProductCoverage(env, db, name, text) {
-  const model = await cxGetConfig(db, 'anthropic_model');
+  const model = (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
   const systemPrompt = `You build an IP-SAFE "coverage map" for a nursing-education product sold by Nurse In The Making. The goal: let customer support confirm WHAT TOPICS a product covers, WITHOUT exposing the actual study content.
 
 CRITICAL — never include actual teaching material: no definitions, explanations, full sentences of content, lab values, dosages, mnemonics, or step-by-step processes. Only topic LABELS — the kind of thing you'd see in a detailed table of contents.
@@ -2041,7 +2042,8 @@ Produce two things:
 2. "topics": a flat array of 15–40 lowercase search keywords customers might use, INCLUDING synonyms (e.g. both "cancer" and "oncology", "heart" and "cardiac").
 
 Return ONLY valid JSON: {"coverage_outline": "...markdown...", "topics": ["...", ...]}`;
-  const userPrompt = `Product name: ${name}\n\nProduct content (may be truncated):\n${(text || '').substring(0, 200000)}`;
+  // ~600k chars ≈ 150k tokens — fits a full ~300-page text book in Opus's context in one call.
+  const userPrompt = `Product name: ${name}\n\nProduct content (may be truncated):\n${(text || '').substring(0, 600000)}`;
   const resp = await cxCallClaude(env, model, systemPrompt, userPrompt, 3000);
   const parsed = cxExtractJson(resp.content);
   return {
@@ -2202,6 +2204,33 @@ async function handleCxAgentAPI(request, env, path) {
       if (!body.text || !body.text.trim()) return new Response(JSON.stringify({ error: 'text required' }), { status: 400, headers: cors });
       const extracted = await cxExtractProductCoverage(env, db, body.name || '(untitled)', body.text);
       return new Response(JSON.stringify(extracted), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/vision-batch — { name, images:[base64 jpeg], batch, totalBatches }
+    // Reads a batch of page IMAGES (for image-heavy/scanned PDFs) and returns the IP-safe
+    // topics covered on those pages. The browser loops batches, then calls vision-merge.
+    if (path === '/cx-agent/api/products/vision-batch' && request.method === 'POST') {
+      const body = await request.json();
+      if (!Array.isArray(body.images) || !body.images.length) return new Response(JSON.stringify({ error: 'images required' }), { status: 400, headers: cors });
+      const model = (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
+      const sys = `You are reading page images from a nursing-education product to build an IP-SAFE coverage map. For THESE pages only, list the sections/topics covered as short topic labels (table-of-contents style). NEVER reproduce actual study content, definitions, lab values, dosages, mnemonics, or full sentences of material. Return ONLY valid JSON: {"partial_outline":"...markdown bullets of topic labels...","topics":["lowercase","keywords"]}`;
+      const content = body.images.map(b64 => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } }));
+      content.push({ type: 'text', text: `Product: ${body.name || ''} — batch ${body.batch}/${body.totalBatches}. Extract the IP-safe topics covered on these pages.` });
+      const resp = await cxCallClaude(env, model, sys, content, 2000);
+      const parsed = cxExtractJson(resp.content);
+      return new Response(JSON.stringify({ partial_outline: parsed?.partial_outline || '', topics: Array.isArray(parsed?.topics) ? parsed.topics : [] }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/vision-merge — { name, partials:[string], topics:[string] }
+    // Merges the per-batch partial outlines into one clean, deduped coverage map.
+    if (path === '/cx-agent/api/products/vision-merge' && request.method === 'POST') {
+      const body = await request.json();
+      const model = (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
+      const sys = `You merge partial coverage notes (read page-by-page from one product) into ONE clean, deduplicated IP-SAFE coverage map. Organize by section/chapter with short topic labels — a detailed table of contents, NOT the actual content. NEVER include definitions, values, mnemonics, or teaching material. Return ONLY valid JSON: {"coverage_outline":"...markdown...","topics":["..."]}`;
+      const user = `Product: ${body.name || ''}\n\nPartial coverage notes (in page order):\n${(body.partials || []).join('\n\n')}\n\nCandidate topic keywords: ${(body.topics || []).join(', ')}`;
+      const resp = await cxCallClaude(env, model, sys, user, 4000);
+      const parsed = cxExtractJson(resp.content);
+      return new Response(JSON.stringify({ coverage_outline: parsed?.coverage_outline || '', topics: Array.isArray(parsed?.topics) ? parsed.topics : [] }), { headers: cors });
     }
 
     // POST /cx-agent/api/products — create or update. Body: { id?, name, sku?, description?,
