@@ -215,6 +215,8 @@
     <div class="loading">Loading insights...</div>
   </div>
 
+  <div id="training-readiness"></div>
+
   <div class="filter-bar">
     <label>Filter:</label>
     <select id="training-filter">
@@ -307,7 +309,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'config') loadConfig();
     if (tab.dataset.tab === 'templates') loadTemplates();
     if (tab.dataset.tab === 'tickets') { loadStats(); loadTickets(); }
-    if (tab.dataset.tab === 'training') { loadTrainingInsights(); loadTraining(); }
+    if (tab.dataset.tab === 'training') { loadTrainingInsights(); loadReadiness(); loadTraining(); }
     if (tab.dataset.tab === 'products') loadProducts();
   });
 });
@@ -838,6 +840,60 @@ async function loadTrainingInsights() {
   }
 }
 
+async function loadReadiness() {
+  const el = document.getElementById('training-readiness');
+  if (!el) return;
+  try {
+    const d = await api('/training/readiness');
+    const modeMap = {
+      internal_note: ['Drafts only', 'pill-neutral'],
+      shadow: ['Shadow mode', 'pill-info'],
+      auto_reply: ['Auto-reply LIVE', 'pill-success']
+    };
+    const [modeTxt, modeCls] = modeMap[d.mode] || [d.mode, 'pill-neutral'];
+    let rows = (d.intents || []).filter(i => i.total_rated > 0 || i.on_allowlist);
+    rows.sort((a, b) => (b.on_allowlist - a.on_allowlist) || (b.total_rated - a.total_rated));
+    if (!rows.length) { el.innerHTML = ''; return; }
+
+    const badge = (i) => {
+      if (i.status === 'ready') return '<span class="pill pill-success" style="font-size:11px">✅ Ready to auto-send</span>';
+      if (i.status === 'below_bar') return `<span class="pill pill-warn" style="font-size:11px">Below bar (${i.accuracy}% &lt; ${d.bar}%)</span>`;
+      if (i.status === 'needs_samples') return `<span class="pill pill-warn" style="font-size:11px">Need ${i.needed} more rated</span>`;
+      return '<span class="pill pill-neutral" style="font-size:11px">Not on allowlist</span>';
+    };
+
+    const rowHtml = rows.map(i => {
+      const pct = i.recent_n ? i.accuracy : 0;
+      const barColor = i.accuracy >= d.bar ? 'var(--green,#30a46c)' : 'var(--amber,#f5a623)';
+      const accText = i.recent_n
+        ? `${i.accuracy}% over ${i.recent_n} rated${i.total_rated > i.recent_n ? ' · ' + i.total_rated + ' total' : ''}`
+        : `${i.total_rated} rated (need ${d.min_sample})`;
+      return `
+        <div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--border)">
+          <div style="width:160px;flex-shrink:0"><span class="pill pill-info mono" style="font-size:11px">${escape(i.intent)}</span></div>
+          <div style="flex:1;min-width:120px">
+            <div style="height:8px;background:var(--surface2);border-radius:4px;position:relative;overflow:hidden">
+              <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px"></div>
+              <div title="${d.bar}% threshold" style="position:absolute;top:-2px;bottom:-2px;left:${d.bar}%;width:2px;background:var(--text-muted)"></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:3px">${accText}</div>
+          </div>
+          <div style="flex-shrink:0">${badge(i)}</div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div style="font-weight:600;font-size:14px">🎯 Auto-send readiness</div>
+          <div style="font-size:12px;color:var(--text-muted)">Mode: <span class="pill ${modeCls}" style="font-size:11px">${modeTxt}</span> · bar ${d.bar}% over ${d.min_sample} rated · confidence ≥ ${Math.round((d.min_confidence || 0) * 100)}%</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin:6px 0 4px">The vertical line marks the ${d.bar}% threshold. An intent auto-sends only when it's on the allowlist, clears the bar, and the draft is confident enough.</div>
+        ${rowHtml}
+      </div>`;
+  } catch (e) { el.innerHTML = ''; }
+}
+
 async function loadTraining() {
   const filter = document.getElementById('training-filter').value;
   const intent = document.getElementById('training-intent').value;
@@ -959,6 +1015,7 @@ async function submitRating(replyId) {
     toast('Saved', 'success');
     loadTraining();
     loadTrainingInsights();
+    loadReadiness();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
@@ -969,6 +1026,7 @@ async function unrate(replyId) {
     toast('Rating cleared', 'success');
     loadTraining();
     loadTrainingInsights();
+    loadReadiness();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 

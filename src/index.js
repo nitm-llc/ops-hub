@@ -2513,6 +2513,51 @@ async function handleCxAgentAPI(request, env, path) {
       }, null, 2), { headers: cors });
     }
 
+    // GET /cx-agent/api/training/readiness
+    // Per-intent auto-send readiness: rolling accuracy over the last N rated replies
+    // (same metric the auto-reply gate uses), sample count, allowlist + ready status.
+    if (path === '/cx-agent/api/training/readiness' && request.method === 'GET') {
+      const mode = await cxGetConfig(db, 'mode');
+      const bar = (await cxGetConfig(db, 'auto_reply_accuracy_bar')) ?? 0.9;
+      const minSample = (await cxGetConfig(db, 'auto_reply_min_sample')) ?? 25;
+      const minConf = await cxGetConfig(db, 'min_confidence_to_auto_reply');
+      const allow = (await cxGetConfig(db, 'auto_reply_intents')) || [];
+
+      const rows = (await db.prepare(`
+        WITH ranked AS (
+          SELECT t.classified_intent AS intent, hr.rating,
+                 ROW_NUMBER() OVER (PARTITION BY t.classified_intent ORDER BY hr.rated_at DESC) AS rn
+          FROM agent_human_replies hr
+          JOIN agent_tickets t ON t.id = hr.ticket_id
+          WHERE hr.rating IS NOT NULL AND t.classified_intent IS NOT NULL
+        )
+        SELECT intent,
+          COUNT(*) AS total,
+          SUM(CASE WHEN rn <= ? AND rating IN ('good','minor') THEN 1 ELSE 0 END) AS recent_good,
+          SUM(CASE WHEN rn <= ? THEN 1 ELSE 0 END) AS recent_n
+        FROM ranked GROUP BY intent ORDER BY total DESC
+      `).bind(minSample, minSample).all()).results || [];
+
+      const intents = rows.map(r => {
+        const recent_n = r.recent_n || 0;
+        const accuracy = recent_n ? (r.recent_good || 0) / recent_n : 0;
+        const on_allowlist = allow.includes(r.intent);
+        const enough = recent_n >= minSample;
+        const ready = on_allowlist && enough && accuracy >= bar;
+        return {
+          intent: r.intent, total_rated: r.total || 0, recent_n, accuracy: Math.round(accuracy * 100),
+          on_allowlist, ready,
+          status: !on_allowlist ? 'not_enabled' : !enough ? 'needs_samples' : accuracy >= bar ? 'ready' : 'below_bar',
+          needed: enough ? 0 : minSample - recent_n
+        };
+      });
+
+      return new Response(JSON.stringify({
+        mode, bar: Math.round(bar * 100), min_sample: minSample,
+        min_confidence: minConf, auto_reply_intents: allow, intents
+      }, null, 2), { headers: cors });
+    }
+
     // GET /cx-agent/api/diag/reply-capture?ticket=<zendesk_ticket_id>
     // Mirrors captureHumanReply WITHOUT inserting — shows exactly why a reply did or
     // didn't get captured (ticket-in-DB? which comments are public? which author_ids
