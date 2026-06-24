@@ -747,6 +747,21 @@ async function initCxAgentTables(db) {
     }
   }
 
+  // v4.8 migration: autonomous-reply guardrails. mode supports internal_note | shadow | auto_reply.
+  const v48Keys = [
+    ['auto_reply_intents', '["product_info"]', 'json', 'Intents eligible for autonomous replies (each still gated by accuracy + confidence)'],
+    ['auto_reply_accuracy_bar', '0.9', 'number', 'Min per-intent accuracy (good+minor share) before an intent may auto-send'],
+    ['auto_reply_min_sample', '25', 'number', 'Min rated replies for an intent before the accuracy gate can pass'],
+  ];
+  for (const [key, value, value_type, description] of v48Keys) {
+    const exists = await db.prepare("SELECT 1 FROM agent_config WHERE key = ?").bind(key).first();
+    if (!exists) {
+      await db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind(key, value, value_type, description).run();
+    }
+  }
+  // Update mode description to document the new 'shadow' state.
+  await db.prepare("UPDATE agent_config SET description = 'internal_note | shadow | auto_reply' WHERE key = 'mode' AND description = 'internal_note | auto_reply'").run();
+
   const existingTpl = await db.prepare("SELECT COUNT(*) as c FROM agent_templates").first();
   if (existingTpl.c === 0) {
     await db.batch([
@@ -1522,7 +1537,7 @@ async function cxSearchHelpCenter(query, db, env, maxResults = 3) {
 async function cxFetchExampleReplies(db, intent, limit = 3) {
   try {
     const rows = await db.prepare(`
-      SELECT t.first_customer_message AS customer_msg, hr.body AS human_reply
+      SELECT t.first_customer_message AS customer_msg, hr.body AS human_reply, hr.rating, hr.rating_note
       FROM agent_human_replies hr
       JOIN agent_tickets t ON t.id = hr.ticket_id
       WHERE hr.rating IN ('good','minor','rewrite')
@@ -1650,7 +1665,8 @@ async function cxDraftGeneralSuggestion(ticketId, ticketData, intent, db, env, t
     const examplesBlock = examples._rows?.length
       ? `\n\nHere are real replies Kristine has sent for "${intent.intent}" tickets. Match this voice, length, and structure closely — these are the gold standard, more authoritative than the generic tone rules above:\n\n` +
         examples._rows.map((ex, i) =>
-          `--- Example ${i + 1} ---\nCustomer wrote:\n${(ex.customer_msg || '').substring(0, 600)}\n\nKristine replied:\n${(ex.human_reply || '').substring(0, 1200)}`
+          `--- Example ${i + 1} ---\nCustomer wrote:\n${(ex.customer_msg || '').substring(0, 600)}\n\nKristine replied:\n${(ex.human_reply || '').substring(0, 1200)}` +
+          (ex.rating_note ? `\nReviewer note (a preference/rule to apply going forward): ${ex.rating_note}` : '')
         ).join('\n\n')
       : '';
 
@@ -1775,11 +1791,35 @@ Write the reply as Kristine.`;
     data_sources: response.data_sources
   });
 
-  await tracer.trace('post_internal_note', async () => cxPostInternalNote(ticketData.zendeskTicketId, noteBody, db, env));
-  await tracer.trace('apply_tags', async () => cxApplyZendeskTags(ticketData.zendeskTicketId, ['ai-processed', 'ai-suggested', `ai-intent-${intent.intent}`], db, env));
+  // v4.8: autonomous-reply decision. mode = internal_note (draft only) | shadow (decide +
+  // tag, still draft) | auto_reply (send when all gates pass, else fall back to a draft).
+  const mode = await cxGetConfig(db, 'mode');
+  let decision = { pass: false, reason: 'mode=internal_note' };
+  if (mode === 'shadow' || mode === 'auto_reply') {
+    decision = await tracer.trace('auto_reply_decision', async () => ({ ...(await cxAutoReplyDecision(db, intent.intent, response.confidence)), mode }));
+  }
 
+  if (mode === 'auto_reply' && decision.pass) {
+    await tracer.trace('post_public_reply', async () => cxPostPublicReply(ticketData.zendeskTicketId, response.body, db, env));
+    await tracer.trace('apply_tags', async () => cxApplyZendeskTags(ticketData.zendeskTicketId, ['ai-processed', 'ai-auto-replied', `ai-intent-${intent.intent}`], db, env));
+    await db.prepare(`UPDATE agent_responses SET status = 'auto_replied', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
+    await db.prepare(`UPDATE agent_tickets SET status = 'auto_replied', final_action = 'auto_replied', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
+    return;
+  }
+
+  // Otherwise post the draft as a note. In shadow / held cases, prepend a banner showing
+  // what the autonomous decision WOULD have been, so you can validate the gates safely.
+  const banner = (mode === 'shadow' || mode === 'auto_reply')
+    ? `[${mode === 'auto_reply' ? 'AUTO-REPLY HELD' : 'SHADOW'}] Would auto-send: ${decision.pass ? 'YES ✅' : 'NO ⏸'} — ${decision.reason}\n\n`
+    : '';
+  const tags = ['ai-processed', 'ai-suggested', `ai-intent-${intent.intent}`];
+  if (mode === 'shadow') tags.push(decision.pass ? 'ai-shadow-would-send' : 'ai-shadow-hold');
+
+  await tracer.trace('post_internal_note', async () => cxPostInternalNote(ticketData.zendeskTicketId, banner + noteBody, db, env));
+  await tracer.trace('apply_tags', async () => cxApplyZendeskTags(ticketData.zendeskTicketId, tags, db, env));
   await db.prepare(`UPDATE agent_responses SET status = 'posted_as_note', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
-  await db.prepare(`UPDATE agent_tickets SET status = 'drafted', final_action = 'suggestion_posted', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
+  await db.prepare(`UPDATE agent_tickets SET status = 'drafted', final_action = ?, completed_at = datetime('now') WHERE id = ?`)
+    .bind(mode === 'shadow' ? (decision.pass ? 'shadow_would_send' : 'shadow_held') : 'suggestion_posted', ticketId).run();
 }
 
 // ==========================================================================
@@ -1914,6 +1954,46 @@ async function cxPostInternalNote(ticketId, body, db, env) {
     body: JSON.stringify({ ticket: { comment: { body, public: false } } })
   });
   return { status: resp.status, ok: resp.ok };
+}
+
+// v4.8: post a PUBLIC reply to the customer (autonomous send) and set the ticket pending.
+async function cxPostPublicReply(ticketId, body, db, env) {
+  const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
+  const auth = btoa(`${env.ZENDESK_EMAIL}/token:${env.ZENDESK_API_TOKEN}`);
+  const resp = await fetch(`https://${subdomain}.zendesk.com/api/v2/tickets/${ticketId}.json`, {
+    method: 'PUT',
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticket: { comment: { body, public: true }, status: 'pending' } })
+  });
+  return { status: resp.status, ok: resp.ok };
+}
+
+// v4.8: decide whether a drafted reply may be auto-sent. Returns {pass, reason, accuracy, sample}.
+// Gates: intent on the allowlist, draft confidence over threshold, and a measured per-intent
+// accuracy (good+minor share over the last N rated replies) at or above the trust bar.
+async function cxAutoReplyDecision(db, intentName, draftConfidence) {
+  const allow = (await cxGetConfig(db, 'auto_reply_intents')) || [];
+  if (!allow.includes(intentName)) return { pass: false, reason: `intent '${intentName}' not on auto-reply allowlist` };
+
+  const minConf = await cxGetConfig(db, 'min_confidence_to_auto_reply');
+  if (typeof draftConfidence === 'number' && draftConfidence < minConf) {
+    return { pass: false, reason: `confidence ${draftConfidence} < ${minConf}` };
+  }
+
+  const bar = (await cxGetConfig(db, 'auto_reply_accuracy_bar')) ?? 0.9;
+  const minSample = (await cxGetConfig(db, 'auto_reply_min_sample')) ?? 25;
+  const rows = (await db.prepare(`
+    SELECT hr.rating FROM agent_human_replies hr
+    JOIN agent_tickets t ON t.id = hr.ticket_id
+    WHERE t.classified_intent = ? AND hr.rating IS NOT NULL
+    ORDER BY hr.rated_at DESC LIMIT ?
+  `).bind(intentName, minSample).all()).results || [];
+  const sample = rows.length;
+  if (sample < minSample) return { pass: false, reason: `only ${sample}/${minSample} rated samples for '${intentName}'`, sample };
+  const goodish = rows.filter(r => r.rating === 'good' || r.rating === 'minor').length;
+  const accuracy = goodish / sample;
+  if (accuracy < bar) return { pass: false, reason: `accuracy ${(accuracy * 100).toFixed(0)}% < bar ${(bar * 100).toFixed(0)}%`, accuracy, sample };
+  return { pass: true, reason: `accuracy ${(accuracy * 100).toFixed(0)}% over ${sample} (bar ${(bar * 100).toFixed(0)}%)`, accuracy, sample };
 }
 
 async function cxFindCustomerOrders(ticketData, orderNumbersFound, db, env) {

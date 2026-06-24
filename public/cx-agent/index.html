@@ -166,6 +166,7 @@
     <select id="filter-status">
       <option value="">All</option>
       <option value="drafted">Drafted</option>
+      <option value="auto_replied">Auto-replied</option>
       <option value="escalated">Escalated</option>
       <option value="error">Error</option>
       <option value="processing">Processing</option>
@@ -693,6 +694,7 @@ function statusPill(status) {
     received: 'pill-neutral',
     processing: 'pill-info',
     drafted: 'pill-success',
+    auto_replied: 'pill-success',
     escalated: 'pill-warn',
     error: 'pill-error'
   };
@@ -704,6 +706,9 @@ function actionPill(action) {
   const labels = {
     'internal_note_posted': { label: '✨ Draft reply', cls: 'pill-success' },
     'suggestion_posted':    { label: '💡 AI suggestion', cls: 'pill-info' },
+    'auto_replied':         { label: '🤖 Auto-replied', cls: 'pill-success' },
+    'shadow_would_send':    { label: '👁 Shadow: would send', cls: 'pill-info' },
+    'shadow_held':          { label: '👁 Shadow: held', cls: 'pill-neutral' },
     'suggest_close':        { label: '🗑️ Recommend close', cls: 'pill-warn' },
     'escalated':            { label: '⚠️ Escalated', cls: 'pill-warn' }
   };
