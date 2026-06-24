@@ -657,6 +657,8 @@ async function loadTraining() {
     }
 
     container.innerHTML = tickets.map(t => renderTrainingCard(t)).join('');
+    // After rating Rewrote/Flag we auto-open the note editor so Amanda can say what changed.
+    if (openNoteFor != null) { const id = openNoteFor; openNoteFor = null; openNote(id); }
   } catch (e) {
     container.innerHTML = '<div class="loading">Could not load: ' + escape(e.message) + '</div>';
   }
@@ -692,9 +694,17 @@ function renderTrainingCard(t) {
         <button onclick="rateReply(${t.reply_id}, 'minor')" class="rate-btn ${t.rating==='minor'?'active':''}" data-rating="minor">✏️ Minor edits</button>
         <button onclick="rateReply(${t.reply_id}, 'rewrite')" class="rate-btn ${t.rating==='rewrite'?'active':''}" data-rating="rewrite">❌ Rewrote</button>
         <button onclick="rateReply(${t.reply_id}, 'flag')" class="rate-btn ${t.rating==='flag'?'active':''}" data-rating="flag">🚩 Flag</button>
-        <button onclick="addNote(${t.reply_id}, ${JSON.stringify(t.rating_note || '').replace(/"/g, '&quot;')})" style="font-size:12px;padding:4px 10px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;margin-left:auto">📝 ${t.rating_note ? 'Edit note' : 'Add note'}</button>
+        <button onclick="toggleNote(${t.reply_id})" style="font-size:12px;padding:4px 10px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer;margin-left:auto">📝 ${t.rating_note ? 'Edit note' : 'Add note'}</button>
       </div>
-      ${t.rating_note ? `<div style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:4px;font-size:12px;color:var(--text-muted);font-style:italic">"${escape(t.rating_note)}"</div>` : ''}
+      <div id="note-display-${t.reply_id}" style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:4px;font-size:12px;color:var(--text-muted);font-style:italic;${t.rating_note ? '' : 'display:none'}">${t.rating_note ? '"' + escape(t.rating_note) + '"' : ''}</div>
+      <div id="note-editor-${t.reply_id}" style="display:none;margin-top:10px">
+        <textarea id="note-input-${t.reply_id}" data-rating="${t.rating || ''}" rows="3" placeholder="What did you change and why? e.g. 'AI didn't mention we offer free shipping over $50' or 'tone too formal for a DM'" style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;resize:vertical">${escape(t.rating_note || '')}</textarea>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <button onclick="saveNote(${t.reply_id}, '${t.rating || ''}')" class="save-btn" style="font-size:12px;padding:5px 14px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer">Save note</button>
+          <button onclick="toggleNote(${t.reply_id})" style="font-size:12px;padding:5px 14px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">Cancel</button>
+          <span style="font-size:11px;color:var(--text-dim);align-self:center;margin-left:4px">⌘/Ctrl+Enter to save</span>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -734,26 +744,57 @@ async function backfillReplies() {
   }
 }
 
+// Which reply's note editor to auto-open after the next re-render (set when rating
+// Rewrote/Flag). Cleared by loadTraining once it opens.
+let openNoteFor = null;
+
 async function rateReply(replyId, rating) {
   try {
+    // Note intentionally omitted so the rate endpoint preserves any existing note.
     await api('/training/rate', { method: 'POST', body: JSON.stringify({ reply_id: replyId, rating }) });
     toast('Rating saved', 'success');
+    // Rewrote/Flag almost always wants a "what changed" note — pop the editor open.
+    if (rating === 'rewrite' || rating === 'flag') openNoteFor = replyId;
     loadTraining();
     loadTrainingInsights();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
-async function addNote(replyId, currentNote) {
-  const note = prompt('Add a note about this reply (e.g., "I changed it because we offer free shipping over $50"):', currentNote || '');
-  if (note === null) return;
+function openNote(replyId) {
+  const editor = document.getElementById('note-editor-' + replyId);
+  const display = document.getElementById('note-display-' + replyId);
+  if (!editor) return;
+  editor.style.display = 'block';
+  if (display) display.style.display = 'none';
+  const ta = document.getElementById('note-input-' + replyId);
+  if (ta) {
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); saveNote(replyId, ta.dataset.rating || ''); } };
+  }
+}
+
+function toggleNote(replyId) {
+  const editor = document.getElementById('note-editor-' + replyId);
+  if (!editor) return;
+  if (editor.style.display === 'none' || !editor.style.display) { openNote(replyId); }
+  else {
+    editor.style.display = 'none';
+    const display = document.getElementById('note-display-' + replyId);
+    if (display && display.textContent.trim()) display.style.display = '';
+  }
+}
+
+async function saveNote(replyId, currentRating) {
+  const ta = document.getElementById('note-input-' + replyId);
+  const note = (ta?.value || '').trim();
+  // A note needs a rating to attach to; default to 'rewrite' since that's the common case.
+  const rating = currentRating || 'rewrite';
   try {
-    // Need the existing rating to send it back along with the note
-    const tickets = (await api('/training/list?filter=all&limit=200')).tickets || [];
-    const t = tickets.find(x => x.reply_id === replyId);
-    if (!t) { toast('Could not find ticket', 'error'); return; }
-    await api('/training/rate', { method: 'POST', body: JSON.stringify({ reply_id: replyId, rating: t.rating || 'flag', rating_note: note }) });
+    await api('/training/rate', { method: 'POST', body: JSON.stringify({ reply_id: replyId, rating, rating_note: note }) });
     toast('Note saved', 'success');
     loadTraining();
+    loadTrainingInsights();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 

@@ -2132,11 +2132,16 @@ async function handleCxAgentAPI(request, env, path) {
       if (!allowed.includes(body.rating)) {
         return new Response(JSON.stringify({ error: 'invalid rating' }), { status: 400, headers: cors });
       }
-      await db.prepare(`
-        UPDATE agent_human_replies
-        SET rating = ?, rating_note = ?, rated_by = ?, rated_at = datetime('now')
-        WHERE id = ?
-      `).bind(body.rating, body.rating_note ?? null, body.rated_by ?? 'unknown', parseInt(body.reply_id)).run();
+      // Only touch rating_note when the caller actually sends one — otherwise just
+      // changing a rating (e.g. clicking a different button) would wipe an existing note.
+      const hasNote = Object.prototype.hasOwnProperty.call(body, 'rating_note');
+      if (hasNote) {
+        await db.prepare(`UPDATE agent_human_replies SET rating = ?, rating_note = ?, rated_by = ?, rated_at = datetime('now') WHERE id = ?`)
+          .bind(body.rating, body.rating_note, body.rated_by ?? 'unknown', parseInt(body.reply_id)).run();
+      } else {
+        await db.prepare(`UPDATE agent_human_replies SET rating = ?, rated_by = ?, rated_at = datetime('now') WHERE id = ?`)
+          .bind(body.rating, body.rated_by ?? 'unknown', parseInt(body.reply_id)).run();
+      }
       return new Response(JSON.stringify({ updated: true }), { headers: cors });
     }
 
