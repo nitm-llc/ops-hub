@@ -604,29 +604,33 @@ let visionInProgress = false;
 window.addEventListener('beforeunload', (e) => { if (visionInProgress) { e.preventDefault(); e.returnValue = ''; } });
 
 async function runVisionExtraction(file, name, pdf, status) {
-  const BATCH = 20, TARGET_W = 1100, PAGE_CAP = 120;
-  // For very large files, evenly sample down to PAGE_CAP pages (always keep the first 10
-  // for the table of contents) so a coverage map takes minutes, not hours.
-  let pages;
-  if (pdf.numPages <= PAGE_CAP) {
-    pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
-  } else {
-    const head = Array.from({ length: 10 }, (_, i) => i + 1);
-    const step = (pdf.numPages - 10) / (PAGE_CAP - 10);
-    const tail = Array.from({ length: PAGE_CAP - 10 }, (_, k) => Math.round(10 + k * step) + 1);
-    pages = [...new Set([...head, ...tail])].filter(p => p <= pdf.numPages).sort((a, b) => a - b);
-  }
-  const sampled = pages.length < pdf.numPages;
-  const keepOpen = '<b style="color:var(--amber,#f5a623)">⏳ Keep this tab open and visible until it finishes.</b> ';
+  const BATCH = 20, TARGET_W = 1100;
+  const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1); // EVERY page — no sampling
+  const totalBatches = Math.ceil(pages.length / BATCH);
+  const keepOpen = '<b style="color:var(--amber,#f5a623)">⏳ Keep this tab open and in front until it says Saved.</b> ';
+
+  // Best-effort: keep the screen awake to reduce background-tab throttling on long runs.
+  let wakeLock = null;
+  try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+  const releaseLock = () => { if (wakeLock) { try { wakeLock.release(); } catch {} wakeLock = null; } };
+
+  // Incremental save: the product is persisted (inactive) after every batch, so an
+  // interruption never loses the pages already read. Finalized + activated at the end.
+  let productId = null;
+  const persist = async (outline, topics, active) => {
+    const payload = { name, source_filename: file.name, coverage_outline: outline, topics, is_active: active };
+    if (productId) payload.id = productId;
+    const r = await api('/products', { method: 'POST', body: JSON.stringify(payload) });
+    if (r.id) productId = r.id;
+  };
 
   visionInProgress = true;
   const partials = [], allTopics = [];
-  const totalBatches = Math.ceil(pages.length / BATCH);
   try {
     for (let b = 0; b < totalBatches; b++) {
       const images = [];
       for (const pnum of pages.slice(b * BATCH, (b + 1) * BATCH)) {
-        status.innerHTML = keepOpen + `Rendering page ${pnum}/${pdf.numPages}${sampled ? ` (sampling ${pages.length})` : ''}…`;
+        status.innerHTML = keepOpen + `Rendering page ${pnum}/${pdf.numPages}…`;
         const page = await pdf.getPage(pnum);
         const base = page.getViewport({ scale: 1 });
         const viewport = page.getViewport({ scale: Math.min(1.5, TARGET_W / base.width) });
@@ -635,37 +639,34 @@ async function runVisionExtraction(file, name, pdf, status) {
         await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
         images.push(canvas.toDataURL('image/jpeg', 0.65).split(',')[1]);
       }
-      status.innerHTML = keepOpen + `AI reading pages… batch ${b + 1}/${totalBatches}`;
+      status.innerHTML = keepOpen + `AI reading every page… batch ${b + 1}/${totalBatches} (${pdf.numPages} pages total)`;
       const res = await api('/products/vision-batch', { method: 'POST', body: JSON.stringify({ name, images, batch: b + 1, totalBatches }) });
       if (res.partial_outline) partials.push(res.partial_outline);
       if (Array.isArray(res.topics)) allTopics.push(...res.topics);
+      try { await persist(partials.join('\n\n'), [...new Set(allTopics)], false); } catch {} // checkpoint
     }
   } catch (e) {
-    if (!partials.length) { visionInProgress = false; status.textContent = 'Failed before any pages were read: ' + e.message; return; }
-    toast('Hit an error partway — saving what was read so far', 'error');
+    if (!partials.length) { visionInProgress = false; releaseLock(); status.textContent = 'Failed before any pages were read: ' + e.message; return; }
+    toast('Hit an error partway — keeping the pages already read', 'error');
   }
 
-  status.innerHTML = keepOpen + 'Merging into one coverage map…';
+  status.innerHTML = keepOpen + 'Merging into one clean coverage map…';
   let merged;
   try {
-    merged = await api('/products/vision-merge', { method: 'POST', body: JSON.stringify({ name, partials, topics: allTopics }) });
-  } catch (e) { visionInProgress = false; status.textContent = 'Merge failed: ' + e.message; return; }
-
-  // Auto-save immediately so nothing is lost if she stepped away, then open for optional edits.
-  visionInProgress = false;
-  const payload = { name, source_filename: file.name, coverage_outline: merged.coverage_outline, topics: merged.topics || [] };
-  try {
-    const saved = await api('/products', { method: 'POST', body: JSON.stringify(payload) });
-    status.textContent = '';
-    toast(`Saved "${name}"${sampled ? ` (sampled ${pages.length} of ${pdf.numPages} pages)` : ''}`, 'success');
-    document.getElementById('prod-name').value = '';
-    loadProducts();
-    showProductEditor({ id: saved.id, ...payload }); // id set -> further edits update, not duplicate
+    merged = await api('/products/vision-merge', { method: 'POST', body: JSON.stringify({ name, partials, topics: [...new Set(allTopics)] }) });
   } catch (e) {
-    status.textContent = '';
-    showProductEditor(payload);
-    toast('Auto-save failed — review and click Save: ' + e.message, 'error');
+    visionInProgress = false; releaseLock();
+    status.textContent = 'Merge failed — the rough map was saved, open it to finish: ' + e.message;
+    loadProducts(); return;
   }
+
+  try { await persist(merged.coverage_outline, merged.topics || [], true); } catch (e) {} // finalize + activate
+  visionInProgress = false; releaseLock();
+  status.textContent = '';
+  toast(`Saved "${name}" — read all ${pdf.numPages} pages`, 'success');
+  document.getElementById('prod-name').value = '';
+  loadProducts();
+  showProductEditor({ id: productId, name, source_filename: file.name, coverage_outline: merged.coverage_outline, topics: merged.topics || [] });
 }
 
 function showProductEditor(p) {

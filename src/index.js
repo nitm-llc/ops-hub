@@ -2326,8 +2326,8 @@ async function handleCxAgentAPI(request, env, path) {
           .bind(body.name, body.sku ?? null, body.description ?? null, body.coverage_outline, topicsJson, body.version ?? null, body.is_active === false ? 0 : 1, parseInt(body.id)).run();
         return new Response(JSON.stringify({ updated: true, id: parseInt(body.id) }), { headers: cors });
       }
-      const res = await db.prepare(`INSERT INTO agent_products (name, sku, description, coverage_outline, topics, source_filename, version) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .bind(body.name, body.sku ?? null, body.description ?? null, body.coverage_outline, topicsJson, body.source_filename ?? null, body.version ?? null).run();
+      const res = await db.prepare(`INSERT INTO agent_products (name, sku, description, coverage_outline, topics, source_filename, version, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(body.name, body.sku ?? null, body.description ?? null, body.coverage_outline, topicsJson, body.source_filename ?? null, body.version ?? null, body.is_active === false ? 0 : 1).run();
       return new Response(JSON.stringify({ created: true, id: res.meta.last_row_id }), { headers: cors });
     }
 
