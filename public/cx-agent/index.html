@@ -263,11 +263,12 @@
       </label>
     </div>
     <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);margin-top:10px;cursor:pointer">
-      <input type="checkbox" id="prod-force-vision"> Read with AI vision (for image-heavy / diagram-heavy products — slower, reads the pages as images). Auto-enabled if little text is found.
+      <input type="checkbox" id="prod-force-vision"> Read with AI vision (for image-heavy / diagram-heavy products). Reads every page in the background — after upload you can close the tab. Auto-enabled if little text is found.
     </label>
     <div id="prod-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>
     <div id="prod-review" style="display:none;margin-top:14px"></div>
   </div>
+  <div id="product-jobs"></div>
   <div id="products-list">
     <div class="loading">Loading products...</div>
   </div>
@@ -286,6 +287,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
 const api = (path, opts = {}) => fetch('/cx-agent/api' + path, {
   ...opts,
@@ -310,7 +312,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'templates') loadTemplates();
     if (tab.dataset.tab === 'tickets') { loadStats(); loadTickets(); }
     if (tab.dataset.tab === 'training') { loadTrainingInsights(); loadReadiness(); loadTraining(); }
-    if (tab.dataset.tab === 'products') loadProducts();
+    if (tab.dataset.tab === 'products') { loadProducts(); loadProductJobs(); }
   });
 });
 
@@ -582,7 +584,7 @@ async function uploadProductPdf() {
     // Route to AI vision if forced, or if the text layer is sparse (image-heavy / scanned).
     const charsPerPage = text.trim().length / Math.max(pdf.numPages, 1);
     if (forceVision || charsPerPage < 120) {
-      await runVisionExtraction(file, name, pdf, status);
+      await startVisionJob(file, name, status);
       fileInput.value = '';
       return;
     }
@@ -600,73 +602,91 @@ async function uploadProductPdf() {
 // Render PDF pages to JPEG images and have Claude read them in batches (handles
 // image-heavy/scanned PDFs and any length). Renders per-batch to keep memory low.
 let visionInProgress = false;
-// Warn before leaving while a vision job is running (it lives in this tab).
+// Warn before leaving only during the brief split+upload phase (after that it's server-side).
 window.addEventListener('beforeunload', (e) => { if (visionInProgress) { e.preventDefault(); e.returnValue = ''; } });
 
-async function runVisionExtraction(file, name, pdf, status) {
-  const BATCH = 20, TARGET_W = 1100;
-  const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1); // EVERY page — no sampling
-  const totalBatches = Math.ceil(pages.length / BATCH);
-  const keepOpen = '<b style="color:var(--amber,#f5a623)">⏳ Keep this tab open and in front until it says Saved.</b> ';
-
-  // Best-effort: keep the screen awake to reduce background-tab throttling on long runs.
-  let wakeLock = null;
-  try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch {}
-  const releaseLock = () => { if (wakeLock) { try { wakeLock.release(); } catch {} wakeLock = null; } };
-
-  // Incremental save: the product is persisted (inactive) after every batch, so an
-  // interruption never loses the pages already read. Finalized + activated at the end.
-  let productId = null;
-  const persist = async (outline, topics, active) => {
-    const payload = { name, source_filename: file.name, coverage_outline: outline, topics, is_active: active };
-    if (productId) payload.id = productId;
-    const r = await api('/products', { method: 'POST', body: JSON.stringify(payload) });
-    if (r.id) productId = r.id;
-  };
-
+// Server-side extraction: split the PDF into chunk PDFs in the browser (fast — no rendering),
+// upload them, and hand off to the cron, which reads every page via Claude native PDF in the
+// background. Once uploaded, the tab can be closed.
+async function startVisionJob(file, name, status) {
+  const CHUNK_PAGES = 20;
+  if (!window.PDFLib) { status.textContent = 'PDF splitter failed to load — refresh and try again.'; return; }
   visionInProgress = true;
-  const partials = [], allTopics = [];
   try {
-    for (let b = 0; b < totalBatches; b++) {
-      const images = [];
-      for (const pnum of pages.slice(b * BATCH, (b + 1) * BATCH)) {
-        status.innerHTML = keepOpen + `Rendering page ${pnum}/${pdf.numPages}…`;
-        const page = await pdf.getPage(pnum);
-        const base = page.getViewport({ scale: 1 });
-        const viewport = page.getViewport({ scale: Math.min(1.5, TARGET_W / base.width) });
-        const canvas = document.createElement('canvas');
-        canvas.width = viewport.width; canvas.height = viewport.height;
-        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-        images.push(canvas.toDataURL('image/jpeg', 0.65).split(',')[1]);
-      }
-      status.innerHTML = keepOpen + `AI reading every page… batch ${b + 1}/${totalBatches} (${pdf.numPages} pages total)`;
-      const res = await api('/products/vision-batch', { method: 'POST', body: JSON.stringify({ name, images, batch: b + 1, totalBatches }) });
-      if (res.partial_outline) partials.push(res.partial_outline);
-      if (Array.isArray(res.topics)) allTopics.push(...res.topics);
-      try { await persist(partials.join('\n\n'), [...new Set(allTopics)], false); } catch {} // checkpoint
+    status.innerHTML = '<b>Preparing…</b> reading the PDF (keep this tab open until upload finishes).';
+    const src = await PDFLib.PDFDocument.load(new Uint8Array(await file.arrayBuffer()), { ignoreEncryption: true });
+    const totalPages = src.getPageCount();
+    const totalChunks = Math.ceil(totalPages / CHUNK_PAGES);
+    const { job_id } = await api('/products/job/start', { method: 'POST', body: JSON.stringify({ name, source_filename: file.name, total_chunks: totalChunks, total_pages: totalPages }) });
+
+    for (let c = 0; c < totalChunks; c++) {
+      status.innerHTML = `<b style="color:var(--amber,#f5a623)">Uploading ${c + 1}/${totalChunks}…</b> keep this tab open until it says you can close it.`;
+      const chunkDoc = await PDFLib.PDFDocument.create();
+      const idxs = [];
+      for (let p = c * CHUNK_PAGES; p < Math.min((c + 1) * CHUNK_PAGES, totalPages); p++) idxs.push(p);
+      const copied = await chunkDoc.copyPages(src, idxs);
+      copied.forEach(pg => chunkDoc.addPage(pg));
+      const chunkBytes = await chunkDoc.save();
+      const r = await fetch(`/cx-agent/api/products/job/${job_id}/chunk/${c}`, {
+        method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/pdf' }, body: chunkBytes
+      });
+      if (!r.ok) throw new Error('chunk upload failed (' + r.status + ')');
     }
+    await api(`/products/job/${job_id}/ready`, { method: 'POST' });
+    visionInProgress = false;
+    status.innerHTML = `<b style="color:var(--green,#30a46c)">✅ Uploaded — you can close this tab now.</b> The AI is reading all ${totalPages} pages in the background; the product appears below when done (roughly ${Math.max(2, Math.ceil(totalChunks / 3) * 2)}–${Math.ceil(totalChunks / 3) * 2 + 6} min).`;
+    document.getElementById('prod-name').value = '';
+    loadProductJobs();
   } catch (e) {
-    if (!partials.length) { visionInProgress = false; releaseLock(); status.textContent = 'Failed before any pages were read: ' + e.message; return; }
-    toast('Hit an error partway — keeping the pages already read', 'error');
+    visionInProgress = false;
+    status.textContent = 'Upload failed: ' + e.message;
   }
+}
 
-  status.innerHTML = keepOpen + 'Merging into one clean coverage map…';
-  let merged;
+async function loadProductJobs() {
+  const el = document.getElementById('product-jobs');
+  if (!el) return;
   try {
-    merged = await api('/products/vision-merge', { method: 'POST', body: JSON.stringify({ name, partials, topics: [...new Set(allTopics)] }) });
-  } catch (e) {
-    visionInProgress = false; releaseLock();
-    status.textContent = 'Merge failed — the rough map was saved, open it to finish: ' + e.message;
-    loadProducts(); return;
-  }
+    // Show active jobs only; finished ones appear in the product list below.
+    const jobs = ((await api('/products/jobs')).jobs || []).filter(j => j.status !== 'done');
+    const active = jobs.filter(j => j.status === 'processing' || j.status === 'pending' || j.status === 'merging' || j.status === 'uploading');
+    if (!jobs.length) { el.innerHTML = ''; return; }
+    const statusText = (j) => {
+      if (j.status === 'uploading') return 'Uploading…';
+      if (j.status === 'pending') return 'Queued — starts within ~2 min';
+      if (j.status === 'processing') return `Reading pages… chunk ${j.done_chunks}/${j.total_chunks}`;
+      if (j.status === 'merging') return 'Merging coverage map…';
+      if (j.status === 'error') return 'Error: ' + (j.error || 'unknown');
+      if (j.status === 'done') return 'Done ✅';
+      return j.status;
+    };
+    const statusCls = (j) => j.status === 'error' ? 'pill-error' : j.status === 'done' ? 'pill-success' : 'pill-info';
+    el.innerHTML = jobs.map(j => {
+      const pct = j.total_chunks ? Math.round((j.done_chunks / j.total_chunks) * 100) : 0;
+      return `
+        <div class="card" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+            <div style="font-weight:600;font-size:13px">⚙️ ${escape(j.name)}${j.total_pages ? ` <span style="color:var(--text-muted);font-weight:400">· ${j.total_pages} pages</span>` : ''}</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <span class="pill ${statusCls(j)}" style="font-size:11px">${escape(statusText(j))}</span>
+              ${j.status !== 'done' ? `<button onclick="cancelJob(${j.id})" style="font-size:11px;padding:3px 10px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">Cancel</button>` : ''}
+            </div>
+          </div>
+          ${j.status === 'processing' || j.status === 'merging' ? `<div style="height:6px;background:var(--surface2);border-radius:3px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:3px"></div></div>` : ''}
+        </div>`;
+    }).join('');
+    // Keep polling while any job is still working (and refresh the product list when one finishes).
+    if (active.length) {
+      clearTimeout(window._jobPoll);
+      window._jobPoll = setTimeout(() => { loadProductJobs(); loadProducts(); }, 12000);
+    }
+  } catch (e) { el.innerHTML = ''; }
+}
 
-  try { await persist(merged.coverage_outline, merged.topics || [], true); } catch (e) {} // finalize + activate
-  visionInProgress = false; releaseLock();
-  status.textContent = '';
-  toast(`Saved "${name}" — read all ${pdf.numPages} pages`, 'success');
-  document.getElementById('prod-name').value = '';
-  loadProducts();
-  showProductEditor({ id: productId, name, source_filename: file.name, coverage_outline: merged.coverage_outline, topics: merged.topics || [] });
+async function cancelJob(id) {
+  if (!confirm('Cancel this extraction job?')) return;
+  try { await api('/products/job/' + id + '/cancel', { method: 'POST' }); toast('Job cancelled', 'success'); loadProductJobs(); }
+  catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
 function showProductEditor(p) {

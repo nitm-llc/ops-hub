@@ -20,6 +20,12 @@
       "database_id": "47d05b88-dfae-4755-a52e-3115ab6d09ff"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "CX_UPLOADS",
+      "bucket_name": "cx-agent-uploads"
+    }
+  ],
   "triggers": {
     "crons": ["*/2 * * * *"]
   }

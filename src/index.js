@@ -664,6 +664,24 @@ async function initCxAgentTables(db) {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     )`),
+    // v4.9: background product-extraction jobs. The browser splits a PDF into chunk PDFs
+    // (stored in R2 under job/<id>/chunk/<n>.pdf); the cron reads each chunk via Claude
+    // native PDF, accumulates partials, merges, and saves the product — fully hands-off.
+    db.prepare(`CREATE TABLE IF NOT EXISTS agent_product_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      source_filename TEXT,
+      total_chunks INTEGER NOT NULL,
+      done_chunks INTEGER DEFAULT 0,
+      total_pages INTEGER,
+      status TEXT NOT NULL DEFAULT 'uploading',
+      partials TEXT DEFAULT '[]',
+      topics TEXT DEFAULT '[]',
+      product_id INTEGER,
+      error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`),
   ]);
 
   const existing = await db.prepare("SELECT COUNT(*) as c FROM agent_config").first();
@@ -2134,6 +2152,79 @@ Return ONLY valid JSON: {"coverage_outline": "...markdown...", "topics": ["...",
   };
 }
 
+function cxAbToBase64(buf) {
+  const bytes = new Uint8Array(buf); let binary = ''; const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(binary);
+}
+
+async function cxDeleteJobChunks(env, jobId) {
+  if (!env.CX_UPLOADS) return;
+  const list = await env.CX_UPLOADS.list({ prefix: `job/${jobId}/` });
+  for (const o of list.objects) { try { await env.CX_UPLOADS.delete(o.key); } catch {} }
+}
+
+// Cron worker: advance background product-extraction jobs. Reads a few chunk PDFs per tick
+// via Claude native PDF (sees images at full quality), accumulates partials, and on the last
+// chunk merges + saves the product. A recency lock prevents overlapping ticks double-processing.
+async function processProductJobs(env) {
+  const db = env.CX_AGENT_DB;
+  if (!db || !env.CX_UPLOADS) return;
+  const CHUNKS_PER_TICK = 3;
+  await initCxAgentTables(db);
+
+  // Pick one queued job, or a stalled in-progress one (>5 min since last update).
+  const job = await db.prepare(`
+    SELECT * FROM agent_product_jobs
+    WHERE status = 'pending' OR (status = 'processing' AND updated_at < datetime('now','-5 minutes'))
+    ORDER BY id ASC LIMIT 1
+  `).first();
+  if (!job) return;
+
+  await db.prepare("UPDATE agent_product_jobs SET status='processing', updated_at=datetime('now') WHERE id = ?").bind(job.id).run();
+
+  let partials = []; try { partials = JSON.parse(job.partials || '[]'); } catch {}
+  let topics = []; try { topics = JSON.parse(job.topics || '[]'); } catch {}
+  let done = job.done_chunks || 0;
+  const model = (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
+
+  try {
+    const end = Math.min(done + CHUNKS_PER_TICK, job.total_chunks);
+    for (let i = done; i < end; i++) {
+      const obj = await env.CX_UPLOADS.get(`job/${job.id}/chunk/${i}.pdf`);
+      if (!obj) throw new Error(`missing chunk ${i}`);
+      const b64 = cxAbToBase64(await obj.arrayBuffer());
+      const sys = `You are reading pages from a nursing-education product to build an IP-SAFE coverage map. For THESE pages only, list the sections/topics covered as short topic labels (table-of-contents style). NEVER reproduce actual study content, definitions, lab values, dosages, mnemonics, or full sentences. Return ONLY valid JSON: {"partial_outline":"...markdown bullets...","topics":["lowercase","keywords"]}`;
+      const content = [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } },
+        { type: 'text', text: `Product: ${job.name} — chunk ${i + 1}/${job.total_chunks}. Extract the IP-safe topics covered on these pages.` }
+      ];
+      const resp = await cxCallClaude(env, model, sys, content, 2000);
+      const parsed = cxExtractJson(resp.content);
+      if (parsed?.partial_outline) partials.push(parsed.partial_outline);
+      if (Array.isArray(parsed?.topics)) topics.push(...parsed.topics);
+      done = i + 1;
+      await db.prepare("UPDATE agent_product_jobs SET done_chunks=?, partials=?, topics=?, updated_at=datetime('now') WHERE id=?")
+        .bind(done, JSON.stringify(partials), JSON.stringify([...new Set(topics)]), job.id).run();
+    }
+
+    if (done >= job.total_chunks) {
+      // All chunks read — merge into one clean map and save the product.
+      await db.prepare("UPDATE agent_product_jobs SET status='merging', updated_at=datetime('now') WHERE id=?").bind(job.id).run();
+      const sys = `You merge partial coverage notes (read in page order from one product) into ONE clean, deduplicated IP-SAFE coverage map. Organize by section/chapter with short topic labels — a detailed table of contents, NOT the actual content. NEVER include definitions, values, mnemonics, or teaching material. Return ONLY valid JSON: {"coverage_outline":"...markdown...","topics":["..."]}`;
+      const user = `Product: ${job.name}\n\nPartial coverage notes (page order):\n${partials.join('\n\n')}\n\nCandidate topic keywords: ${[...new Set(topics)].join(', ')}`;
+      const resp = await cxCallClaude(env, model, sys, user, 4000);
+      const merged = cxExtractJson(resp.content) || {};
+      const ins = await db.prepare(`INSERT INTO agent_products (name, source_filename, coverage_outline, topics, is_active) VALUES (?, ?, ?, ?, 1)`)
+        .bind(job.name, job.source_filename ?? null, merged.coverage_outline || partials.join('\n\n'), JSON.stringify(Array.isArray(merged.topics) ? merged.topics : [...new Set(topics)])).run();
+      await db.prepare("UPDATE agent_product_jobs SET status='done', product_id=?, updated_at=datetime('now') WHERE id=?").bind(ins.meta.last_row_id, job.id).run();
+      await cxDeleteJobChunks(env, job.id);
+    }
+  } catch (err) {
+    await db.prepare("UPDATE agent_product_jobs SET status='error', error=?, updated_at=datetime('now') WHERE id=?").bind(String(err.message).slice(0, 500), job.id).run();
+  }
+}
+
 async function verifyZendeskSignature(body, timestamp, signature, secret) {
   try {
     const encoder = new TextEncoder();
@@ -2336,6 +2427,48 @@ async function handleCxAgentAPI(request, env, path) {
     if (prodDelMatch && request.method === 'POST') {
       await db.prepare('DELETE FROM agent_products WHERE id = ?').bind(parseInt(prodDelMatch[1])).run();
       return new Response(JSON.stringify({ deleted: true }), { headers: cors });
+    }
+
+    // ===== v4.9: background extraction jobs (browser splits PDF -> chunks in R2 -> cron reads) =====
+
+    // POST /cx-agent/api/products/job/start  { name, source_filename, total_chunks, total_pages }
+    if (path === '/cx-agent/api/products/job/start' && request.method === 'POST') {
+      const body = await request.json();
+      if (!body.name || !body.total_chunks) return new Response(JSON.stringify({ error: 'name and total_chunks required' }), { status: 400, headers: cors });
+      const res = await db.prepare(`INSERT INTO agent_product_jobs (name, source_filename, total_chunks, total_pages, status) VALUES (?, ?, ?, ?, 'uploading')`)
+        .bind(body.name, body.source_filename ?? null, parseInt(body.total_chunks), body.total_pages ?? null).run();
+      return new Response(JSON.stringify({ job_id: res.meta.last_row_id }), { headers: cors });
+    }
+
+    // PUT /cx-agent/api/products/job/:id/chunk/:n   (raw application/pdf body) -> store in R2
+    const chunkMatch = path.match(/^\/cx-agent\/api\/products\/job\/(\d+)\/chunk\/(\d+)$/);
+    if (chunkMatch && request.method === 'PUT') {
+      if (!env.CX_UPLOADS) return new Response(JSON.stringify({ error: 'R2 not configured' }), { status: 500, headers: cors });
+      const bytes = await request.arrayBuffer();
+      await env.CX_UPLOADS.put(`job/${chunkMatch[1]}/chunk/${chunkMatch[2]}.pdf`, bytes);
+      return new Response(JSON.stringify({ stored: true }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/job/:id/ready  -> all chunks uploaded, hand off to cron
+    const readyMatch = path.match(/^\/cx-agent\/api\/products\/job\/(\d+)\/ready$/);
+    if (readyMatch && request.method === 'POST') {
+      await db.prepare("UPDATE agent_product_jobs SET status = 'pending', updated_at = datetime('now') WHERE id = ?").bind(parseInt(readyMatch[1])).run();
+      return new Response(JSON.stringify({ queued: true }), { headers: cors });
+    }
+
+    // GET /cx-agent/api/products/jobs  -> active + recently finished jobs (for status display)
+    if (path === '/cx-agent/api/products/jobs' && request.method === 'GET') {
+      const rows = (await db.prepare(`SELECT id, name, source_filename, total_chunks, done_chunks, total_pages, status, product_id, error, updated_at FROM agent_product_jobs WHERE status != 'done' OR updated_at > datetime('now','-1 day') ORDER BY id DESC LIMIT 30`).all()).results || [];
+      return new Response(JSON.stringify({ jobs: rows }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/job/:id/cancel  -> delete job + its R2 chunks
+    const jobCancelMatch = path.match(/^\/cx-agent\/api\/products\/job\/(\d+)\/cancel$/);
+    if (jobCancelMatch && request.method === 'POST') {
+      const jobId = parseInt(jobCancelMatch[1]);
+      await db.prepare("DELETE FROM agent_product_jobs WHERE id = ?").bind(jobId).run();
+      if (env.CX_UPLOADS) { try { await cxDeleteJobChunks(env, jobId); } catch {} }
+      return new Response(JSON.stringify({ cancelled: true }), { headers: cors });
     }
 
     // ==========================================================================
@@ -4254,6 +4387,8 @@ export default {
   },
   async scheduled(event, env, ctx) {
     ctx.waitUntil(fullSync(env));
+    // Advance background product-extraction jobs (a few chunks per tick).
+    ctx.waitUntil((async () => { try { await processProductJobs(env); } catch (e) { /* non-fatal */ } })());
     // Incremental ShipMonk orders sync, gated to ~every 10 min (cron fires every 2 min).
     ctx.waitUntil((async () => {
       try {
