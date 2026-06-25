@@ -599,32 +599,73 @@ async function uploadProductPdf() {
 
 // Render PDF pages to JPEG images and have Claude read them in batches (handles
 // image-heavy/scanned PDFs and any length). Renders per-batch to keep memory low.
+let visionInProgress = false;
+// Warn before leaving while a vision job is running (it lives in this tab).
+window.addEventListener('beforeunload', (e) => { if (visionInProgress) { e.preventDefault(); e.returnValue = ''; } });
+
 async function runVisionExtraction(file, name, pdf, status) {
-  const BATCH = 20, TARGET_W = 1100;
-  const totalBatches = Math.ceil(pdf.numPages / BATCH);
-  const partials = [], allTopics = [];
-  for (let b = 0; b < totalBatches; b++) {
-    const images = [];
-    for (let i = b * BATCH + 1; i <= Math.min((b + 1) * BATCH, pdf.numPages); i++) {
-      status.textContent = `Rendering page ${i}/${pdf.numPages}…`;
-      const page = await pdf.getPage(i);
-      const base = page.getViewport({ scale: 1 });
-      const scale = Math.min(1.5, TARGET_W / base.width);
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width; canvas.height = viewport.height;
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-      images.push(canvas.toDataURL('image/jpeg', 0.65).split(',')[1]);
-    }
-    status.textContent = `AI reading pages with vision… batch ${b + 1}/${totalBatches} (this can take a few minutes for a long product)`;
-    const res = await api('/products/vision-batch', { method: 'POST', body: JSON.stringify({ name, images, batch: b + 1, totalBatches }) });
-    if (res.partial_outline) partials.push(res.partial_outline);
-    if (Array.isArray(res.topics)) allTopics.push(...res.topics);
+  const BATCH = 20, TARGET_W = 1100, PAGE_CAP = 120;
+  // For very large files, evenly sample down to PAGE_CAP pages (always keep the first 10
+  // for the table of contents) so a coverage map takes minutes, not hours.
+  let pages;
+  if (pdf.numPages <= PAGE_CAP) {
+    pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+  } else {
+    const head = Array.from({ length: 10 }, (_, i) => i + 1);
+    const step = (pdf.numPages - 10) / (PAGE_CAP - 10);
+    const tail = Array.from({ length: PAGE_CAP - 10 }, (_, k) => Math.round(10 + k * step) + 1);
+    pages = [...new Set([...head, ...tail])].filter(p => p <= pdf.numPages).sort((a, b) => a - b);
   }
-  status.textContent = 'Merging into one coverage map…';
-  const merged = await api('/products/vision-merge', { method: 'POST', body: JSON.stringify({ name, partials, topics: allTopics }) });
-  status.textContent = '';
-  showProductEditor({ name, source_filename: file.name, coverage_outline: merged.coverage_outline, topics: merged.topics || [] });
+  const sampled = pages.length < pdf.numPages;
+  const keepOpen = '<b style="color:var(--amber,#f5a623)">⏳ Keep this tab open and visible until it finishes.</b> ';
+
+  visionInProgress = true;
+  const partials = [], allTopics = [];
+  const totalBatches = Math.ceil(pages.length / BATCH);
+  try {
+    for (let b = 0; b < totalBatches; b++) {
+      const images = [];
+      for (const pnum of pages.slice(b * BATCH, (b + 1) * BATCH)) {
+        status.innerHTML = keepOpen + `Rendering page ${pnum}/${pdf.numPages}${sampled ? ` (sampling ${pages.length})` : ''}…`;
+        const page = await pdf.getPage(pnum);
+        const base = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: Math.min(1.5, TARGET_W / base.width) });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        images.push(canvas.toDataURL('image/jpeg', 0.65).split(',')[1]);
+      }
+      status.innerHTML = keepOpen + `AI reading pages… batch ${b + 1}/${totalBatches}`;
+      const res = await api('/products/vision-batch', { method: 'POST', body: JSON.stringify({ name, images, batch: b + 1, totalBatches }) });
+      if (res.partial_outline) partials.push(res.partial_outline);
+      if (Array.isArray(res.topics)) allTopics.push(...res.topics);
+    }
+  } catch (e) {
+    if (!partials.length) { visionInProgress = false; status.textContent = 'Failed before any pages were read: ' + e.message; return; }
+    toast('Hit an error partway — saving what was read so far', 'error');
+  }
+
+  status.innerHTML = keepOpen + 'Merging into one coverage map…';
+  let merged;
+  try {
+    merged = await api('/products/vision-merge', { method: 'POST', body: JSON.stringify({ name, partials, topics: allTopics }) });
+  } catch (e) { visionInProgress = false; status.textContent = 'Merge failed: ' + e.message; return; }
+
+  // Auto-save immediately so nothing is lost if she stepped away, then open for optional edits.
+  visionInProgress = false;
+  const payload = { name, source_filename: file.name, coverage_outline: merged.coverage_outline, topics: merged.topics || [] };
+  try {
+    const saved = await api('/products', { method: 'POST', body: JSON.stringify(payload) });
+    status.textContent = '';
+    toast(`Saved "${name}"${sampled ? ` (sampled ${pages.length} of ${pdf.numPages} pages)` : ''}`, 'success');
+    document.getElementById('prod-name').value = '';
+    loadProducts();
+    showProductEditor({ id: saved.id, ...payload }); // id set -> further edits update, not duplicate
+  } catch (e) {
+    status.textContent = '';
+    showProductEditor(payload);
+    toast('Auto-save failed — review and click Save: ' + e.message, 'error');
+  }
 }
 
 function showProductEditor(p) {
