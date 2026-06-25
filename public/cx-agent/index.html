@@ -609,13 +609,16 @@ window.addEventListener('beforeunload', (e) => { if (visionInProgress) { e.preve
 // upload them, and hand off to the cron, which reads every page via Claude native PDF in the
 // background. Once uploaded, the tab can be closed.
 async function startVisionJob(file, name, status) {
-  const CHUNK_PAGES = 20;
   if (!window.PDFLib) { status.textContent = 'PDF splitter failed to load — refresh and try again.'; return; }
   visionInProgress = true;
   try {
     status.innerHTML = '<b>Preparing…</b> reading the PDF (keep this tab open until upload finishes).';
     const src = await PDFLib.PDFDocument.load(new Uint8Array(await file.arrayBuffer()), { ignoreEncryption: true });
     const totalPages = src.getPageCount();
+    // Adaptive chunk size: keep each chunk PDF well under Claude's 32MB limit. Image-heavy
+    // files (high bytes/page) get fewer pages per chunk so they don't blow the limit.
+    const avgBytesPerPage = file.size / Math.max(totalPages, 1);
+    const CHUNK_PAGES = Math.max(2, Math.min(20, Math.round(7000000 / avgBytesPerPage)));
     const totalChunks = Math.ceil(totalPages / CHUNK_PAGES);
     const { job_id } = await api('/products/job/start', { method: 'POST', body: JSON.stringify({ name, source_filename: file.name, total_chunks: totalChunks, total_pages: totalPages }) });
 
@@ -627,6 +630,12 @@ async function startVisionJob(file, name, status) {
       const copied = await chunkDoc.copyPages(src, idxs);
       copied.forEach(pg => chunkDoc.addPage(pg));
       const chunkBytes = await chunkDoc.save();
+      if (chunkBytes.length > 30000000) {
+        await api(`/products/job/${job_id}/cancel`, { method: 'POST' });
+        visionInProgress = false;
+        status.innerHTML = `<b>This PDF is too image-heavy to read directly.</b> Even a small slice is over 30MB. Please run it through a "compress / reduce PDF size" tool (downsampling images is fine — we only read the topic structure) and re-upload.`;
+        return;
+      }
       const r = await fetch(`/cx-agent/api/products/job/${job_id}/chunk/${c}`, {
         method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/pdf' }, body: chunkBytes
       });
