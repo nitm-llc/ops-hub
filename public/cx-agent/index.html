@@ -583,7 +583,7 @@ async function uploadProductPdf() {
 
     // Route to AI vision if forced, or if the text layer is sparse (image-heavy / scanned).
     const charsPerPage = text.trim().length / Math.max(pdf.numPages, 1);
-    if (forceVision || charsPerPage < 120) {
+    if (forceVision || charsPerPage < 200) {
       await startVisionJob(file, name, status);
       fileInput.value = '';
       return;
@@ -591,6 +591,14 @@ async function uploadProductPdf() {
 
     status.textContent = 'Extracting coverage map with AI… (this can take ~10–20s)';
     const result = await api('/products/extract', { method: 'POST', body: JSON.stringify({ name, text }) });
+    // Safety net: if the text path produced little (real content was likely in images),
+    // escalate to the AI vision job instead of saving a blank map.
+    if (!result.coverage_outline || result.coverage_outline.trim().length < 60) {
+      status.innerHTML = 'Text layer was too thin — switching to AI vision to read the pages as images…';
+      await startVisionJob(file, name, status);
+      fileInput.value = '';
+      return;
+    }
     status.textContent = '';
     fileInput.value = '';
     showProductEditor({ name, source_filename: file.name, coverage_outline: result.coverage_outline, topics: result.topics || [] });
