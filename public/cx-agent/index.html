@@ -788,6 +788,8 @@ function actionPill(action) {
     'internal_note_posted': { label: '✨ Draft reply', cls: 'pill-success' },
     'suggestion_posted':    { label: '💡 AI suggestion', cls: 'pill-info' },
     'auto_replied':         { label: '🤖 Auto-replied', cls: 'pill-success' },
+    'followup_drafted':     { label: '↩ Follow-up draft', cls: 'pill-info' },
+    'followup_auto_replied':{ label: '↩🤖 Follow-up sent', cls: 'pill-success' },
     'shadow_would_send':    { label: '👁 Shadow: would send', cls: 'pill-info' },
     'shadow_held':          { label: '👁 Shadow: held', cls: 'pill-neutral' },
     'suggest_close':        { label: '🗑️ Recommend close', cls: 'pill-warn' },
@@ -998,11 +1000,14 @@ async function loadTraining() {
 function renderTrainingCard(t) {
   const ratingPill = t.rating ? `<span class="pill ${ratingClass(t.rating)}" style="font-size:11px">${ratingLabel(t.rating)}</span>` : '<span class="pill pill-neutral" style="font-size:11px">unrated</span>';
   const intentPill = t.classified_intent ? `<span class="pill pill-info mono">${t.classified_intent}</span>` : '';
+  const turnPill = t.is_followup
+    ? `<span class="pill pill-warn" style="font-size:11px">↩ Reply #${t.turn_number || 2}</span>`
+    : `<span class="pill pill-neutral" style="font-size:11px">Initial</span>`;
   return `
     <div class="card" id="card-${t.reply_id}" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:10px">
         <div>
-          <div style="font-weight:500;font-size:14px">#${t.zendesk_ticket_id} · ${escape(t.subject || '(no subject)').substring(0, 80)}</div>
+          <div style="font-weight:500;font-size:14px">${turnPill} #${t.zendesk_ticket_id} · ${escape(t.subject || '(no subject)').substring(0, 80)}</div>
           <div style="color:var(--text-muted);font-size:12px;margin-top:4px">
             ${escape(t.customer_email || '—')} · ${formatDate(t.received_at)} · ${intentPill} · ${Math.round((t.intent_confidence||0)*100)}%
           </div>

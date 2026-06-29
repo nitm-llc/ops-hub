@@ -780,6 +780,24 @@ async function initCxAgentTables(db) {
   // Update mode description to document the new 'shadow' state.
   await db.prepare("UPDATE agent_config SET description = 'internal_note | shadow | auto_reply' WHERE key = 'mode' AND description = 'internal_note | auto_reply'").run();
 
+  // v4.10 migration: multi-turn follow-up replies + turn-aware training.
+  const v410Keys = [
+    ['followup_enabled', 'true', 'boolean', 'Respond to customer follow-up replies (multi-turn), not just the first message'],
+    ['bot_author_id', '', 'string', 'Zendesk user id the agent posts as (auto-resolved). Used to tell the AI\'s own replies from a human takeover'],
+  ];
+  for (const [key, value, value_type, description] of v410Keys) {
+    const exists = await db.prepare("SELECT 1 FROM agent_config WHERE key = ?").bind(key).first();
+    if (!exists) await db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind(key, value, value_type, description).run();
+  }
+  // Guarded column adds (SQLite has no ADD COLUMN IF NOT EXISTS — ignore the error if present).
+  for (const ddl of [
+    "ALTER TABLE agent_tickets ADD COLUMN last_followup_comment_id TEXT",
+    "ALTER TABLE agent_responses ADD COLUMN is_followup INTEGER DEFAULT 0",
+    "ALTER TABLE agent_responses ADD COLUMN turn_number INTEGER DEFAULT 1",
+    "ALTER TABLE agent_responses ADD COLUMN customer_message TEXT",
+    "ALTER TABLE agent_human_replies ADD COLUMN response_id INTEGER",
+  ]) { try { await db.prepare(ddl).run(); } catch {} }
+
   const existingTpl = await db.prepare("SELECT COUNT(*) as c FROM agent_templates").first();
   if (existingTpl.c === 0) {
     await db.batch([
@@ -885,8 +903,37 @@ async function handleCxAgentReplyWebhook(request, env, ctx) {
   const ticket = await db.prepare("SELECT id, classified_intent FROM agent_tickets WHERE zendesk_ticket_id = ?").bind(String(zendeskTicketId)).first();
   if (!ticket) return new Response(JSON.stringify({ skipped: true, reason: "Ticket not in agent DB" }), { headers: cors });
 
-  // Run capture in background so we ack the webhook fast
-  ctx.waitUntil(captureHumanReply(ticket.id, String(zendeskTicketId), db, env));
+  // Background: capture team replies for training, and (v4.10) respond to customer follow-ups.
+  ctx.waitUntil((async () => {
+    // 1) Always capture team replies for the training loop (existing behavior).
+    await captureHumanReply(ticket.id, String(zendeskTicketId), db, env);
+
+    // 2) Follow-up handling.
+    if ((await cxGetConfig(db, 'followup_enabled')) === false) return;
+    const td = await cxFetchZendeskTicket(zendeskTicketId, db, env);
+    if (!td) return;
+    const botId = await cxGetBotAuthorId(db, env);
+    const requesterId = td.ticket?.requester_id;
+    const publicComments = (td.comments || []).filter(c => c.public === true);
+
+    // Human takeover → back off completely (a teammate, not the bot, replied publicly).
+    const humanTookOver = publicComments.some(c =>
+      typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && c.author_id !== botId);
+    if (humanTookOver) return;
+
+    // Latest customer message; only act on a genuine follow-up (a 2nd+ customer comment).
+    const customerComments = publicComments
+      .filter(c => c.author_id === requesterId)
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    if (customerComments.length < 2) return;
+    const latest = customerComments[0];
+
+    const row = await db.prepare("SELECT last_followup_comment_id FROM agent_tickets WHERE id = ?").bind(ticket.id).first();
+    if (row?.last_followup_comment_id === String(latest.id)) return; // already handled this turn
+    await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = ? WHERE id = ?").bind(String(latest.id), ticket.id).run();
+
+    await runCxAgentFollowup(ticket, td, latest, db, env);
+  })());
   return new Response(JSON.stringify({ accepted: true, ticket_id: ticket.id }), { headers: cors });
 }
 
@@ -958,9 +1005,13 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
       }
     } catch {}
 
+    // Link to the AI turn this reply answers (the most recent draft for the ticket) so
+    // Training Review can show it per-turn and the few-shot loop pairs the right message.
+    const respRow = await db.prepare("SELECT id FROM agent_responses WHERE ticket_id = ? ORDER BY created_at DESC LIMIT 1").bind(agentTicketId).first();
+
     await db.prepare(`
-      INSERT INTO agent_human_replies (ticket_id, zendesk_ticket_id, zendesk_comment_id, author_id, author_name, body, reply_created_at, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'auto')
+      INSERT INTO agent_human_replies (ticket_id, zendesk_ticket_id, zendesk_comment_id, author_id, author_name, body, reply_created_at, source, response_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'auto', ?)
     `).bind(
       agentTicketId,
       zendeskTicketId,
@@ -968,7 +1019,8 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
       String(reply.author_id),
       authorName,
       cxCleanReplyText(reply.plain_body || reply.body || ''),
-      reply.created_at
+      reply.created_at,
+      respRow?.id ?? null
     ).run();
     return { captured: true };
   } catch (err) {
@@ -977,37 +1029,30 @@ async function captureHumanReply(agentTicketId, zendeskTicketId, db, env) {
   }
 }
 
+// Shared 3-way routing used by both the initial pipeline and follow-ups.
+async function cxRouteIntent(db, intent) {
+  const scopedIntents = await cxGetConfig(db, 'scoped_intents');
+  const suggestedIntents = await cxGetConfig(db, 'suggested_intents');
+  const hardEscalateTopics = await cxGetConfig(db, 'hard_escalate_topics');
+  const minConfidence = await cxGetConfig(db, 'min_confidence_to_respond');
+  const noiseSuggestionEnabled = await cxGetConfig(db, 'noise_suggestion_enabled');
+
+  const hasHardTopic = hardEscalateTopics.some(t => intent.topics?.includes(t));
+  if (hasHardTopic) return { route: 'escalate', reason: `Topic requires human review: ${intent.topics.join(', ')}` };
+  if (intent.confidence < minConfidence) return { route: 'escalate', reason: `Confidence ${intent.confidence} below threshold ${minConfidence}` };
+  if (intent.intent === 'noise' && noiseSuggestionEnabled) return { route: 'noise_suggest', reason: 'Noise classification — suggesting close' };
+  if (scopedIntents.includes(intent.intent)) return { route: 'handled', reason: `Specialized handler for: ${intent.intent}` };
+  if (suggestedIntents.includes(intent.intent)) return { route: 'suggest', reason: `AI suggestion drafted for: ${intent.intent}` };
+  return { route: 'escalate', reason: `No handler or suggestion path for: ${intent.intent}` };
+}
+
 async function runCxAgentPipeline(ticketId, ticketData, db, env) {
   const tracer = new CxTracer(db, ticketId);
   try {
     const intent = await tracer.trace('intent_classification', async () => cxClassifyIntent(ticketData, db, env));
     await db.prepare(`UPDATE agent_tickets SET classified_intent = ?, intent_confidence = ? WHERE id = ?`).bind(intent.intent, intent.confidence, ticketId).run();
 
-    // NEW: 3-way intent routing
-    const routing = await tracer.trace('routing_decision', async () => {
-      const scopedIntents = await cxGetConfig(db, 'scoped_intents');        // specialized handlers (e.g. digital_access)
-      const suggestedIntents = await cxGetConfig(db, 'suggested_intents');  // AI-drafted suggestions via KB
-      const hardEscalateTopics = await cxGetConfig(db, 'hard_escalate_topics');
-      const minConfidence = await cxGetConfig(db, 'min_confidence_to_respond');
-      const noiseSuggestionEnabled = await cxGetConfig(db, 'noise_suggestion_enabled');
-
-      const hasHardTopic = hardEscalateTopics.some(t => intent.topics?.includes(t));
-      const lowConfidence = intent.confidence < minConfidence;
-
-      if (hasHardTopic) return { route: 'escalate', reason: `Topic requires human review: ${intent.topics.join(', ')}` };
-      if (lowConfidence) return { route: 'escalate', reason: `Confidence ${intent.confidence} below threshold ${minConfidence}` };
-
-      if (intent.intent === 'noise' && noiseSuggestionEnabled) {
-        return { route: 'noise_suggest', reason: 'Noise classification — suggesting close' };
-      }
-      if (scopedIntents.includes(intent.intent)) {
-        return { route: 'handled', reason: `Specialized handler for: ${intent.intent}` };
-      }
-      if (suggestedIntents.includes(intent.intent)) {
-        return { route: 'suggest', reason: `AI suggestion drafted for: ${intent.intent}` };
-      }
-      return { route: 'escalate', reason: `No handler or suggestion path for: ${intent.intent}` };
-    });
+    const routing = await tracer.trace('routing_decision', async () => cxRouteIntent(db, intent));
 
     if (routing.route === 'handled' && intent.intent === 'digital_access') {
       await db.prepare('UPDATE agent_tickets SET is_in_scope = 1 WHERE id = ?').bind(ticketId).run();
@@ -1024,6 +1069,49 @@ async function runCxAgentPipeline(ticketId, ticketData, db, env) {
     console.error(`CX agent pipeline error for ticket ${ticketId}:`, err);
     await db.prepare(`UPDATE agent_tickets SET status = 'error', error_message = ? WHERE id = ?`).bind(err.message, ticketId).run();
     try { await tracer.trace('pipeline_error', async () => ({ error: err.message, stack: err.stack }), { status: 'error' }); } catch {}
+  }
+}
+
+// Build a labeled, cleaned transcript of the public conversation for follow-up context.
+function cxBuildTranscript(comments, requesterId, botId) {
+  return (comments || [])
+    .filter(c => c.public === true)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+    .map(c => {
+      const who = c.author_id === requesterId ? 'Customer' : (botId && c.author_id === botId ? 'AI (you, earlier)' : 'Team');
+      return `${who}: ${cxCleanReplyText(c.plain_body || c.body || '').slice(0, 1500)}`;
+    })
+    .join('\n\n');
+}
+
+// v4.10: respond to a customer's follow-up reply using full-thread context. Same routing
+// and mode/guardrails as the initial pipeline; never re-runs ebook-code delivery.
+async function runCxAgentFollowup(ticketRow, ticketData, latestCustomerComment, db, env) {
+  const ticketId = ticketRow.id;
+  const tracer = new CxTracer(db, ticketId);
+  try {
+    const botId = await cxGetBotAuthorId(db, env);
+    const transcript = cxBuildTranscript(ticketData.comments, ticketData.ticket?.requester_id, botId);
+    const prior = await db.prepare("SELECT COUNT(*) as c FROM agent_responses WHERE ticket_id = ?").bind(ticketId).first();
+    const latestMsg = cxCleanReplyText(latestCustomerComment.plain_body || latestCustomerComment.body || '');
+
+    // Conversation-aware view of the ticket for the classifier + drafter.
+    const followTd = { ...ticketData, firstMessage: latestMsg, conversationTranscript: transcript, isFollowup: true, turnNumber: (prior?.c || 1) + 1 };
+
+    const intent = await tracer.trace('followup_intent_classification', async () => cxClassifyIntent(followTd, db, env));
+    await db.prepare(`UPDATE agent_tickets SET classified_intent = ?, intent_confidence = ? WHERE id = ?`).bind(intent.intent, intent.confidence, ticketId).run();
+    const routing = await tracer.trace('followup_routing', async () => cxRouteIntent(db, intent));
+
+    if (routing.route === 'suggest' || routing.route === 'handled') {
+      // 'handled' (scoped, e.g. digital_access) is drafted, not auto-delivered, on follow-ups.
+      await cxDraftGeneralSuggestion(ticketId, followTd, intent, db, env, tracer);
+    } else if (routing.route === 'escalate') {
+      await cxEscalate(ticketId, followTd, intent, routing.reason, db, env, tracer);
+    }
+    // noise follow-ups: do nothing (don't reply to spam/auto-mail).
+  } catch (err) {
+    console.error(`CX follow-up error for ticket ${ticketId}:`, err);
+    try { await tracer.trace('followup_error', async () => ({ error: err.message }), { status: 'error' }); } catch {}
   }
 }
 
@@ -1061,7 +1149,10 @@ Respond in this exact JSON format:
   "reasoning": "One sentence why you chose this intent",
   "topics": []
 }`;
-  const userPrompt = `Subject: ${ticketData.subject || '(no subject)'}\nChannel: ${ticketData.channel || 'unknown'}\n\nCustomer message:\n${(ticketData.firstMessage || '').substring(0, 3000)}`;
+  const convoBlock = ticketData.conversationTranscript
+    ? `\n\nConversation so far (for context):\n${ticketData.conversationTranscript.slice(0, 4000)}\n\nClassify the LATEST customer message below (their newest reply).`
+    : '';
+  const userPrompt = `Subject: ${ticketData.subject || '(no subject)'}\nChannel: ${ticketData.channel || 'unknown'}${convoBlock}\n\nCustomer message:\n${(ticketData.firstMessage || '').substring(0, 3000)}`;
   const response = await cxCallClaude(env, model, systemPrompt, userPrompt, 500);
   const parsed = cxExtractJson(response.content);
   if (!parsed) return { intent: 'other', confidence: 0.0, reasoning: 'Failed to parse classifier response', topics: [], _tokens: response.tokens, _cost: response.cost };
@@ -1555,9 +1646,11 @@ async function cxSearchHelpCenter(query, db, env, maxResults = 3) {
 async function cxFetchExampleReplies(db, intent, limit = 3) {
   try {
     const rows = await db.prepare(`
-      SELECT t.first_customer_message AS customer_msg, hr.body AS human_reply, hr.rating, hr.rating_note
+      SELECT COALESCE(r.customer_message, t.first_customer_message) AS customer_msg,
+             hr.body AS human_reply, hr.rating, hr.rating_note
       FROM agent_human_replies hr
       JOIN agent_tickets t ON t.id = hr.ticket_id
+      LEFT JOIN agent_responses r ON r.id = hr.response_id
       WHERE hr.rating IN ('good','minor','rewrite')
         AND t.classified_intent = ?
         AND hr.body IS NOT NULL AND length(trim(hr.body)) > 20
@@ -1730,12 +1823,18 @@ Return ONLY the reply body. No subject line, no JSON, no commentary.${examplesBl
       intentGuidance = `\n\nNote on intent: '${intent.intent}' involves money/policy. Be empathetic but do NOT promise specific refunds, replacements, or exceptions — say you'll check with the team and follow up.`;
     }
 
-    const userPrompt = `Customer message:
+    const convoBlock = ticketData.conversationTranscript ? `
+---
+Conversation so far (this is an ongoing thread — reply to the customer's LATEST message below, in context, without repeating what was already said):
+${ticketData.conversationTranscript.slice(0, 5000)}
+` : '';
+
+    const userPrompt = `${ticketData.isFollowup ? "Customer's latest reply" : 'Customer message'}:
 Channel: ${channelLabel}
 Subject: ${ticketData.subject || '(none)'}
 From: ${ticketData.customerEmail || '(no email — likely social DM)'}
 ${ticketData.firstMessage?.substring(0, 2500) || ''}
-
+${convoBlock}
 ---
 This customer's recent orders:
 ${ordersContext}
@@ -1802,11 +1901,15 @@ Write the reply as Kristine.`;
     warningLines
   });
 
+  const fu = !!ticketData.isFollowup;
   const responseId = await cxSaveResponse(db, ticketId, {
     body: response.body,
     confidence: response.confidence,
     reasoning: response.reasoning,
-    data_sources: response.data_sources
+    data_sources: response.data_sources,
+    is_followup: fu,
+    turn_number: ticketData.turnNumber || 1,
+    customer_message: ticketData.firstMessage ?? null
   });
 
   // v4.8: autonomous-reply decision. mode = internal_note (draft only) | shadow (decide +
@@ -1818,10 +1921,11 @@ Write the reply as Kristine.`;
   }
 
   if (mode === 'auto_reply' && decision.pass) {
+    const atags = ['ai-processed', 'ai-auto-replied', `ai-intent-${intent.intent}`]; if (fu) atags.push('ai-followup');
     await tracer.trace('post_public_reply', async () => cxPostPublicReply(ticketData.zendeskTicketId, response.body, db, env));
-    await tracer.trace('apply_tags', async () => cxApplyZendeskTags(ticketData.zendeskTicketId, ['ai-processed', 'ai-auto-replied', `ai-intent-${intent.intent}`], db, env));
+    await tracer.trace('apply_tags', async () => cxApplyZendeskTags(ticketData.zendeskTicketId, atags, db, env));
     await db.prepare(`UPDATE agent_responses SET status = 'auto_replied', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
-    await db.prepare(`UPDATE agent_tickets SET status = 'auto_replied', final_action = 'auto_replied', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
+    await db.prepare(`UPDATE agent_tickets SET status = 'auto_replied', final_action = ?, completed_at = datetime('now') WHERE id = ?`).bind(fu ? 'followup_auto_replied' : 'auto_replied', ticketId).run();
     return;
   }
 
@@ -1832,12 +1936,13 @@ Write the reply as Kristine.`;
     : '';
   const tags = ['ai-processed', 'ai-suggested', `ai-intent-${intent.intent}`];
   if (mode === 'shadow') tags.push(decision.pass ? 'ai-shadow-would-send' : 'ai-shadow-hold');
+  if (fu) tags.push('ai-followup');
 
   await tracer.trace('post_internal_note', async () => cxPostInternalNote(ticketData.zendeskTicketId, banner + noteBody, db, env));
   await tracer.trace('apply_tags', async () => cxApplyZendeskTags(ticketData.zendeskTicketId, tags, db, env));
   await db.prepare(`UPDATE agent_responses SET status = 'posted_as_note', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
   await db.prepare(`UPDATE agent_tickets SET status = 'drafted', final_action = ?, completed_at = datetime('now') WHERE id = ?`)
-    .bind(mode === 'shadow' ? (decision.pass ? 'shadow_would_send' : 'shadow_held') : 'suggestion_posted', ticketId).run();
+    .bind(fu ? 'followup_drafted' : (mode === 'shadow' ? (decision.pass ? 'shadow_would_send' : 'shadow_held') : 'suggestion_posted'), ticketId).run();
 }
 
 // ==========================================================================
@@ -1961,6 +2066,26 @@ async function cxFetchZendeskTicket(ticketId, db, env) {
     ticket,
     comments
   };
+}
+
+// Resolve (and cache) the Zendesk user id the agent posts as, so we can tell the AI's own
+// public replies apart from a real human teammate taking over a ticket.
+async function cxGetBotAuthorId(db, env) {
+  const cached = await cxGetConfig(db, 'bot_author_id');
+  if (cached) return Number(cached);
+  try {
+    const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
+    const auth = btoa(`${env.ZENDESK_EMAIL}/token:${env.ZENDESK_API_TOKEN}`);
+    const resp = await fetch(`https://${subdomain}.zendesk.com/api/v2/users/me.json`, { headers: { Authorization: `Basic ${auth}` } });
+    if (resp.ok) {
+      const { user } = await resp.json();
+      if (user?.id) {
+        await db.prepare("UPDATE agent_config SET value=?, updated_at=datetime('now') WHERE key='bot_author_id'").bind(String(user.id)).run();
+        return Number(user.id);
+      }
+    }
+  } catch {}
+  return null;
 }
 
 async function cxPostInternalNote(ticketId, body, db, env) {
@@ -2266,8 +2391,9 @@ async function cxGetTemplate(db, intent) {
   return await db.prepare('SELECT * FROM agent_templates WHERE intent = ? AND is_active = 1 LIMIT 1').bind(intent).first();
 }
 async function cxSaveResponse(db, ticketId, response) {
-  const result = await db.prepare(`INSERT INTO agent_responses (ticket_id, draft_body, response_confidence, reasoning, data_sources) VALUES (?, ?, ?, ?, ?)`)
-    .bind(ticketId, response.body, response.confidence, response.reasoning, JSON.stringify(response.data_sources || {})).run();
+  const result = await db.prepare(`INSERT INTO agent_responses (ticket_id, draft_body, response_confidence, reasoning, data_sources, is_followup, turn_number, customer_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(ticketId, response.body, response.confidence, response.reasoning, JSON.stringify(response.data_sources || {}),
+      response.is_followup ? 1 : 0, response.turn_number || 1, response.customer_message ?? null).run();
   return result.meta.last_row_id;
 }
 function cxExtractJson(text) {
@@ -2483,7 +2609,9 @@ async function handleCxAgentAPI(request, env, path) {
       const filter = url.searchParams.get('filter') || 'needs_review';
       const intent = url.searchParams.get('intent') || null;
 
-      let where = `t.status IN ('drafted','escalated') AND r.id IS NOT NULL AND hr.id IS NOT NULL`;
+      // Turn-aware: one card per captured human reply, joined to the AI draft it answered
+      // (via hr.response_id) so initial messages and follow-up turns are shown separately.
+      let where = `1=1`;
       if (filter === 'needs_review') where += ` AND hr.rating IS NULL`;
       if (filter === 'rated') where += ` AND hr.rating IS NOT NULL`;
       if (intent) where += ` AND t.classified_intent = ?`;
@@ -2492,22 +2620,16 @@ async function handleCxAgentAPI(request, env, path) {
         SELECT
           t.id as ticket_id, t.zendesk_ticket_id, t.subject, t.customer_email, t.channel,
           t.classified_intent, t.intent_confidence, t.final_action, t.received_at,
-          t.first_customer_message as customer_message,
+          COALESCE(r.customer_message, t.first_customer_message) as customer_message,
           r.draft_body as agent_draft, r.response_confidence as draft_confidence,
+          COALESCE(r.is_followup, 0) as is_followup, COALESCE(r.turn_number, 1) as turn_number,
           hr.id as reply_id, hr.body as human_reply, hr.author_name, hr.reply_created_at,
           hr.rating, hr.rating_note, hr.rated_by, hr.rated_at
-        FROM agent_tickets t
-        LEFT JOIN (
-          SELECT ticket_id, id, draft_body, response_confidence, MAX(created_at) as latest
-          FROM agent_responses GROUP BY ticket_id
-        ) r ON r.ticket_id = t.id
-        LEFT JOIN (
-          SELECT ticket_id, id, body, author_name, reply_created_at, rating, rating_note, rated_by, rated_at,
-                 MAX(reply_created_at) as latest
-          FROM agent_human_replies GROUP BY ticket_id
-        ) hr ON hr.ticket_id = t.id
+        FROM agent_human_replies hr
+        JOIN agent_tickets t ON t.id = hr.ticket_id
+        LEFT JOIN agent_responses r ON r.id = hr.response_id
         WHERE ${where}
-        ORDER BY t.received_at DESC
+        ORDER BY hr.reply_created_at DESC, hr.id DESC
         LIMIT ?
       `);
       const params = intent ? [intent, limit] : [limit];
