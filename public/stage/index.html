@@ -6,8 +6,8 @@
 <title>Stage Timing — Ops Hub</title>
 <style>
   :root {
-    --bg: #f7f7f5; --panel: #ffffff; --panel2: #f1f3f5; --border: #e7e7e3;
-    --text: #111827; --muted: #6b7280; --accent: #4c8dff; --good: #2ecd6f;
+    --bg: var(--bg); --panel: var(--panel); --panel2: var(--surface); --border: var(--border);
+    --text: var(--text); --muted: var(--muted); --accent: #4c8dff; --good: #2ecd6f;
     --warn: #f9b234; --bad: #ff5c7c; --radius: 10px;
   }
   * { box-sizing: border-box; }
@@ -24,7 +24,7 @@
     color: var(--text); padding: 9px 11px; border-radius: 8px; font-size: 14px; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .row > div { flex: 1; min-width: 200px; }
-  button { background: var(--accent); color: #fff; border: 0; padding: 9px 16px;
+  button { background: var(--accent); color:#fff; border: 0; padding: 9px 16px;
     border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 600; }
   button.secondary { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
   button:disabled { opacity: .5; cursor: default; }

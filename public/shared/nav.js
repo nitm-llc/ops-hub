@@ -9,6 +9,19 @@
 // highlighting the active module based on the current URL.
 // ─────────────────────────────────────────────────────────────────────────
 (function () {
+  // ── Theme (light/dark), saved per browser ──────────────────────────────
+  // Apply the saved choice ASAP (before the nav builds) to minimize flash.
+  function getTheme() { try { var t = localStorage.getItem("nitm-theme"); return t === "dark" ? "dark" : "light"; } catch (e) { return "light"; } }
+  document.documentElement.setAttribute("data-theme", getTheme());
+
+  var themeCss = "" +
+    ":root{--bg:#f7f7f5;--panel:#ffffff;--surface:#f1f3f5;--border:#e7e7e3;--border2:#d6dae0;" +
+      "--text:#111827;--text2:#374151;--muted:#6b7280;--faint:#9ca3af;color-scheme:light;}" +
+    ":root[data-theme=\"dark\"]{--bg:#0f1216;--panel:#181c23;--surface:#232a35;--border:#2b323d;--border2:#3a4350;" +
+      "--text:#e6e9ef;--text2:#c2c8d2;--muted:#8a93a2;--faint:#6b7280;color-scheme:dark;}" +
+    ".nitm-theme-toggle{position:fixed;top:6px;right:12px;z-index:1001;background:rgba(20,28,40,0.75);border:1px solid rgba(255,255,255,0.12);cursor:pointer;font-size:15px;line-height:1;padding:5px 8px;border-radius:8px;}" +
+    ".nitm-theme-toggle:hover{background:rgba(40,52,71,0.95);}";
+
   var MODULES = [
     { href: "/", label: "Hub" },
     { href: "/calendar/", label: "Calendar" },
@@ -42,8 +55,26 @@
     ".nitm-nav a.nitm-active{color:#f1f5f9;}";
 
   var style = document.createElement("style");
-  style.textContent = css;
+  style.textContent = themeCss + css;
   document.head.appendChild(style);
+
+  function makeToggle() {
+    var btn = document.createElement("button");
+    btn.className = "nitm-theme-toggle";
+    var sync = function () {
+      var dark = document.documentElement.getAttribute("data-theme") === "dark";
+      btn.textContent = dark ? "☀️" : "🌙";
+      btn.title = dark ? "Switch to light mode" : "Switch to dark mode";
+    };
+    btn.addEventListener("click", function () {
+      var next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      try { localStorage.setItem("nitm-theme", next); } catch (e) {}
+      sync();
+    });
+    sync();
+    return btn;
+  }
 
   function build() {
     // Remove any pre-existing top nav (old hard-coded ones, or a prior inject).
@@ -61,6 +92,7 @@
       html += '<a href="' + m.href + '"' + (isActive(m.href) ? ' class="nitm-active"' : "") + ">" + m.label + "</a>";
     });
     nav.innerHTML = html;
+    nav.appendChild(makeToggle());
     document.body.insertBefore(nav, document.body.firstChild);
   }
 

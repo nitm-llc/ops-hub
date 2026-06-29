@@ -4407,20 +4407,20 @@ function landingPageHTML() {
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{background:#f7f7f5;color:#111827;font-family:'DM Sans',system-ui,-apple-system,sans-serif;min-height:100vh}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,-apple-system,sans-serif;min-height:100vh}
 .hub-wrap{max-width:1080px;margin:0 auto;padding:48px 24px 80px}
 .hub-head{margin-bottom:40px}
-.hub-title{font-size:30px;font-weight:700;letter-spacing:-0.4px;color:#111827}
-.hub-sub{font-size:15px;color:#6b7280;margin-top:6px}
+.hub-title{font-size:30px;font-weight:700;letter-spacing:-0.4px;color:var(--text)}
+.hub-sub{font-size:15px;color:var(--muted);margin-top:6px}
 .hub-section{margin-bottom:34px}
-.hub-section-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:#9ca3af;margin-bottom:14px}
+.hub-section-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--faint);margin-bottom:14px}
 .app-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:14px}
-.app-card{background:#fff;border:1px solid #e7e7e3;border-radius:14px;padding:18px;text-decoration:none;color:#111827;transition:all .15s;display:flex;align-items:flex-start;gap:14px}
-.app-card:hover{border-color:#c7ccd3;box-shadow:0 4px 14px rgba(17,24,39,0.06);transform:translateY(-2px)}
+.app-card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;text-decoration:none;color:var(--text);transition:all .15s;display:flex;align-items:flex-start;gap:14px}
+.app-card:hover{border-color:var(--border2);box-shadow:0 4px 14px rgba(17,24,39,0.06);transform:translateY(-2px)}
 .app-icon{font-size:26px;line-height:1;flex:0 0 auto}
 .app-text{display:flex;flex-direction:column;gap:3px}
-.app-name{font-size:15px;font-weight:600;color:#111827}
-.app-desc{font-size:13px;color:#6b7280;line-height:1.4}
+.app-name{font-size:15px;font-weight:600;color:var(--text)}
+.app-desc{font-size:13px;color:var(--muted);line-height:1.4}
 @media(max-width:600px){.app-grid{grid-template-columns:1fr}.hub-title{font-size:24px}}
 </style><script defer src="/shared/nav.js"></script></head><body>
 <div class="hub-wrap">

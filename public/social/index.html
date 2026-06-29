@@ -8,9 +8,9 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #f7f7f5; --bg2: #ffffff; --bg3: #f7f7f5; --bg4: #ffffff;
-  --border: #f1f3f5; --border2: #ffffff;
-  --text: #111827; --text2: #6b7280; --text3: #64748b; --text4: #4a5568;
+  --bg: var(--bg); --bg2: var(--panel); --bg3: var(--bg); --bg4: var(--panel);
+  --border: var(--surface); --border2: var(--panel);
+  --text: var(--text); --text2: var(--muted); --text3: #64748b; --text4: #4a5568;
   --blue: #3b82f6; --green: #22c55e; --red: #ef4444; --amber: #f59e0b;
   --purple: #7c3aed; --cyan: #0891b2; --pink: #ec4899; --violet: #8b5cf6;
   --font: 'DM Sans', sans-serif; --mono: 'JetBrains Mono', monospace;
@@ -22,18 +22,18 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Top Nav — matches other ops hub pages */
-.top-nav { background: var(--bg2); padding: 8px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #e7e7e3; }
+.top-nav { background: var(--bg2); padding: 8px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--border); }
 .top-nav a { color: var(--text3); text-decoration: none; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .top-nav a:hover { color: var(--text); }
 .top-nav .current { color: var(--text); font-weight: 700; }
-.top-nav .divider { color: #d6dae0; }
+.top-nav .divider { color: var(--border2); }
 
 /* Header */
 .header { background: var(--bg); border-bottom: 1px solid var(--border2); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 50; }
 .logo-row { display: flex; align-items: center; gap: 8px; }
 .logo-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--blue); transform: rotate(45deg); }
 .logo-text { font-size: 15px; font-weight: 700; letter-spacing: 0.04em; }
-.logo-sep { color: #d6dae0; font-size: 16px; }
+.logo-sep { color: var(--border2); font-size: 16px; }
 .logo-sub { font-size: 14px; font-weight: 500; color: var(--text3); }
 .upload-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; background: var(--bg4); border: 1px solid var(--border); border-radius: 6px; color: var(--text2); font-size: 13px; font-weight: 500; cursor: pointer; font-family: var(--font); }
 .upload-btn:hover { background: var(--border); color: var(--text); }
@@ -57,7 +57,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 
 /* Stats */
 .stat-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-.stat-chip { display: flex; flex-direction: column; padding: 10px 14px; background: #ffffff; border: 1px solid var(--border2); border-radius: 8px; min-width: 110px; }
+.stat-chip { display: flex; flex-direction: column; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border2); border-radius: 8px; min-width: 110px; }
 .stat-label { font-size: 10px; font-weight: 600; color: var(--text4); text-transform: uppercase; letter-spacing: 0.05em; }
 .stat-val { font-size: 18px; font-weight: 700; color: var(--text); font-family: var(--mono); margin-top: 2px; }
 
@@ -85,7 +85,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 .m-col { display: flex; flex-direction: column; align-items: center; min-width: 42px; }
 .m-val { font-size: 14px; font-weight: 600; color: var(--text); font-family: var(--mono); }
 .m-lbl { font-size: 9px; color: var(--text4); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 1px; }
-.post-sales-col { display: flex; flex-direction: column; align-items: center; min-width: 70px; padding-left: 14px; border-left: 1px solid #f1f3f5; }
+.post-sales-col { display: flex; flex-direction: column; align-items: center; min-width: 70px; padding-left: 14px; border-left: 1px solid var(--surface); }
 .post-sales-val { font-size: 16px; font-weight: 700; color: var(--green); font-family: var(--mono); }
 
 /* Expanded post */
@@ -102,7 +102,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 .corr-section { background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px; padding: 20px; margin-bottom: 16px; }
 .corr-title { font-size: 15px; font-weight: 600; margin: 0 0 14px; }
 .corr-table { overflow-x: auto; }
-.corr-row { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid #ffffff; min-width: 600px; }
+.corr-row { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--panel); min-width: 600px; }
 .corr-head { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px; }
 .corr-cell { flex: 1; font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 6px; }
 .corr-cell-num { flex: 1; font-size: 13px; color: var(--text); font-family: var(--mono); font-weight: 500; }
@@ -112,7 +112,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 .bar-label { font-size: 10px; color: var(--text3); width: 60px; text-align: right; flex-shrink: 0; }
 .bar-track { flex: 1; height: 18px; background: var(--border); border-radius: 4px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; min-width: 40px; }
-.bar-fill span { font-size: 10px; color: #fff; font-family: var(--mono); font-weight: 500; }
+.bar-fill span { font-size: 10px; color:#fff; font-family: var(--mono); font-weight: 500; }
 
 /* Calendar */
 .cal-header { display: grid; grid-template-columns: repeat(7,1fr); gap: 4px; margin-bottom: 4px; }
@@ -138,7 +138,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font); min-
 .remove-btn:hover { color: var(--red); }
 .input { padding: 7px 11px; font-size: 13px; background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; color: var(--text); outline: none; font-family: var(--font); }
 .input:focus { border-color: var(--blue); }
-.add-btn { padding: 7px 16px; font-size: 13px; font-weight: 600; background: var(--blue); border: none; border-radius: 5px; color: #fff; cursor: pointer; font-family: var(--font); white-space: nowrap; }
+.add-btn { padding: 7px 16px; font-size: 13px; font-weight: 600; background: var(--blue); border: none; border-radius: 5px; color:#fff; cursor: pointer; font-family: var(--font); white-space: nowrap; }
 .add-btn:disabled { opacity: 0.4; }
 .danger-btn { padding: 7px 16px; font-size: 13px; font-weight: 500; background: var(--bg2); border: 1px solid #ef444440; border-radius: 5px; color: var(--red); cursor: pointer; font-family: var(--font); }
 .theme-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg2); border-radius: 6px; margin-bottom: 6px; }
@@ -561,7 +561,7 @@ function renderPosts(grouped, enriched, ds, bl) {
         const isIG=p.platform!=='tt';
         const platClass=isIG?'ig':'tt';
         const platLabel=isIG?'IG':'TikTok';
-        return `<div style="margin-top:10px;padding:10px 12px;background:#f7f7f5;border-radius:6px;border-left:2px solid ${isIG?'#e1306c':'#25f4ee'}">
+        return `<div style="margin-top:10px;padding:10px 12px;background:var(--bg);border-radius:6px;border-left:2px solid ${isIG?'#e1306c':'#25f4ee'}">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
             <span class="platform-badge ${platClass}">${platLabel}</span>
             <span style="font-size:11px;color:var(--text3)">${p.engagementRate} eng rate</span>
@@ -645,25 +645,25 @@ function renderCorrelations(enriched, bl) {
       <h3 class="corr-title">Average Per Post by Platform</h3>
       <div class="corr-table">
         <div class="corr-row corr-head">${['Platform','Posts','Avg Views','Avg Reach','Avg Eng','Avg Saves','Avg Likes','Avg Comments','Avg Shares'].map((h,i)=>`<span class="corr-cell${i===0?' corr-cell-wide':''}" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text4)">${h}</span>`).join('')}</div>
-        ${platArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:#374151"><span class="dot" style="background:${pColor(r.platform)}"></span>${r.platform}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves,r.avgLikes,r.avgComments,r.avgShares].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}</div>`).join('')}
+        ${platArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:var(--text2)"><span class="dot" style="background:${pColor(r.platform)}"></span>${r.platform}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves,r.avgLikes,r.avgComments,r.avgShares].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}</div>`).join('')}
       </div>
-      <div style="margin-top:20px">${platArr.map(r=>{const maxPE=Math.max(...platArr.map(x=>x.avgEng),1);const maxPV=Math.max(...platArr.map(x=>x.avgViews),1);return`<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="dot" style="background:${pColor(r.platform)}"></span><span style="font-size:13px;font-weight:600;color:#374151">${r.platform}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts</span></div>${[{l:'Avg Views',v:r.avgViews,max:maxPV,c:pColor(r.platform)},{l:'Avg Eng',v:r.avgEng,max:maxPE,c:pColor(r.platform)}].map(b=>`<div class="bar-wrap"><span class="bar-label">${b.l}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(b.v/b.max*100,2)}%;background:linear-gradient(90deg,${b.c}80,${b.c})"><span>${fmtNum(b.v)}</span></div></div></div>`).join('')}</div>`;}).join('')}</div>
+      <div style="margin-top:20px">${platArr.map(r=>{const maxPE=Math.max(...platArr.map(x=>x.avgEng),1);const maxPV=Math.max(...platArr.map(x=>x.avgViews),1);return`<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="dot" style="background:${pColor(r.platform)}"></span><span style="font-size:13px;font-weight:600;color:var(--text2)">${r.platform}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts</span></div>${[{l:'Avg Views',v:r.avgViews,max:maxPV,c:pColor(r.platform)},{l:'Avg Eng',v:r.avgEng,max:maxPE,c:pColor(r.platform)}].map(b=>`<div class="bar-wrap"><span class="bar-label">${b.l}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(b.v/b.max*100,2)}%;background:linear-gradient(90deg,${b.c}80,${b.c})"><span>${fmtNum(b.v)}</span></div></div></div>`).join('')}</div>`;}).join('')}</div>
     </div>
     <div class="corr-section">
       <h3 class="corr-title">Average Per Post by Media Type</h3>
       <div class="corr-table">
         <div class="corr-row corr-head">${['Type','Posts','Avg Views','Avg Reach','Avg Eng','Avg Saves','Avg Likes','Avg Comments','Avg Shares'].map((h,i)=>`<span class="corr-cell${i===0?' corr-cell-wide':''}" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text4)">${h}</span>`).join('')}</div>
-        ${mediaArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:#374151;text-transform:capitalize"><span class="dot" style="background:${mColor(r.type)}"></span>${esc(r.type)}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves,r.avgLikes,r.avgComments,r.avgShares].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}</div>`).join('')}
+        ${mediaArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:var(--text2);text-transform:capitalize"><span class="dot" style="background:${mColor(r.type)}"></span>${esc(r.type)}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves,r.avgLikes,r.avgComments,r.avgShares].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}</div>`).join('')}
       </div>
-      <div style="margin-top:20px">${mediaArr.map(r=>`<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="dot" style="background:${mColor(r.type)}"></span><span style="font-size:13px;font-weight:600;color:#374151;text-transform:capitalize">${esc(r.type)}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts</span></div>${[{l:'Avg Eng',v:r.avgEng,max:maxME,c:'#3b82f6'},{l:'Avg Saves',v:r.avgSaves,max:maxMS,c:'#22c55e'}].map(b=>`<div class="bar-wrap"><span class="bar-label">${b.l}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(b.v/b.max*100,2)}%;background:linear-gradient(90deg,${b.c}80,${b.c})"><span>${fmtNum(b.v)}</span></div></div></div>`).join('')}</div>`).join('')}</div>
+      <div style="margin-top:20px">${mediaArr.map(r=>`<div style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="dot" style="background:${mColor(r.type)}"></span><span style="font-size:13px;font-weight:600;color:var(--text2);text-transform:capitalize">${esc(r.type)}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts</span></div>${[{l:'Avg Eng',v:r.avgEng,max:maxME,c:'#3b82f6'},{l:'Avg Saves',v:r.avgSaves,max:maxMS,c:'#22c55e'}].map(b=>`<div class="bar-wrap"><span class="bar-label">${b.l}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(b.v/b.max*100,2)}%;background:linear-gradient(90deg,${b.c}80,${b.c})"><span>${fmtNum(b.v)}</span></div></div></div>`).join('')}</div>`).join('')}</div>
     </div>
     <div class="corr-section">
       <h3 class="corr-title">Average Per Post by Theme / Topic</h3>
       <div class="corr-table">
         <div class="corr-row corr-head">${['Theme','Posts','Avg Views','Avg Reach','Avg Eng','Avg Saves','Avg Daily Sales'].map((h,i)=>`<span class="corr-cell${i===0?' corr-cell-wide':''}" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text4)">${h}</span>`).join('')}</div>
-        ${themeArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:#374151"><span class="dot" style="background:${r.color}"></span>${esc(r.theme)}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}<span class="corr-cell-num" style="color:${r.avgDailySales>bl?'var(--green)':'var(--text2)'};">${fmtMoneyFull(r.avgDailySales)}</span></div>`).join('')}
+        ${themeArr.map(r=>`<div class="corr-row"><span class="corr-cell corr-cell-wide" style="font-weight:600;color:var(--text2)"><span class="dot" style="background:${r.color}"></span>${esc(r.theme)}</span><span class="corr-cell">${r.count}</span>${[r.avgViews,r.avgReach,r.avgEng,r.avgSaves].map(v=>`<span class="corr-cell-num">${fmtNum(v)}</span>`).join('')}<span class="corr-cell-num" style="color:${r.avgDailySales>bl?'var(--green)':'var(--text2)'};">${fmtMoneyFull(r.avgDailySales)}</span></div>`).join('')}
       </div>
-      <div style="margin-top:20px">${themeArr.map(r=>`<div style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span class="dot" style="background:${r.color}"></span><span style="font-size:13px;font-weight:600;color:#374151">${esc(r.theme)}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts · avg daily sales ${fmtMoney(r.avgDailySales)}</span></div><div class="bar-wrap"><span class="bar-label">Avg Eng</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(r.avgEng/maxTE*100,2)}%;background:linear-gradient(90deg,${r.color}80,${r.color})"><span>${fmtNum(r.avgEng)}</span></div></div></div></div>`).join('')}</div>
+      <div style="margin-top:20px">${themeArr.map(r=>`<div style="margin-bottom:14px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span class="dot" style="background:${r.color}"></span><span style="font-size:13px;font-weight:600;color:var(--text2)">${esc(r.theme)}</span><span style="font-size:11px;color:var(--text3)">${r.count} posts · avg daily sales ${fmtMoney(r.avgDailySales)}</span></div><div class="bar-wrap"><span class="bar-label">Avg Eng</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(r.avgEng/maxTE*100,2)}%;background:linear-gradient(90deg,${r.color}80,${r.color})"><span>${fmtNum(r.avgEng)}</span></div></div></div></div>`).join('')}</div>
     </div>`;
 }
 
@@ -680,7 +680,7 @@ function renderCalendar(allDates, postsByDate, ds, sd) {
     ${sorted.map(([,days])=>`<div class="cal-week">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(dow=>{
       const c=days[dow];if(!c)return'<div style="min-height:100px"></div>';
       const pct=c.eng/maxEng;
-      return`<div class="cal-cell ${c.isSale?'sale':''}" style="background:linear-gradient(135deg,#f7f7f5 0%,rgba(59,130,246,${Math.min(pct*0.35,0.25)}) 100%)">
+      return`<div class="cal-cell ${c.isSale?'sale':''}" style="background:linear-gradient(135deg,var(--bg) 0%,rgba(59,130,246,${Math.min(pct*0.35,0.25)}) 100%)">
         <div class="cal-cell-date">${fmtShort(c.date)}</div>
         <div class="cal-cell-posts">${c.posts} post${c.posts!==1?'s':''}</div>
         <div class="cal-cell-views">${fmtNum(c.views)} views</div>
@@ -728,7 +728,7 @@ function renderSettings() {
     <div class="settings-card">
       <h3 class="settings-h">Data Status</h3>
       <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
-        ${[{l:'Social Posts',v:state.posts.length,ok:state.posts.length>0},{l:'Sales Rows',v:state.sales.length,ok:state.sales.length>0},{l:'Sale Periods',v:state.saleDates.length,ok:state.saleDates.length>0},{l:'Theme Tags',v:state.themes.length,ok:true}].map(d=>`<div style="display:flex;align-items:center;gap:8px"><span class="status-dot" style="background:${d.ok?'var(--green)':'#d6dae0'}"></span><span style="font-size:13px;color:var(--text2)">${d.l}: <strong style="color:var(--text)">${d.v}</strong></span></div>`).join('')}
+        ${[{l:'Social Posts',v:state.posts.length,ok:state.posts.length>0},{l:'Sales Rows',v:state.sales.length,ok:state.sales.length>0},{l:'Sale Periods',v:state.saleDates.length,ok:state.saleDates.length>0},{l:'Theme Tags',v:state.themes.length,ok:true}].map(d=>`<div style="display:flex;align-items:center;gap:8px"><span class="status-dot" style="background:${d.ok?'var(--green)':'var(--border2)'}"></span><span style="font-size:13px;color:var(--text2)">${d.l}: <strong style="color:var(--text)">${d.v}</strong></span></div>`).join('')}
       </div>
       <button class="danger-btn" id="reset-btn">Reset All Data</button>
     </div>`;

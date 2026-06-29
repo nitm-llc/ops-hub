@@ -12,8 +12,8 @@
   *{margin:0;padding:0;box-sizing:border-box;}
 
   :root{
-    --bg:#f7f7f5;--surface:#ffffff;--surface2:#ffffff;--border:#f1f3f5;
-    --text:#111827;--text-muted:#64748b;--text-dim:#6b7280;
+    --bg:var(--bg);--surface:var(--panel);--surface2:var(--panel);--border:var(--surface);
+    --text:var(--text);--text-muted:#64748b;--text-dim:var(--muted);
     --accent:#3b82f6;--accent-dim:#1e3a5f;
     --green:#10b981;--green-dim:#dcfce7;
     --red:#ef4444;--red-dim:#f5c2c2;
@@ -148,7 +148,7 @@
 </head>
 <body>
 
-<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #f1f3f5;font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:#111827;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#111827;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
+<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid var(--surface);font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:var(--text);font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:var(--text);text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
 
 <div class="sync-bar" id="syncBar">Syncing...</div>
 
@@ -670,10 +670,10 @@ function renderCharts(orders, ambassadors) {
   }
 
   const scaleOpts = {
-    x: { ticks: { color: '#64748b', font: { size: 11 } }, grid: { color: '#f1f3f5' } },
-    y: { ticks: { color: '#64748b', font: { size: 11 }, callback: v => '$'+v.toLocaleString() }, grid: { color: '#f1f3f5' } },
+    x: { ticks: { color: '#64748b', font: { size: 11 } }, grid: { color: 'var(--surface)' } },
+    y: { ticks: { color: '#64748b', font: { size: 11 }, callback: v => '$'+v.toLocaleString() }, grid: { color: 'var(--surface)' } },
   };
-  const legendOpts = { labels: { color: '#6b7280', font: { family: 'DM Sans', size: 12 } } };
+  const legendOpts = { labels: { color: 'var(--muted)', font: { family: 'DM Sans', size: 12 } } };
   const baseOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: legendOpts }, scales: scaleOpts };
 
   // Revenue stacked bar
@@ -687,8 +687,8 @@ function renderCharts(orders, ambassadors) {
   const totals = ambassadors.map(a => (state.orders[a.key] || []).reduce((s,o) => s + o.orderTotal, 0));
   charts.share = new Chart(document.getElementById('shareChart'), {
     type: 'doughnut',
-    data: { labels: ambassadors.map(a => a.name.split(' ')[0]), datasets: [{ data: totals, backgroundColor: ambassadors.map(a => a.color + 'cc'), borderColor: '#ffffff', borderWidth: 2 }] },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#6b7280', font: { family: 'DM Sans' } } } } }
+    data: { labels: ambassadors.map(a => a.name.split(' ')[0]), datasets: [{ data: totals, backgroundColor: ambassadors.map(a => a.color + 'cc'), borderColor: 'var(--panel)', borderWidth: 2 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: 'var(--muted)', font: { family: 'DM Sans' } } } } }
   });
 
   // Order count

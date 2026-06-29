@@ -6,46 +6,46 @@
   <title>NITM ICP Analytics</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #f7f7f5; color: #111827; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; min-height: 100vh; }
-    .top-nav { background: linear-gradient(180deg,#1a2332 0%,#141c28 100%); padding: 12px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 1px solid #f1f3f5; }
-    .top-nav .brand { color: #111827; font-weight: 700; font-size: 14px; text-decoration: none; letter-spacing: 0.5px; }
+    body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; min-height: 100vh; }
+    .top-nav { background: linear-gradient(180deg,#1a2332 0%,#141c28 100%); padding: 12px 24px; display: flex; align-items: center; gap: 24px; border-bottom: 1px solid var(--surface); }
+    .top-nav .brand { color: var(--text); font-weight: 700; font-size: 14px; text-decoration: none; letter-spacing: 0.5px; }
     .top-nav a { color: #64748b; text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.15s; }
-    .top-nav a:hover, .top-nav a.active { color: #111827; }
+    .top-nav a:hover, .top-nav a.active { color: var(--text); }
     .wrap { max-width: 1400px; margin: 0 auto; padding: 32px 24px 80px; }
     h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 8px; }
     .subtitle { color: #64748b; font-size: 14px; margin-bottom: 28px; }
-    .panel { background: #ffffff; border: 1px solid #e7e7e3; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
-    .panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #111827; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+    .panel h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
     .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    button { background: #d6dae0; color: #111827; border: none; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; font-family: inherit; }
+    button { background: var(--border2); color: var(--text); border: none; padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; font-family: inherit; }
     button:hover:not(:disabled) { background: #c7ccd3; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.primary { background: #2563eb; color: #fff; }
+    button.primary { background: #2563eb; color:#fff; }
     button.primary:hover:not(:disabled) { background: #1d4ed8; }
-    select, input { background: #f1f3f5; color: #111827; border: 1px solid #d6dae0; padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: inherit; }
+    select, input { background: var(--surface); color: var(--text); border: 1px solid var(--border2); padding: 8px 12px; border-radius: 6px; font-size: 13px; font-family: inherit; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 10px 12px; background: #f1f3f5; color: #6b7280; font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid #d6dae0; position: sticky; top: 0; }
-    td { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; color: #374151; }
-    tr:hover td { background: #f3f4f6; }
+    th { text-align: left; padding: 10px 12px; background: var(--surface); color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid var(--border2); position: sticky; top: 0; }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--surface); color: var(--text2); }
+    tr:hover td { background: var(--surface); }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .pct { color: #6b7280; font-size: 12px; }
+    .pct { color: var(--muted); font-size: 12px; }
     .pct.positive { color: #059669; }
     .pct.negative { color: #dc2626; }
     .status-line { font-size: 12px; color: #64748b; margin-top: 8px; }
-    .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid #e7e7e3; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
     .tab { padding: 10px 16px; cursor: pointer; color: #64748b; font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s; }
-    .tab.active { color: #111827; border-bottom-color: #2563eb; }
-    .tab:hover { color: #374151; }
+    .tab.active { color: var(--text); border-bottom-color: #2563eb; }
+    .tab:hover { color: var(--text2); }
     .empty { text-align: center; padding: 60px 20px; color: #64748b; }
     .error { background: #fdeaea; border: 1px solid #f5c2c2; color: #b42318; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; font-family: monospace; word-break: break-word; }
     .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-    .stat { background: #f1f3f5; padding: 16px; border-radius: 8px; }
+    .stat { background: var(--surface); padding: 16px; border-radius: 8px; }
     .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #64748b; margin-bottom: 6px; }
-    .stat-value { font-size: 22px; font-weight: 700; color: #111827; font-variant-numeric: tabular-nums; }
-    .badge { display: inline-block; background: #f1f3f5; color: #6b7280; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; margin-left: 6px; }
+    .stat-value { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+    .badge { display: inline-block; background: var(--surface); color: var(--muted); padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; margin-left: 6px; }
     .product-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .help { font-size: 12px; color: #64748b; line-height: 1.5; margin-top: 12px; }
-    .help code { background: #f1f3f5; padding: 1px 6px; border-radius: 3px; font-size: 11px; }
+    .help code { background: var(--surface); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
     .loading { color: #64748b; padding: 20px; text-align: center; font-size: 13px; }
     @media(max-width:700px){ .wrap{padding:20px 12px 60px} .panel{padding:16px} h1{font-size:22px} }
   </style>
@@ -209,7 +209,7 @@ function SegmentSummary({ days }) {
           </thead>
           <tbody>
             {rows.map((r, i) => (
-              <tr key={i} style={r._total ? {fontWeight: 700, background: "#f3f4f6"} : {}}>
+              <tr key={i} style={r._total ? {fontWeight: 700, background: "var(--surface)"} : {}}>
                 <td>{r.role}</td>
                 <td className="num">{fmtNum(r.profile_count)}</td>
                 <td className="num pct">{fmtPct(r.list_share)}</td>
@@ -327,7 +327,7 @@ function FirstPurchase({ days }) {
       </div>
       {grouped.map(g => (
         <div key={g.role} style={{marginBottom: 24}}>
-          <h3 style={{fontSize: 14, color: "#6b7280", marginBottom: 8}}>{g.role} <span className="badge">{g.total} first buyers</span></h3>
+          <h3 style={{fontSize: 14, color: "var(--muted)", marginBottom: 8}}>{g.role} <span className="badge">{g.total} first buyers</span></h3>
           <table>
             <thead>
               <tr>
@@ -404,7 +404,7 @@ function App() {
 
       <div className="panel" style={{paddingTop: 16, paddingBottom: 16}}>
         <div className="row">
-          <span style={{fontSize: 13, color: "#6b7280"}}>Window:</span>
+          <span style={{fontSize: 13, color: "var(--muted)"}}>Window:</span>
           <select value={days} onChange={e => setDays(parseInt(e.target.value))}>
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>

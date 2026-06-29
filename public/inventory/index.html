@@ -8,13 +8,13 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg-primary: #f7f7f5;
-  --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f3f5;
-  --border: #e7e7e3;
-  --border-light: #d6dae0;
-  --text-primary: #111827;
-  --text-secondary: #6b7280;
+  --bg-primary: var(--bg);
+  --bg-secondary: var(--panel);
+  --bg-tertiary: var(--surface);
+  --border: var(--border);
+  --border-light: var(--border2);
+  --text-primary: var(--text);
+  --text-secondary: var(--muted);
   --text-muted: #64748b;
   --accent: #3b82f6;
   --success: #10b981;
@@ -39,7 +39,7 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: '
 .app-title { font-size: 22px; font-weight: 700; }
 .header-right { display: flex; align-items: center; gap: 12px; }
 .btn { padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; border: none; transition: all 0.15s; }
-.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent); color:#fff; }
 .btn-primary:hover { background: #2563eb; }
 .btn-secondary { background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-light); }
 .btn-secondary:hover { background: var(--border-light); color: var(--text-primary); }
@@ -50,7 +50,7 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: '
 .tabs { display: flex; gap: 4px; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .tab-btn { padding: 10px 20px; background: transparent; color: var(--text-muted); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
 .tab-btn:hover { background: var(--bg-tertiary); }
-.tab-btn.active { background: var(--accent); color: #fff; }
+.tab-btn.active { background: var(--accent); color:#fff; }
 
 .tab-content { display: none; padding: 24px; }
 .tab-content.active { display: block; }
@@ -66,7 +66,7 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: '
 .table-title { font-size: 16px; font-weight: 700; }
 .table-filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .filter-btn { padding: 6px 12px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-light); border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.filter-btn:hover, .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.filter-btn:hover, .filter-btn.active { background: var(--accent); color:#fff; border-color: var(--accent); }
 
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--border); }
@@ -80,8 +80,8 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 .wh-vegas { color: var(--vegas); font-weight: 600; font-size: 15px; }
 
 .dist-bar { display: flex; height: 24px; border-radius: 4px; overflow: hidden; min-width: 140px; background: var(--bg-tertiary); }
-.dist-chicago { background: var(--chicago); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 700; min-width: 30px; }
-.dist-vegas { background: var(--vegas); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; font-weight: 700; min-width: 30px; }
+.dist-chicago { background: var(--chicago); display: flex; align-items: center; justify-content: center; color:#fff; font-size: 11px; font-weight: 700; min-width: 30px; }
+.dist-vegas { background: var(--vegas); display: flex; align-items: center; justify-content: center; color:#fff; font-size: 11px; font-weight: 700; min-width: 30px; }
 
 .balance-badge { display: inline-flex; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
 .balance-balanced { background: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); }
@@ -162,7 +162,7 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 </head>
 <body>
 
-<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid #f1f3f5;font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:#111827;font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:#111827;text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
+<nav style="background:linear-gradient(180deg,#1a2332 0%,#141c28 100%);padding:12px 24px;display:flex;align-items:center;gap:24px;border-bottom:1px solid var(--surface);font-family:'DM Sans',-apple-system,sans-serif"><a href="/" style="color:var(--text);font-weight:700;font-size:14px;text-decoration:none;letter-spacing:0.5px">NITM Ops</a><a href="/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Hub</a><a href="/calendar/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Calendar</a><a href="/inventory/" style="color:var(--text);text-decoration:none;font-size:13px;font-weight:500">Inventory</a><a href="/3pl/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">3PL</a><a href="/tracker/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Tracker</a><a href="/ambassadors/" style="color:#64748b;text-decoration:none;font-size:13px;font-weight:500">Ambassadors</a></nav>
 
 <header class="header">
   <h1 class="app-title">Inventory Dashboard</h1>
