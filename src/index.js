@@ -1905,7 +1905,11 @@ Write the reply as Kristine.`;
         orders_found: orderContext.orders?.length || 0,
         articles_used: articles._raw?.length || 0,
         training_examples_used: examples._rows?.length || 0,
-        products_used: products._rows?.length || 0
+        products_used: products._rows?.length || 0,
+        // Full context used (mirrors the Zendesk note) so Training Review can show it.
+        orders: (orderContext.orders || []).slice(0, 5).map(o => ({ name: o.name, date: o.created_at, financial_status: o.financial_status, fulfillment_status: o.fulfillment_status })),
+        articles: (articles._raw || []).map(a => ({ title: a.title, url: a.url })),
+        products: (products._rows || []).map(p => p.name)
       },
       _tokens: claudeResp.tokens,
       _cost: claudeResp.cost
@@ -2652,32 +2656,60 @@ async function handleCxAgentAPI(request, env, path) {
       const filter = url.searchParams.get('filter') || 'needs_review';
       const intent = url.searchParams.get('intent') || null;
 
-      // Turn-aware: one card per captured human reply, joined to the AI draft it answered
-      // (via hr.response_id) so initial messages and follow-up turns are shown separately.
-      let where = `1=1`;
-      if (filter === 'needs_review') where += ` AND hr.rating IS NULL`;
-      if (filter === 'rated') where += ` AND hr.rating IS NOT NULL`;
-      if (intent) where += ` AND t.classified_intent = ?`;
+      // Conversation-grouped: (A) pick the most-recent tickets that have a captured reply
+      // matching the filter, then (B) return ALL their turns so each renders as one thread.
+      let aWhere = '1=1';
+      const aParams = [];
+      if (filter === 'needs_review') aWhere += ' AND hr.rating IS NULL';
+      if (filter === 'rated') aWhere += ' AND hr.rating IS NOT NULL';
+      if (intent) { aWhere += ' AND t.classified_intent = ?'; aParams.push(intent); }
+      aParams.push(limit);
+      const idsRes = await db.prepare(`
+        SELECT hr.ticket_id, MAX(hr.reply_created_at) AS last_reply
+        FROM agent_human_replies hr JOIN agent_tickets t ON t.id = hr.ticket_id
+        WHERE ${aWhere}
+        GROUP BY hr.ticket_id ORDER BY last_reply DESC LIMIT ?
+      `).bind(...aParams).all();
+      const orderedIds = (idsRes.results || []).map(r => r.ticket_id);
+      if (!orderedIds.length) return new Response(JSON.stringify({ conversations: [] }), { headers: cors });
 
-      const stmt = db.prepare(`
+      // Spine on the AI drafts so EVERY turn shows (initial + follow-ups), with the
+      // captured human reply attached where one exists.
+      const ph = orderedIds.map(() => '?').join(',');
+      const turnsRes = await db.prepare(`
         SELECT
           t.id as ticket_id, t.zendesk_ticket_id, t.subject, t.customer_email, t.channel,
-          t.classified_intent, t.intent_confidence, t.final_action, t.received_at,
+          t.classified_intent, t.intent_confidence, t.received_at,
+          r.id as response_id,
           COALESCE(r.customer_message, t.first_customer_message) as customer_message,
-          r.draft_body as agent_draft, r.response_confidence as draft_confidence,
+          r.draft_body as agent_draft, r.response_confidence as draft_confidence, r.data_sources,
           COALESCE(r.is_followup, 0) as is_followup, COALESCE(r.turn_number, 1) as turn_number,
           hr.id as reply_id, hr.body as human_reply, hr.author_name, hr.reply_created_at,
           hr.rating, hr.rating_note, hr.rated_by, hr.rated_at
-        FROM agent_human_replies hr
-        JOIN agent_tickets t ON t.id = hr.ticket_id
-        LEFT JOIN agent_responses r ON r.id = hr.response_id
-        WHERE ${where}
-        ORDER BY hr.reply_created_at DESC, hr.id DESC
-        LIMIT ?
-      `);
-      const params = intent ? [intent, limit] : [limit];
-      const result = await stmt.bind(...params).all();
-      return new Response(JSON.stringify({ tickets: result.results || [] }), { headers: cors });
+        FROM agent_responses r
+        JOIN agent_tickets t ON t.id = r.ticket_id
+        LEFT JOIN agent_human_replies hr ON hr.response_id = r.id
+        WHERE r.ticket_id IN (${ph})
+        ORDER BY COALESCE(r.turn_number, 1) ASC, r.created_at ASC
+      `).bind(...orderedIds).all();
+
+      // Group by ticket, deduping any response that matched multiple replies (prefer a rated one).
+      const byTicket = {};
+      for (const row of (turnsRes.results || [])) {
+        const arr = byTicket[row.ticket_id] = byTicket[row.ticket_id] || [];
+        const existing = arr.find(x => x.response_id === row.response_id);
+        if (!existing) arr.push(row);
+        else if (!existing.rating && row.rating) Object.assign(existing, row);
+      }
+      const conversations = orderedIds.filter(id => byTicket[id]).map(id => {
+        const ts = byTicket[id]; const h = ts[0];
+        return {
+          ticket_id: id, zendesk_ticket_id: h.zendesk_ticket_id, subject: h.subject,
+          customer_email: h.customer_email, classified_intent: h.classified_intent,
+          intent_confidence: h.intent_confidence, received_at: h.received_at, turns: ts
+        };
+      });
+      return new Response(JSON.stringify({ conversations }), { headers: cors });
     }
 
     // POST /cx-agent/api/training/rate
