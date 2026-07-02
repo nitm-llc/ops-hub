@@ -784,6 +784,7 @@ async function initCxAgentTables(db) {
   const v410Keys = [
     ['followup_enabled', 'true', 'boolean', 'Respond to customer follow-up replies (multi-turn), not just the first message'],
     ['bot_author_id', '', 'string', 'Zendesk user id the agent posts as (auto-resolved). Used to tell the AI\'s own replies from a human takeover'],
+    ['followup_sweep_enabled', 'true', 'boolean', 'Cron sweep that catches customer follow-ups even if the Zendesk reply trigger does not fire'],
   ];
   for (const [key, value, value_type, description] of v410Keys) {
     const exists = await db.prepare("SELECT 1 FROM agent_config WHERE key = ?").bind(key).first();
@@ -1112,6 +1113,48 @@ async function runCxAgentFollowup(ticketRow, ticketData, latestCustomerComment, 
   } catch (err) {
     console.error(`CX follow-up error for ticket ${ticketId}:`, err);
     try { await tracer.trace('followup_error', async () => ({ error: err.message }), { status: 'error' }); } catch {}
+  }
+}
+
+// v4.10: cron sweep so follow-ups work even when the Zendesk reply trigger doesn't fire.
+// Finds recently-updated ai-processed tickets with a NEW customer comment (no human takeover)
+// and runs the follow-up. Deduped with the webhook path via last_followup_comment_id.
+async function sweepFollowups(env) {
+  const db = env.CX_AGENT_DB;
+  if (!db) return;
+  if ((await cxGetConfig(db, 'followup_enabled')) === false) return;
+  if ((await cxGetConfig(db, 'followup_sweep_enabled')) === false) return;
+
+  const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
+  const auth = btoa(`${env.ZENDESK_EMAIL}/token:${env.ZENDESK_API_TOKEN}`);
+  const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString().slice(0, 19) + 'Z';
+  let results = [];
+  try {
+    const q = encodeURIComponent(`type:ticket tags:ai-processed updated>${cutoff}`);
+    const resp = await fetch(`https://${subdomain}.zendesk.com/api/v2/search.json?query=${q}&per_page=25`, { headers: { Authorization: `Basic ${auth}` } });
+    if (resp.ok) results = (await resp.json()).results || [];
+  } catch { return; }
+
+  const botId = await cxGetBotAuthorId(db, env);
+  for (const t of results) {
+    try {
+      const zid = String(t.id);
+      const row = await db.prepare("SELECT id, last_followup_comment_id FROM agent_tickets WHERE zendesk_ticket_id = ?").bind(zid).first();
+      if (!row) continue;
+      const td = await cxFetchZendeskTicket(zid, db, env);
+      if (!td) continue;
+      const requesterId = td.ticket?.requester_id;
+      const publicComments = (td.comments || []).filter(c => c.public === true);
+      // Human took over (public reply that isn't the bot) → leave it alone.
+      if (publicComments.some(c => typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && c.author_id !== botId)) continue;
+      const cc = publicComments.filter(c => c.author_id === requesterId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      if (cc.length < 2) continue;                                  // no follow-up yet
+      const latest = cc[0];
+      if (row.last_followup_comment_id === String(latest.id)) continue; // already handled
+      if (Date.now() - new Date(latest.created_at).getTime() > 30 * 60 * 1000) continue; // stale; don't answer old threads
+      await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = ? WHERE id = ?").bind(String(latest.id), row.id).run();
+      await runCxAgentFollowup(row, td, latest, db, env);
+    } catch (e) { /* per-ticket errors non-fatal */ }
   }
 }
 
@@ -2817,6 +2860,73 @@ async function handleCxAgentAPI(request, env, path) {
     // Mirrors captureHumanReply WITHOUT inserting — shows exactly why a reply did or
     // didn't get captured (ticket-in-DB? which comments are public? which author_ids
     // match support_staff_ids?). If no ticket given, picks the most recent drafted ticket.
+    // GET|POST /cx-agent/api/diag/simulate-followup?ticket=<id>&message=<text>
+    // Runs the follow-up pipeline directly (bypasses the Zendesk trigger + takeover check) so
+    // you can SEE the agent respond to a follow-up. Drafts/sends per current mode. If no
+    // message is given, uses the latest real customer comment on the ticket.
+    if (path === '/cx-agent/api/diag/simulate-followup' && (request.method === 'GET' || request.method === 'POST')) {
+      const url = new URL(request.url);
+      const body = request.method === 'POST' ? await request.json().catch(() => ({})) : {};
+      const zid = body.ticket || url.searchParams.get('ticket');
+      const message = body.message || url.searchParams.get('message') || null;
+      if (!zid) return new Response(JSON.stringify({ error: 'pass ?ticket=<zendesk_ticket_id>' }), { status: 400, headers: cors });
+      const ticketRow = await db.prepare("SELECT * FROM agent_tickets WHERE zendesk_ticket_id = ?").bind(String(zid)).first();
+      if (!ticketRow) return new Response(JSON.stringify({ error: 'ticket not in agent DB (process it initially first)' }), { status: 404, headers: cors });
+      const td = await cxFetchZendeskTicket(zid, db, env);
+      if (!td) return new Response(JSON.stringify({ error: 'could not fetch ticket from Zendesk' }), { status: 500, headers: cors });
+      const requesterId = td.ticket?.requester_id;
+      let latest;
+      if (message) {
+        latest = { id: 'sim-' + Date.now(), plain_body: message, author_id: requesterId, public: true, created_at: new Date().toISOString() };
+      } else {
+        const cc = (td.comments || []).filter(c => c.public === true && c.author_id === requesterId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        latest = cc[0];
+      }
+      if (!latest) return new Response(JSON.stringify({ error: 'no customer message found — pass &message=...' }), { status: 400, headers: cors });
+      await runCxAgentFollowup(ticketRow, td, latest, db, env);
+      return new Response(JSON.stringify({ simulated: true, ticket: zid, used_message: (latest.plain_body || '').slice(0, 200), note: 'Check the ticket in Zendesk for the AI follow-up draft/reply.' }, null, 2), { headers: cors });
+    }
+
+    // GET /cx-agent/api/diag/followup?ticket=<zendesk_ticket_id>
+    // Mirrors the follow-up gating WITHOUT posting — shows why a customer reply did or
+    // didn't get an AI response (webhook must actually be firing for the real thing to run).
+    if (path === '/cx-agent/api/diag/followup' && request.method === 'GET') {
+      const url = new URL(request.url);
+      const zid = url.searchParams.get('ticket');
+      if (!zid) return new Response(JSON.stringify({ error: 'pass ?ticket=<zendesk_ticket_id>' }), { status: 400, headers: cors });
+      const ticketRow = await db.prepare("SELECT id, last_followup_comment_id FROM agent_tickets WHERE zendesk_ticket_id = ?").bind(String(zid)).first();
+      const followupEnabled = await cxGetConfig(db, 'followup_enabled');
+      const td = await cxFetchZendeskTicket(zid, db, env);
+      const botId = await cxGetBotAuthorId(db, env);
+      const requesterId = td?.ticket?.requester_id ?? null;
+      const publicComments = (td?.comments || []).filter(c => c.public === true);
+      const teamPublic = publicComments.filter(c => typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && c.author_id !== botId);
+      const customerComments = publicComments.filter(c => c.author_id === requesterId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const latest = customerComments[0];
+      let verdict;
+      if (!ticketRow) verdict = 'SKIP — ticket not in agent DB (was it processed initially?)';
+      else if (followupEnabled === false) verdict = 'SKIP — followup_enabled is off';
+      else if (!td) verdict = 'SKIP — could not fetch ticket from Zendesk';
+      else if (teamPublic.length) verdict = `SKIP — human takeover (public reply from author ${teamPublic[0].author_id})`;
+      else if (customerComments.length < 2) verdict = `SKIP — only ${customerComments.length} public comment(s) from the requester (need ≥2 for a follow-up)`;
+      else if (ticketRow.last_followup_comment_id === String(latest?.id)) verdict = 'SKIP — this customer turn was already handled';
+      else verdict = 'WOULD RESPOND ✅ — if the webhook fired, this turn gets an AI reply';
+      return new Response(JSON.stringify({
+        zendesk_ticket_id: zid,
+        ticket_in_agent_db: !!ticketRow,
+        followup_enabled: followupEnabled,
+        resolved_bot_author_id: botId,
+        requester_id: requesterId,
+        public_comment_count: publicComments.length,
+        public_comment_authors: [...new Set(publicComments.map(c => c.author_id))],
+        team_public_replies: teamPublic.length,
+        customer_public_comments: customerComments.length,
+        latest_customer_comment_id: latest?.id ?? null,
+        last_handled_comment_id: ticketRow?.last_followup_comment_id ?? null,
+        verdict
+      }, null, 2), { headers: cors });
+    }
+
     if (path === '/cx-agent/api/diag/reply-capture' && request.method === 'GET') {
       const url = new URL(request.url);
       let zid = url.searchParams.get('ticket');
@@ -4511,6 +4621,8 @@ export default {
     ctx.waitUntil(fullSync(env));
     // Advance background product-extraction jobs (a few chunks per tick).
     ctx.waitUntil((async () => { try { await processProductJobs(env); } catch (e) { /* non-fatal */ } })());
+    // Catch customer follow-ups even if the Zendesk reply trigger doesn't fire.
+    ctx.waitUntil((async () => { try { await sweepFollowups(env); } catch (e) { /* non-fatal */ } })());
     // Incremental ShipMonk orders sync, gated to ~every 10 min (cron fires every 2 min).
     ctx.waitUntil((async () => {
       try {
