@@ -4483,10 +4483,24 @@ async function runAffinityBatch(env, { pagesPerRun = 20 } = {}) {
     const edges = conn.edges || [];
     pages++;
 
+    // Resolve each customer's stage from icp_profiles by email (the source of truth),
+    // NOT the Shopify metafield — so this build doesn't depend on the stage sync having
+    // already tagged them.
+    const emails = edges.map((e) => e.node.email).filter(Boolean).map((x) => x.toLowerCase());
+    const roleByEmail = new Map();
+    if (emails.length) {
+      const ph = emails.map(() => "?").join(",");
+      const rs = (await env.DB.prepare(
+        `SELECT email, role_or_stage FROM icp_profiles
+         WHERE role_or_stage IS NOT NULL AND email COLLATE NOCASE IN (${ph})`
+      ).bind(...emails).all()).results;
+      for (const r of rs) if (r.email) roleByEmail.set(r.email.toLowerCase(), r.role_or_stage);
+    }
+
     for (const e of edges) {
       const node = e.node;
       running.considered++;
-      const stage = node.stage?.value ?? null;
+      const stage = node.email ? roleByEmail.get(node.email.toLowerCase()) : null;
       if (!stage) continue;
       running.staged++;
       // Idempotency: count each staged customer at most once across resumes.
