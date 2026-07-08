@@ -1121,9 +1121,12 @@ async function handleCxAgentReplyWebhook(request, env, ctx) {
 
     const row = await db.prepare("SELECT last_followup_comment_id FROM agent_tickets WHERE id = ?").bind(ticket.id).first();
     if (row?.last_followup_comment_id === String(latest.id)) return; // already handled this turn
+    // Claim, run, release-on-failure so a failed draft gets retried by the sweep.
     await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = ? WHERE id = ?").bind(String(latest.id), ticket.id).run();
-
-    await runCxAgentFollowup(ticket, td, latest, db, env);
+    const ok = await runCxAgentFollowup(ticket, td, latest, db, env);
+    if (!ok) {
+      await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = NULL WHERE id = ? AND last_followup_comment_id = ?").bind(ticket.id, String(latest.id)).run();
+    }
   })());
   return new Response(JSON.stringify({ accepted: true, ticket_id: ticket.id }), { headers: cors });
 }
@@ -1300,9 +1303,11 @@ async function runCxAgentFollowup(ticketRow, ticketData, latestCustomerComment, 
       await cxEscalate(ticketId, followTd, intent, routing.reason, db, env, tracer);
     }
     // noise follow-ups: do nothing (don't reply to spam/auto-mail).
+    return true;
   } catch (err) {
     console.error(`CX follow-up error for ticket ${ticketId}:`, err);
     try { await tracer.trace('followup_error', async () => ({ error: err.message }), { status: 'error' }); } catch {}
+    return false; // caller clears the turn claim so the next sweep retries
   }
 }
 
@@ -1341,9 +1346,14 @@ async function sweepFollowups(env) {
       if (cc.length < 2) continue;                                  // no follow-up yet
       const latest = cc[0];
       if (row.last_followup_comment_id === String(latest.id)) continue; // already handled
-      if (Date.now() - new Date(latest.created_at).getTime() > 30 * 60 * 1000) continue; // stale; don't answer old threads
+      if (Date.now() - new Date(latest.created_at).getTime() > 2 * 60 * 60 * 1000) continue; // stale (>2h); don't answer old threads
+      // Claim the turn first (dedupes against the webhook path), but if drafting FAILS,
+      // release the claim so the next sweep retries instead of silently dropping the turn.
       await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = ? WHERE id = ?").bind(String(latest.id), row.id).run();
-      await runCxAgentFollowup(row, td, latest, db, env);
+      const ok = await runCxAgentFollowup(row, td, latest, db, env);
+      if (!ok) {
+        await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = NULL WHERE id = ? AND last_followup_comment_id = ?").bind(row.id, String(latest.id)).run();
+      }
     } catch (e) { /* per-ticket errors non-fatal */ }
   }
 }
@@ -3803,6 +3813,75 @@ async function handleIcpAPI(request, env, path) {
 
       const result = await db.prepare(query).bind(...params).all();
       return new Response(JSON.stringify({ days, rows: result.results }), { headers: cors });
+    }
+
+    if (path === "/icp/api/stage-affinity" && request.method === "GET") {
+      // Which products are distinctively bought by a particular stage — via lift
+      // (over-indexing) rather than raw share, so big stages don't dominate.
+      // Unit of analysis = distinct buyers per (SKU, stage).
+      const url = new URL(request.url);
+      const days = parseInt(url.searchParams.get("days") || "365");
+      const minBuyers = Math.max(1, parseInt(url.searchParams.get("min_buyers") || "10"));
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+      // Baseline: distinct staged buyers per stage in the window.
+      const baseRows = (await db.prepare(`
+        SELECT p.role_or_stage AS role, COUNT(DISTINCT oi.profile_id) AS buyers
+        FROM icp_order_items oi
+        JOIN icp_profiles p ON p.profile_id = oi.profile_id
+        WHERE p.role_or_stage IS NOT NULL AND oi.order_date >= ?
+        GROUP BY p.role_or_stage
+      `).bind(cutoff).all()).results;
+      const allStagedBuyers = baseRows.reduce((s, r) => s + (r.buyers || 0), 0) || 1;
+      const stageShare = {};
+      const baseline = baseRows.map((r) => {
+        const share = (r.buyers || 0) / allStagedBuyers;
+        stageShare[r.role] = share;
+        return { role: r.role, buyers: r.buyers || 0, share };
+      }).sort((a, b) => b.buyers - a.buyers);
+
+      // Buyers per (product, sku, stage).
+      const skuRows = (await db.prepare(`
+        SELECT COALESCE(oi.product_name, oi.sku, '(unknown)') AS product, oi.sku AS sku,
+               p.role_or_stage AS role, COUNT(DISTINCT oi.profile_id) AS buyers
+        FROM icp_order_items oi
+        JOIN icp_profiles p ON p.profile_id = oi.profile_id
+        WHERE p.role_or_stage IS NOT NULL AND oi.order_date >= ?
+        GROUP BY product, oi.sku, p.role_or_stage
+      `).bind(cutoff).all()).results;
+
+      // Aggregate per product: total buyers + per-stage breakdown, then lift/exclusivity.
+      const byKey = new Map();
+      for (const r of skuRows) {
+        const key = `${r.product}||${r.sku ?? ""}`;
+        if (!byKey.has(key)) byKey.set(key, { product: r.product, sku: r.sku || null, total_buyers: 0, stages: {} });
+        const e = byKey.get(key);
+        e.stages[r.role] = (e.stages[r.role] || 0) + (r.buyers || 0);
+        e.total_buyers += r.buyers || 0;
+      }
+
+      const products = [];
+      for (const e of byKey.values()) {
+        if (e.total_buyers < minBuyers) continue;
+        const by_stage = {};
+        let topStage = null, topLift = 0, exclusivity = 0;
+        for (const [role, buyers] of Object.entries(e.stages)) {
+          const share = buyers / e.total_buyers;          // this SKU's buyers that are in `role`
+          const base = stageShare[role] || 0;
+          const lift = base > 0 ? share / base : 0;         // >1 = over-indexed to this stage
+          by_stage[role] = { buyers, share, lift };
+          if (share > exclusivity) exclusivity = share;
+          if (lift > topLift) { topLift = lift; topStage = role; }
+        }
+        products.push({
+          product: e.product, sku: e.sku, total_buyers: e.total_buyers,
+          by_stage, top_stage: topStage, top_lift: topLift, exclusivity,
+          exclusive: exclusivity >= 0.8 && topLift >= 1.5,
+        });
+      }
+      products.sort((a, b) => b.top_lift - a.top_lift);
+
+      return new Response(JSON.stringify({ days, min_buyers: minBuyers, baseline, products }), { headers: cors });
     }
 
     if (path === "/icp/api/first-purchase" && request.method === "GET") {

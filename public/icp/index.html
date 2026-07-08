@@ -321,6 +321,89 @@ function ProductCrossTab({ days }) {
   );
 }
 
+function StageAffinity({ days }) {
+  const [minBuyers, setMinBuyers] = useState(10);
+  const { data, error, loading } = useApi(`/icp/api/stage-affinity?days=${days}&min_buyers=${minBuyers}`, [days, minBuyers]);
+
+  // Group products under the stage they over-index to, best lift first.
+  const byStage = useMemo(() => {
+    if (!data?.products) return [];
+    const order = (data.baseline || []).map(b => b.role); // biggest stages first
+    const groups = {};
+    for (const p of data.products) {
+      if (!p.top_stage || p.top_lift <= 1) continue; // only show over-indexed products
+      (groups[p.top_stage] = groups[p.top_stage] || []).push(p);
+    }
+    const roles = Object.keys(groups).sort((a, b) => (order.indexOf(a) - order.indexOf(b)));
+    return roles.map(role => ({ role, items: groups[role].sort((a, b) => b.top_lift - a.top_lift) }));
+  }, [data]);
+
+  if (loading) return <div className="panel"><div className="loading">Loading stage affinity…</div></div>;
+  if (error) return <div className="panel"><div className="error">{error}</div></div>;
+
+  return (
+    <div className="panel">
+      <h2>Products distinctive to each stage <span className="badge">last {days} days</span></h2>
+      <div className="row" style={{marginBottom: 12}}>
+        <span style={{fontSize: 13, color: "var(--muted)"}}>Min buyers per product:</span>
+        <select value={minBuyers} onChange={e => setMinBuyers(parseInt(e.target.value))}>
+          <option value={5}>5</option>
+          <option value={10}>10</option>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+        </select>
+        <span style={{fontSize: 12, color: "#64748b"}}>Higher = fewer, more reliable products.</span>
+      </div>
+
+      {!byStage.length && <div className="empty">No clearly stage-specific products at this threshold. Try lowering the min-buyers filter.</div>}
+
+      {byStage.map(({ role, items }) => (
+        <div key={role} style={{marginBottom: 22}}>
+          <h3 style={{fontSize: 14, marginBottom: 8}}>{role} <span className="badge">{items.length} over-indexed</span></h3>
+          <div style={{overflowX: "auto"}}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>SKU</th>
+                  <th className="num">Lift</th>
+                  <th className="num">In this stage</th>
+                  <th className="num">Total buyers</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((p, i) => {
+                  const inStage = p.by_stage[role] || { buyers: 0, share: 0 };
+                  return (
+                    <tr key={i}>
+                      <td className="product-cell" title={p.product}>
+                        {p.exclusive && <span title="Nearly exclusive to this stage">🔒 </span>}{p.product}
+                      </td>
+                      <td style={{color: "#64748b", fontSize: 11}}>{p.sku || ""}</td>
+                      <td className="num"><strong>{p.top_lift.toFixed(1)}×</strong></td>
+                      <td className="num">{Math.round(inStage.share * 100)}% <span style={{color:"#64748b"}}>({fmtNum(inStage.buyers)})</span></td>
+                      <td className="num">{fmtNum(p.total_buyers)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+
+      <div className="help">
+        <strong>Lift</strong> = how much more a stage buys a product vs. what its size would predict
+        (2× = twice as likely; controls for big stages dominating). <strong>In this stage</strong> = share of
+        that product's buyers who are in this stage — near 100% with 🔒 means it's essentially exclusive to it.
+        <br />
+        Directional only: counts each buyer under their <em>current</em> stage, from Klaviyo order data since
+        Mar 2026 (~2 months stale). We'll rebuild this on exact all-time Shopify orders next.
+      </div>
+    </div>
+  );
+}
+
 function FirstPurchase({ days }) {
   const { data, error, loading } = useApi(`/icp/api/first-purchase?days=${days}`, [days]);
   const grouped = useMemo(() => {
@@ -425,6 +508,7 @@ function App() {
       <div className="tabs">
         <div className={"tab " + (tab === "overview" ? "active" : "")} onClick={() => setTab("overview")}>Segment overview</div>
         <div className={"tab " + (tab === "products" ? "active" : "")} onClick={() => setTab("products")}>Product × segment</div>
+        <div className={"tab " + (tab === "affinity" ? "active" : "")} onClick={() => setTab("affinity")}>Stage affinity</div>
         <div className={"tab " + (tab === "first" ? "active" : "")} onClick={() => setTab("first")}>Gateway products</div>
       </div>
 
@@ -445,6 +529,7 @@ function App() {
 
       {tab === "overview" && <SegmentSummary days={days} />}
       {tab === "products" && <ProductCrossTab days={days} />}
+      {tab === "affinity" && <StageAffinity days={days} />}
       {tab === "first" && <FirstPurchase days={days} />}
     </div>
   );
