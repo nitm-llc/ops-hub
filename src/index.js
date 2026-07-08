@@ -3864,22 +3864,27 @@ async function handleIcpAPI(request, env, path) {
       for (const e of byKey.values()) {
         if (e.total_buyers < minBuyers) continue;
         const by_stage = {};
-        let topStage = null, topLift = 0, exclusivity = 0;
+        // Signature stage = max of lift × in-stage-share. This rewards a product for
+        // being BOTH over-indexed AND concentrated in a stage, so a tiny stage can't
+        // win on lift alone (8% of buyers), and a big stage can't win on share alone
+        // (low lift). exclusivity = the single largest in-stage share.
+        let topStage = null, topScore = -1, topLift = 0, topShare = 0, exclusivity = 0;
         for (const [role, buyers] of Object.entries(e.stages)) {
           const share = buyers / e.total_buyers;          // this SKU's buyers that are in `role`
           const base = stageShare[role] || 0;
           const lift = base > 0 ? share / base : 0;         // >1 = over-indexed to this stage
           by_stage[role] = { buyers, share, lift };
           if (share > exclusivity) exclusivity = share;
-          if (lift > topLift) { topLift = lift; topStage = role; }
+          const score = lift * share;
+          if (score > topScore) { topScore = score; topStage = role; topLift = lift; topShare = share; }
         }
         products.push({
           product: e.product, sku: e.sku, total_buyers: e.total_buyers,
-          by_stage, top_stage: topStage, top_lift: topLift, exclusivity,
-          exclusive: exclusivity >= 0.8 && topLift >= 1.5,
+          by_stage, top_stage: topStage, top_lift: topLift, top_share: topShare, score: topScore,
+          exclusivity, exclusive: topShare >= 0.6 && topLift >= 1.5,
         });
       }
-      products.sort((a, b) => b.top_lift - a.top_lift);
+      products.sort((a, b) => b.score - a.score);
 
       return new Response(JSON.stringify({ days, min_buyers: minBuyers, baseline, products }), { headers: cors });
     }

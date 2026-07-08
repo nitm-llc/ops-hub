@@ -335,7 +335,7 @@ function StageAffinity({ days }) {
       (groups[p.top_stage] = groups[p.top_stage] || []).push(p);
     }
     const roles = Object.keys(groups).sort((a, b) => (order.indexOf(a) - order.indexOf(b)));
-    return roles.map(role => ({ role, items: groups[role].sort((a, b) => b.top_lift - a.top_lift) }));
+    return roles.map(role => ({ role, items: groups[role].sort((a, b) => b.score - a.score) }));
   }, [data]);
 
   if (loading) return <div className="panel"><div className="loading">Loading stage affinity…</div></div>;
