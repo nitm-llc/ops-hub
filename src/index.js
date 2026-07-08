@@ -284,6 +284,196 @@ async function getShipmonkInventory(env) {
   }
 }
 
+// ===== AMAZON SP-API (FBA inventory via Reports API) =====
+// Since Oct 2023 SP-API needs only an LWA OAuth token (no AWS SigV4). The FBA planning
+// report is async + refreshes ~daily on Amazon's side, so it runs as a cron-driven state
+// machine that caches into D1 (fba_inventory), mirroring the ShipMonk sync pattern.
+const AMZ_SPAPI_BASE = "https://sellingpartnerapi-na.amazon.com"; // NA region
+const AMZ_MARKETPLACE_ID = "ATVPDKIKX0DER"; // US
+const AMZ_FBA_REPORT_TYPE = "GET_FBA_INVENTORY_PLANNING_DATA"; // Restock Inventory report
+
+function amzConfigured(env) { return !!(env.AMAZON_REFRESH_TOKEN && env.AMAZON_LWA_CLIENT_ID && env.AMAZON_LWA_CLIENT_SECRET); }
+
+// Key/value sync-state table (same pattern as smState). value===undefined reads; ===null clears.
+async function amzState(env, key, value) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS amazon_sync_state (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)`).run();
+  if (value === undefined) {
+    const row = await env.DB.prepare(`SELECT value FROM amazon_sync_state WHERE key = ?`).bind(key).first();
+    return row ? row.value : null;
+  }
+  if (value === null) { await env.DB.prepare(`DELETE FROM amazon_sync_state WHERE key = ?`).bind(key).run(); return; }
+  await env.DB.prepare(`INSERT OR REPLACE INTO amazon_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`).bind(key, String(value)).run();
+}
+
+// Exchange the long-lived refresh token for a 1h LWA access token.
+async function amzAccessToken(env) {
+  const res = await fetch("https://api.amazon.com/auth/o2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: env.AMAZON_REFRESH_TOKEN,
+      client_id: env.AMAZON_LWA_CLIENT_ID,
+      client_secret: env.AMAZON_LWA_CLIENT_SECRET,
+    }),
+  });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = {}; }
+  if (!res.ok || !json.access_token) throw new Error(`LWA token ${res.status}: ${text.slice(0, 300)}`);
+  return json.access_token;
+}
+
+// Signed SP-API call (token reused across a sync tick to avoid re-minting).
+async function amzFetch(env, path, { method = "GET", body = null, token = null } = {}) {
+  const accessToken = token || await amzAccessToken(env);
+  const url = path.startsWith("http") ? path : `${AMZ_SPAPI_BASE}${path}`;
+  const headers = { "x-amz-access-token": accessToken, "Accept": "application/json" };
+  const opts = { method, headers };
+  if (body != null) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let json; try { json = text ? JSON.parse(text) : {}; } catch { json = { _raw: text }; }
+  if (!res.ok) throw new Error(`SP-API ${method} ${path} -> ${res.status}: ${text.slice(0, 300)}`);
+  return json;
+}
+
+// Parse the report's tab-separated content. Header names vary, so match on a normalized key.
+function amzParseFbaReport(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  if (lines.length < 2) return { rows: [], headers: [] };
+  const norm = h => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const rawHeaders = lines[0].split("\t");
+  const idx = {};
+  rawHeaders.map(norm).forEach((h, i) => { if (!(h in idx)) idx[h] = i; });
+  const get = (cells, keys) => { for (const k of keys) { if (k in idx) { const v = cells[idx[k]]; if (v != null && v !== "") return v; } } return ""; };
+  const numOf = (cells, keys) => { const n = parseInt(String(get(cells, keys)).replace(/[^0-9-]/g, ""), 10); return isNaN(n) ? 0 : n; };
+  const rows = [];
+  for (let li = 1; li < lines.length; li++) {
+    const cells = lines[li].split("\t");
+    const sku = get(cells, ["sku", "sellersku", "merchantsku", "msku"]);
+    if (!sku) continue;
+    const inParts = numOf(cells, ["afninboundworkingquantity", "inboundworking"]) + numOf(cells, ["afninboundshippedquantity", "inboundshipped"]) + numOf(cells, ["afninboundreceivingquantity", "inboundreceiving"]);
+    rows.push({
+      sku,
+      name: get(cells, ["productname", "title", "itemname"]),
+      asin: get(cells, ["asin"]),
+      available: numOf(cells, ["available", "afnfulfillablequantity", "availablequantity"]),
+      unitsSold30: numOf(cells, ["unitssoldlast30days", "sales30d", "unitsordered30days"]),
+      daysOfSupply: numOf(cells, ["daysofsupply", "daysofsupplyatamazonfulfillmentnetwork", "totaldaysofsupplyincludingunitsfromopenshipments"]),
+      inbound: inParts > 0 ? inParts : numOf(cells, ["inbound", "inboundquantity"]),
+      alert: get(cells, ["alert"]),
+    });
+  }
+  return { rows, headers: rawHeaders };
+}
+
+// Download a completed report document (gzip TSV) and replace fba_inventory.
+async function amzIngestReport(env, reportDocumentId, token) {
+  const doc = await amzFetch(env, `/reports/2021-06-30/documents/${reportDocumentId}`, { token });
+  const res = await fetch(doc.url);
+  let text;
+  if ((doc.compressionAlgorithm || "").toUpperCase() === "GZIP") {
+    text = await new Response(res.body.pipeThrough(new DecompressionStream("gzip"))).text();
+  } else {
+    text = await res.text();
+  }
+  const { rows, headers } = amzParseFbaReport(text);
+  await amzState(env, "last_report_headers", headers.join(",").slice(0, 900));
+  // Replace-all so SKUs that dropped off Amazon disappear from the cache too.
+  await env.DB.prepare(`DELETE FROM fba_inventory`).run();
+  for (let i = 0; i < rows.length; i += 40) {
+    const batch = rows.slice(i, i + 40);
+    await env.DB.batch(batch.map(r => env.DB.prepare(
+      `INSERT OR REPLACE INTO fba_inventory (sku, name, asin, available, units_sold_30, days_of_supply, inbound, alert, updated_at) VALUES (?,?,?,?,?,?,?,?,datetime('now'))`
+    ).bind(r.sku, r.name, r.asin, r.available, r.unitsSold30, r.daysOfSupply, r.inbound, r.alert)));
+  }
+  return rows.length;
+}
+
+// Cron-safe state machine: poll a pending report, or request a new one when stale/manual.
+async function syncAmazonFba(env) {
+  if (!amzConfigured(env)) return { skipped: "not configured" };
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS fba_inventory (sku TEXT PRIMARY KEY, name TEXT, asin TEXT, available INTEGER DEFAULT 0, units_sold_30 INTEGER DEFAULT 0, days_of_supply INTEGER DEFAULT 0, inbound INTEGER DEFAULT 0, alert TEXT, updated_at TEXT)`).run();
+  try {
+    const token = await amzAccessToken(env);
+    const pendingId = await amzState(env, "pending_report_id");
+    if (pendingId) {
+      const rep = await amzFetch(env, `/reports/2021-06-30/reports/${pendingId}`, { token });
+      const status = rep.processingStatus;
+      if (status === "DONE") {
+        const ingested = await amzIngestReport(env, rep.reportDocumentId, token);
+        await amzState(env, "pending_report_id", null);
+        await amzState(env, "last_synced_at", new Date().toISOString());
+        await amzState(env, "last_error", null);
+        return { done: true, ingested };
+      }
+      if (status === "CANCELLED" || status === "FATAL") {
+        await amzState(env, "pending_report_id", null);
+        await amzState(env, "last_error", `report ${status}`);
+        return { failed: status };
+      }
+      return { pending: status }; // IN_QUEUE / IN_PROGRESS — wait for the next tick
+    }
+    const manual = await amzState(env, "sync_requested");
+    const lastSynced = await amzState(env, "last_synced_at");
+    const stale = !lastSynced || (Date.now() - new Date(lastSynced).getTime()) > 20 * 3600 * 1000;
+    if (manual || stale) {
+      const created = await amzFetch(env, "/reports/2021-06-30/reports", {
+        method: "POST", token,
+        body: { reportType: AMZ_FBA_REPORT_TYPE, marketplaceIds: [AMZ_MARKETPLACE_ID] },
+      });
+      if (created.reportId) {
+        await amzState(env, "pending_report_id", created.reportId);
+        await amzState(env, "pending_requested_at", new Date().toISOString());
+        await amzState(env, "sync_requested", null);
+      }
+      return { created: created.reportId || null };
+    }
+    return { idle: true };
+  } catch (e) {
+    await amzState(env, "last_error", e.message.slice(0, 300));
+    return { error: e.message };
+  }
+}
+
+async function handleAmazonFbaAPI(request, env) {
+  const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Content-Type": "application/json" };
+  if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+  if (!amzConfigured(env)) return new Response(JSON.stringify({ success: false, error: "Amazon SP-API not configured" }), { status: 400, headers: cors });
+  const url = new URL(request.url);
+  if (url.searchParams.get("sync") === "1") {
+    await amzState(env, "sync_requested", "1");
+    const detail = await syncAmazonFba(env); // kick immediately; cron also advances it
+    return new Response(JSON.stringify({ success: true, status: "requested", detail }), { headers: cors });
+  }
+  try {
+    await env.DB.prepare(`CREATE TABLE IF NOT EXISTS fba_inventory (sku TEXT PRIMARY KEY, name TEXT, asin TEXT, available INTEGER DEFAULT 0, units_sold_30 INTEGER DEFAULT 0, days_of_supply INTEGER DEFAULT 0, inbound INTEGER DEFAULT 0, alert TEXT, updated_at TEXT)`).run();
+    const { results } = await env.DB.prepare(`SELECT * FROM fba_inventory ORDER BY sku`).all();
+    const inventory = (results || []).map(r => ({
+      sku: r.sku,
+      name: r.name || r.sku,
+      asin: r.asin || "",
+      fbaQuantity: r.available || 0,
+      fbaVelocity: r.units_sold_30 > 0 ? r.units_sold_30 / 30 : 0,
+      fbaDaysOfSupply: r.days_of_supply || 0,
+      fbaInbound: r.inbound || 0,
+      fbaAlert: r.alert || "",
+      fba30DaySales: r.units_sold_30 || 0,
+      hasFba: true,
+    }));
+    return new Response(JSON.stringify({
+      success: true,
+      count: inventory.length,
+      updated_at: await amzState(env, "last_synced_at"),
+      pending: !!(await amzState(env, "pending_report_id")),
+      last_error: await amzState(env, "last_error"),
+      inventory,
+    }), { headers: cors });
+  } catch (e) {
+    return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: cors });
+  }
+}
+
 // ===== 3PL API (D1-backed) =====
 async function handle3plAPI(request, env, path) {
   const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Content-Type": "application/json" };
@@ -3240,6 +3430,7 @@ async function initIcpTables(db) {
       updated_at TEXT DEFAULT (datetime('now'))
     )`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_icp_profiles_role ON icp_profiles(role_or_stage)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_icp_profiles_email_nocase ON icp_profiles(email COLLATE NOCASE)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_icp_items_profile ON icp_order_items(profile_id)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_icp_items_sku ON icp_order_items(sku)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_icp_items_date ON icp_order_items(order_date)`),
@@ -3645,9 +3836,422 @@ async function handleIcpAPI(request, env, path) {
       return new Response(JSON.stringify({ days, rows: result.results }), { headers: cors });
     }
 
+    if (path === "/icp/api/sync/stage-metafields" && request.method === "POST") {
+      if (!env.SHOPIFY_ACCESS_TOKEN) {
+        return new Response(JSON.stringify({ error: "SHOPIFY_ACCESS_TOKEN not configured" }), { status: 500, headers: cors });
+      }
+      const reqUrl = new URL(request.url);
+      // Optional belt-and-suspenders gate on top of Cloudflare Access.
+      if (env.SYNC_SECRET && reqUrl.searchParams.get("secret") !== env.SYNC_SECRET) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+      }
+      const restart = reqUrl.searchParams.get("restart") === "1";
+      const full = reqUrl.searchParams.get("full") === "1";
+      const result = await syncStageMetafields(env, { restart, full });
+      return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
+    }
+
+    if (path === "/icp/api/sync/stage-metafields/scopes" && request.method === "GET") {
+      // Diagnostic: what scopes does the token the Worker actually holds have?
+      if (!env.SHOPIFY_ACCESS_TOKEN) {
+        return new Response(JSON.stringify({ error: "SHOPIFY_ACCESS_TOKEN not configured" }), { status: 500, headers: cors });
+      }
+      const shopDomain = await shopifyStoreDomain(env);
+      const data = await shopifyGraphQL(env, shopDomain,
+        `{ currentAppInstallation { accessScopes { handle } } }`, {});
+      const handles = (data?.currentAppInstallation?.accessScopes || []).map(s => s.handle).sort();
+      return new Response(JSON.stringify({
+        shop_domain: shopDomain,
+        scopes: handles,
+        has_write_customers: handles.includes("write_customers"),
+      }, null, 2), { headers: cors });
+    }
+
+    if (path === "/icp/api/sync/stage-metafields/verify" && request.method === "GET") {
+      // Diagnostic: read the live metafield for the first page of Shopify customers and,
+      // for those matching a profile stage, compare expected vs actual.
+      const shopDomain = await shopifyStoreDomain(env);
+      const data = await shopifyGraphQL(env, shopDomain, CUSTOMERS_PAGE_QUERY, { after: null }, {});
+      const edges = data?.customers?.edges || [];
+      const emails = edges.map((e) => e.node.email).filter(Boolean).map((x) => x.toLowerCase());
+      const roleByEmail = new Map();
+      if (emails.length) {
+        const ph = emails.map(() => "?").join(",");
+        const rs = (await env.DB.prepare(
+          `SELECT email, role_or_stage FROM icp_profiles
+           WHERE role_or_stage IS NOT NULL AND email COLLATE NOCASE IN (${ph})`
+        ).bind(...emails).all()).results;
+        for (const r of rs) if (r.email) roleByEmail.set(r.email.toLowerCase(), r.role_or_stage);
+      }
+      const checks = [];
+      for (const e of edges) {
+        const email = e.node.email;
+        if (!email) continue;
+        const expected = roleByEmail.get(email.toLowerCase());
+        if (!expected) continue; // not a matched customer — skip
+        const actual = e.node.stage?.value ?? null;
+        const actualDate = e.node.stageDate?.value ?? null;
+        checks.push({ email, expected, actual, actual_date: actualDate, match: actual === expected });
+        if (checks.length >= 8) break;
+      }
+      return new Response(JSON.stringify({ matched_on_first_page: checks.length, checks }, null, 2), { headers: cors });
+    }
+
+    if (path === "/icp/api/sync/stage-metafields/status" && request.method === "GET") {
+      const [runningFlag, pageCursor, lastCompleted, lastSummary, running, lastError, lastErrorAt] = await Promise.all([
+        icpState(env, "stage_mf_running"),
+        icpState(env, "stage_mf_page_cursor"),
+        icpState(env, "stage_mf_last_completed"),
+        readStageSummary(env, "stage_mf_last_summary"),
+        readStageSummary(env, "stage_mf_summary"),
+        icpState(env, "stage_mf_last_error"),
+        icpState(env, "stage_mf_last_error_at"),
+      ]);
+      return new Response(JSON.stringify({
+        in_progress: runningFlag !== null,
+        page_cursor: pageCursor,
+        last_completed: lastCompleted,
+        last_summary: lastSummary,
+        running_summary: running,
+        last_error: lastError,
+        last_error_at: lastErrorAt,
+      }), { headers: cors });
+    }
+
     return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: cors });
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message, stack: err.stack }), { status: 500, headers: cors });
+  }
+}
+
+// ===== STAGE → SHOPIFY METAFIELD SYNC =====
+// Writes each customer's self-declared nursing stage (from icp_profiles, which the
+// ICP profile sync already populates from Klaviyo segments) onto the matching
+// Shopify customer as metafield custom.nursing_journey_stage. This lets us analyze
+// purchasing behavior by ICP stage using Shopify's exact all-time order data via
+// customer segments / Admin GraphQL. Metafield-only by design (no tag) — a metafield
+// can't be GROUP BY'd in ShopifyQL, but that path isn't what we're using.
+// Required env: SHOPIFY_ACCESS_TOKEN. Optional: SHOPIFY_STORE_DOMAIN, SYNC_SECRET.
+
+const SHOPIFY_GQL_VERSION = "2024-10";
+const STAGE_MF_NAMESPACE = "custom";
+const STAGE_MF_KEY = "nursing_journey_stage";
+// Companion date metafield: the date the CURRENT stage was recorded. Set when the stage
+// is first written or whenever it changes — so it marks entry into the current stage,
+// giving a "time in stage" signal to predict when a student moves to the next stage.
+const STAGE_MF_DATE_KEY = "nursing_stage_recorded_at";
+// role_or_stage collection began 2026-03-01, so a stage can't have been entered before
+// then. Turn a Klaviyo ISO timestamp into a YYYY-MM-DD estimate clamped to that floor.
+const STAGE_COLLECTION_START = "2026-03-01";
+function clampStageDate(iso) {
+  if (!iso) return null;
+  const d = String(iso).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  return d < STAGE_COLLECTION_START ? STAGE_COLLECTION_START : d;
+}
+
+const stageSleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+async function shopifyStoreDomain(env) {
+  try {
+    const d = await cxGetConfig(env.CX_AGENT_DB, "shopify_store_domain");
+    if (d) return d;
+  } catch { /* CX config unavailable — fall through */ }
+  return env.SHOPIFY_STORE_DOMAIN || "nurseinthemaking.myshopify.com";
+}
+
+// POST a GraphQL op to Shopify Admin, retrying on HTTP 429 and cost-based THROTTLED.
+// `counters.throttle_retries` (if passed) is incremented per backoff so the sync
+// summary can report throttling.
+async function shopifyGraphQL(env, shopDomain, query, variables, { maxRetries = 6, counters = null } = {}) {
+  let attempt = 0;
+  while (true) {
+    const res = await fetch(`https://${shopDomain}/admin/api/${SHOPIFY_GQL_VERSION}/graphql.json`, {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": env.SHOPIFY_ACCESS_TOKEN,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+
+    if (res.status === 429) {
+      if (attempt++ >= maxRetries) throw new Error("Shopify 429 rate limited (max retries)");
+      if (counters) counters.throttle_retries = (counters.throttle_retries || 0) + 1;
+      await stageSleep(Math.min(4000, 500 * Math.pow(2, attempt)));
+      continue;
+    }
+
+    const json = await res.json();
+    const errs = json.errors || [];
+    const throttled = errs.some((e) => e?.extensions?.code === "THROTTLED");
+    if (throttled) {
+      if (attempt++ >= maxRetries) throw new Error("Shopify GraphQL THROTTLED (max retries)");
+      if (counters) counters.throttle_retries = (counters.throttle_retries || 0) + 1;
+      const cost = json.extensions?.cost;
+      const restore = cost?.throttleStatus?.restoreRate || 50;
+      const needed = cost?.requestedQueryCost || 100;
+      await stageSleep(Math.min(4000, Math.max(500, Math.ceil((needed / restore) * 1000))));
+      continue;
+    }
+    if (errs.length) throw new Error("Shopify GraphQL: " + JSON.stringify(errs).slice(0, 400));
+    return json.data;
+  }
+}
+
+// Idempotent — safe to call every run. Ensures both the stage and the recorded-date
+// definitions exist; swallows the "already exists"/TAKEN userError.
+async function ensureStageMetafieldDefinition(env, shopDomain) {
+  const mutation = `
+    mutation CreateDef($def: MetafieldDefinitionInput!) {
+      metafieldDefinitionCreate(definition: $def) {
+        createdDefinition { id }
+        userErrors { field message code }
+      }
+    }`;
+  const defs = [
+    {
+      name: "Nursing Journey Stage",
+      namespace: STAGE_MF_NAMESPACE,
+      key: STAGE_MF_KEY,
+      type: "single_line_text_field",
+      ownerType: "CUSTOMER",
+      pin: true,
+    },
+    {
+      name: "Nursing Stage Recorded At",
+      namespace: STAGE_MF_NAMESPACE,
+      key: STAGE_MF_DATE_KEY,
+      type: "date",
+      ownerType: "CUSTOMER",
+      pin: true,
+    },
+  ];
+  for (const def of defs) {
+    try {
+      const data = await shopifyGraphQL(env, shopDomain, mutation, { def });
+      const ues = data?.metafieldDefinitionCreate?.userErrors || [];
+      const fatal = ues.filter((e) => e.code !== "TAKEN" && !/already|taken|exist/i.test(e.message || ""));
+      if (fatal.length) throw new Error("metafieldDefinitionCreate: " + JSON.stringify(fatal).slice(0, 300));
+    } catch (e) {
+      // Non-fatal: definition may already exist / lack scope; metafieldsSet still works
+      // for an existing (or app-owned) definition.
+    }
+  }
+}
+
+// Batch up to 25 prebuilt MetafieldsSetInput objects per metafieldsSet call.
+// Returns the number of metafields written.
+async function shopifyWriteMetafields(env, shopDomain, inputs, counters) {
+  const mutation = `
+    mutation SetMF($mfs: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $mfs) {
+        metafields { id }
+        userErrors { field message }
+      }
+    }`;
+  let written = 0;
+  for (let i = 0; i < inputs.length; i += 25) {
+    const chunk = inputs.slice(i, i + 25);
+    const data = await shopifyGraphQL(env, shopDomain, mutation, { mfs: chunk }, { counters });
+    const ues = data?.metafieldsSet?.userErrors || [];
+    if (ues.length) counters.write_errors = (counters.write_errors || 0) + ues.length;
+    written += data?.metafieldsSet?.metafields?.length || 0;
+  }
+  return written;
+}
+
+// icp_sync_state get/set/delete (value===undefined reads, value===null deletes).
+async function icpState(env, key, value) {
+  const db = env.DB;
+  if (value === undefined) {
+    const row = await db.prepare(`SELECT value FROM icp_sync_state WHERE key = ?`).bind(key).first();
+    return row ? row.value : null;
+  }
+  if (value === null) {
+    await db.prepare(`DELETE FROM icp_sync_state WHERE key = ?`).bind(key).run();
+    return;
+  }
+  await db.prepare(
+    `INSERT OR REPLACE INTO icp_sync_state (key, value, updated_at) VALUES (?, ?, datetime('now'))`
+  ).bind(key, String(value)).run();
+}
+
+const emptyStageSummary = () => ({
+  considered: 0, matched: 0, written: 0, dated: 0, unchanged: 0,
+  unmatched: 0, skipped: 0, throttle_retries: 0, write_errors: 0,
+});
+
+async function readStageSummary(env, key) {
+  const raw = await icpState(env, key);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+// Advance one resumable pass over SHOPIFY CUSTOMERS (the ~10k buyers), matching each
+// email against the local icp_profiles table (a free D1 lookup) and writing the stage
+// metafield only on matches. Far cheaper than scanning all ~463k Klaviyo profiles:
+// every read leads to a useful write instead of ~98% being wasted on non-buyers.
+// State: stage_mf_running ("1" while a pass is in progress), stage_mf_page_cursor
+// (Shopify endCursor to resume after; absent/"" = first page), stage_mf_summary.
+const CUSTOMER_PAGE_SIZE = 100;
+const CUSTOMERS_PAGE_QUERY = `
+  query StagePage($after: String) {
+    customers(first: ${CUSTOMER_PAGE_SIZE}, after: $after) {
+      edges { node {
+        id email
+        stage: metafield(namespace: "${STAGE_MF_NAMESPACE}", key: "${STAGE_MF_KEY}") { value }
+        stageDate: metafield(namespace: "${STAGE_MF_NAMESPACE}", key: "${STAGE_MF_DATE_KEY}") { value }
+      } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }`;
+
+// Prepare a fresh pass: ensure the definition, mark running, clear cursor + summary.
+async function beginStageRun(env, shopDomain) {
+  await ensureStageMetafieldDefinition(env, shopDomain);
+  await icpState(env, "stage_mf_running", "1");
+  await icpState(env, "stage_mf_page_cursor", null);
+  await icpState(env, "stage_mf_summary", null);
+  await icpState(env, "stage_mf_cursor", null); // clear legacy rowid cursor from the old model
+}
+
+async function runStageBatch(env, { pagesPerRun = 20 } = {}) {
+  await initIcpTables(env.DB);
+  const shopDomain = await shopifyStoreDomain(env);
+
+  let after = await icpState(env, "stage_mf_page_cursor");
+  if (after === "") after = null;
+
+  const running = (await readStageSummary(env, "stage_mf_summary")) || emptyStageSummary();
+  const counters = { throttle_retries: running.throttle_retries || 0, write_errors: running.write_errors || 0 };
+  const today = new Date().toISOString().slice(0, 10);
+
+  let pages = 0, hasNext = true, cursor = after;
+  while (pages < pagesPerRun) {
+    const data = await shopifyGraphQL(env, shopDomain, CUSTOMERS_PAGE_QUERY, { after: cursor }, { counters });
+    const conn = data.customers;
+    const edges = conn.edges || [];
+    pages++;
+
+    // One D1 query resolves stage + Klaviyo timestamps for the whole page
+    // (case-insensitive email match). estDate = a rough "entered stage" estimate
+    // used only for the initial backfill (genuine changes we observe use today).
+    const emails = edges.map((e) => e.node.email).filter(Boolean).map((x) => x.toLowerCase());
+    const infoByEmail = new Map();
+    if (emails.length) {
+      const ph = emails.map(() => "?").join(",");
+      const rs = (await env.DB.prepare(
+        `SELECT email, role_or_stage, created_kl, updated_kl FROM icp_profiles
+         WHERE role_or_stage IS NOT NULL AND email COLLATE NOCASE IN (${ph})`
+      ).bind(...emails).all()).results;
+      for (const r of rs) {
+        if (!r.email) continue;
+        infoByEmail.set(r.email.toLowerCase(), {
+          role: r.role_or_stage,
+          estDate: clampStageDate(r.updated_kl || r.created_kl) || today,
+        });
+      }
+    }
+
+    const writes = [];
+    for (const e of edges) {
+      const node = e.node;
+      running.considered++;
+      if (!node.email) { running.skipped++; continue; }
+      const info = infoByEmail.get(node.email.toLowerCase());
+      if (!info) { running.unmatched++; continue; }
+      running.matched++;
+      const role = info.role;
+      const curStage = node.stage?.value ?? null;
+      const curDate = node.stageDate?.value ?? null;
+      const stageChanged = curStage !== role;              // true for both new and genuinely changed
+      const genuineChange = curStage !== null && stageChanged; // had a prior different value
+      const needDate = stageChanged || !curDate;           // set/backfill the recorded date
+      if (!stageChanged && !needDate) { running.unchanged++; continue; }
+      if (stageChanged) {
+        writes.push({ ownerId: node.id, namespace: STAGE_MF_NAMESPACE, key: STAGE_MF_KEY, type: "single_line_text_field", value: role });
+        running.written++;
+      }
+      if (needDate) {
+        writes.push({ ownerId: node.id, namespace: STAGE_MF_NAMESPACE, key: STAGE_MF_DATE_KEY, type: "date", value: genuineChange ? today : info.estDate });
+        running.dated++;
+      }
+    }
+    if (writes.length) await shopifyWriteMetafields(env, shopDomain, writes, counters);
+
+    running.throttle_retries = counters.throttle_retries;
+    running.write_errors = counters.write_errors;
+    cursor = conn.pageInfo.endCursor;
+    hasNext = conn.pageInfo.hasNextPage;
+
+    await icpState(env, "stage_mf_summary", JSON.stringify(running));
+    await icpState(env, "stage_mf_page_cursor", cursor || "");
+
+    if (!hasNext) break;
+  }
+
+  if (!hasNext) {
+    // Complete: freeze summary, stamp completion, clear in-progress markers.
+    await icpState(env, "stage_mf_last_summary", JSON.stringify(running));
+    await icpState(env, "stage_mf_last_completed", new Date().toISOString());
+    await icpState(env, "stage_mf_running", null);
+    await icpState(env, "stage_mf_page_cursor", null);
+    await icpState(env, "stage_mf_summary", null);
+    return { ...running, done: true, pages };
+  }
+  return { ...running, done: false, pages, page_cursor: cursor };
+}
+
+// Manual driver: optionally reset, optionally loop over pages until done or a page budget.
+async function syncStageMetafields(env, { restart = false, full = false, pagesPerRun = 20, pageBudget = 50 } = {}) {
+  await initIcpTables(env.DB);
+  const shopDomain = await shopifyStoreDomain(env);
+
+  // A manual trigger clears any prior error backoff so it always attempts fresh
+  // (e.g. right after a Shopify scope is added).
+  await icpState(env, "stage_mf_last_error_at", null);
+  await icpState(env, "stage_mf_last_error", null);
+
+  const inProgress = (await icpState(env, "stage_mf_running")) !== null;
+  if (restart || !inProgress) await beginStageRun(env, shopDomain);
+
+  if (!full) return await runStageBatch(env, { pagesPerRun });
+
+  let last = null, pagesDone = 0;
+  while (pagesDone < pageBudget) {
+    last = await runStageBatch(env, { pagesPerRun });
+    pagesDone += last.pages || 0;
+    if (last.done) break;
+  }
+  return last || { ...emptyStageSummary(), done: false };
+}
+
+// Called from cron: self-driving nightly pass. In progress -> advance a chunk of pages;
+// else if the last completion is >20h ago (or never) -> start fresh + advance; else idle.
+// A failure (e.g. a missing Shopify scope) records an error timestamp and backs the
+// loop off for an hour so we don't re-hammer Shopify every 2-minute tick.
+async function tickStageMetafieldSync(env) {
+  if (!env.SHOPIFY_ACCESS_TOKEN) return;
+  await initIcpTables(env.DB);
+
+  const lastError = await icpState(env, "stage_mf_last_error_at");
+  if (lastError && (Date.now() - new Date(lastError).getTime()) < 60 * 60 * 1000) return;
+
+  try {
+    const inProgress = (await icpState(env, "stage_mf_running")) !== null;
+    if (inProgress) { await runStageBatch(env, { pagesPerRun: 50 }); return; }
+
+    const lastCompleted = await icpState(env, "stage_mf_last_completed");
+    const due = !lastCompleted || (Date.now() - new Date(lastCompleted).getTime()) > 20 * 60 * 60 * 1000;
+    if (!due) return;
+
+    const shopDomain = await shopifyStoreDomain(env);
+    await beginStageRun(env, shopDomain);
+    await runStageBatch(env, { pagesPerRun: 50 });
+  } catch (e) {
+    await icpState(env, "stage_mf_last_error_at", new Date().toISOString());
+    await icpState(env, "stage_mf_last_error", String(e.message || e).slice(0, 300));
   }
 }
 
@@ -4620,6 +5224,7 @@ export default {
     // ===== INVENTORY =====
     if (path === "/inventory/api/shipmonk") { return getShipmonkInventory(env); }
     if (path === "/inventory/api/shipfusion") { return handleShipFusionAPI(request, env); }
+    if (path === "/inventory/api/amazon-fba") { return handleAmazonFbaAPI(request, env); }
     // ===== CALENDAR =====
     if (path === "/calendar/api/config") { try { const { results } = await env.DB.prepare("SELECT key, value FROM config_cache").all(); const config = {}; results.forEach(r => { try { config[r.key] = JSON.parse(r.value); } catch { config[r.key] = r.value; } }); return new Response(JSON.stringify(config), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); } }
     if (path === "/calendar/api/tasks") { try { const { results } = await env.DB.prepare("SELECT * FROM tasks WHERE post_date IS NOT NULL ORDER BY post_date DESC").all(); const tasks = results.map(t => ({ ...t, customFields: JSON.parse(t.custom_fields || "[]"), tags: JSON.parse(t.tags || "[]") })); return new Response(JSON.stringify({ tasks, synced_at: new Date().toISOString() }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); } }
@@ -4664,6 +5269,18 @@ export default {
         await smState(env, "cron_last_run", new Date().toISOString());
         await syncShipmonkOrders(env, {});
       } catch (e) { /* cron sync errors are non-fatal */ }
+    })());
+    // Advance the Amazon FBA report state machine (poll pending / request when stale).
+    ctx.waitUntil((async () => {
+      try {
+        if (!amzConfigured(env)) return;
+        await syncAmazonFba(env);
+      } catch (e) { /* cron sync errors are non-fatal */ }
+    })());
+    // Self-driving nightly Klaviyo-stage -> Shopify metafield sync (advances a batch
+    // per tick while a run is in progress; starts fresh ~once a day).
+    ctx.waitUntil((async () => {
+      try { await tickStageMetafieldSync(env); } catch (e) { /* cron sync errors are non-fatal */ }
     })());
   },
 };

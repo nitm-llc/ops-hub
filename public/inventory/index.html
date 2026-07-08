@@ -96,6 +96,10 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 .fba-days.warning { color: var(--warning); }
 .fba-days.good { color: var(--text-muted); }
 .fba-empty { color: var(--text-muted); }
+.bc-badge { display:inline-block; margin-top:4px; padding:1px 6px; border-radius:6px; font-size:10px; font-weight:700; cursor:pointer; border:1px solid var(--border); user-select:none; }
+.bc-badge.bc-amz { background:rgba(250,204,21,0.15); color:var(--fba); border-color:var(--fba); }
+.bc-badge.bc-mfr { background:var(--bg-secondary); color:var(--text-muted); }
+.bc-badge.bc-unset { color:var(--text-muted); opacity:0.55; }
 
 .pipeline { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
 .pipeline-column { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; min-height: 400px; }
@@ -251,13 +255,9 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
       </div>
       <div class="connection-card">
         <div class="connection-status"><div class="connection-dot pending" id="fbaConnectionDot"></div><span style="font-weight:600">Amazon FBA</span></div>
-        <div class="upload-zone" onclick="document.getElementById('fbaFileInput').click()">
-          <div class="upload-icon">📦</div>
-          <div class="upload-text">Drop CSV or click to upload</div>
-          <div class="upload-hint">Seller Central → Reports → FBA Inventory</div>
-          <input type="file" id="fbaFileInput" accept=".csv,.txt" style="display:none" onchange="handleFbaUpload(this)">
-        </div>
-        <div id="fbaUploadStatus"></div>
+        <p style="font-size:12px;color:var(--text-muted)">Live FBA inventory via Amazon SP-API</p>
+        <div id="fbaSyncStatus" style="font-size:12px;color:var(--text-muted);margin:8px 0"></div>
+        <button class="btn btn-secondary" style="width:100%" onclick="syncFbaFromAmazon(this)">🔄 Sync from Amazon</button>
       </div>
       <div class="connection-card">
         <div class="connection-status"><div class="connection-dot pending" id="finaleConnectionDot"></div><span style="font-weight:600">Finale Inventory</span></div>
@@ -351,11 +351,11 @@ tr:hover td { background: rgba(59, 130, 246, 0.05); }
 </div>
 
 <script>
-let inventoryData = [], fbaData = [], finaleData = [], supplierOrders = [], skuMappings = [];
+let inventoryData = [], fbaData = [], finaleData = [], supplierOrders = [], skuMappings = [], barcodeTypes = {};
 let currentFilter = 'all', sortField = 'sku', sortAsc = true;
 let targetChicago = 75, targetVegas = 25;
 
-const STORAGE = { orders: 'nitm_supplier_orders', leadTimes: 'nitm_order_leadtimes', fbaData: 'nitm_fba_csv', finaleData: 'nitm_finale_csv', targets: 'nitm_distribution_targets', skuMappings: 'nitm_sku_mappings' };
+const STORAGE = { orders: 'nitm_supplier_orders', leadTimes: 'nitm_order_leadtimes', fbaData: 'nitm_fba_cache', finaleData: 'nitm_finale_csv', targets: 'nitm_distribution_targets', skuMappings: 'nitm_sku_mappings', barcodeTypes: 'nitm_barcode_types' };
 
 document.addEventListener('DOMContentLoaded', () => {
   loadFromStorage();
@@ -368,9 +368,10 @@ document.addEventListener('DOMContentLoaded', () => {
 function loadFromStorage() {
   try {
     supplierOrders = JSON.parse(localStorage.getItem(STORAGE.orders)) || [];
-    fbaData = JSON.parse(localStorage.getItem(STORAGE.fbaData)) || [];
+    fbaData = JSON.parse(localStorage.getItem(STORAGE.fbaData)) || []; // last API result, for instant paint
     finaleData = JSON.parse(localStorage.getItem(STORAGE.finaleData)) || [];
     skuMappings = JSON.parse(localStorage.getItem(STORAGE.skuMappings)) || [];
+    barcodeTypes = JSON.parse(localStorage.getItem(STORAGE.barcodeTypes)) || {};
     const targets = JSON.parse(localStorage.getItem(STORAGE.targets)) || {};
     if (targets.chicago) { targetChicago = targets.chicago; document.getElementById('targetChicago').value = targetChicago; }
     if (targets.vegas) { targetVegas = targets.vegas; document.getElementById('targetVegas').value = targetVegas; }
@@ -389,7 +390,7 @@ async function refreshData() {
   indicator.className = 'status-indicator loading';
   indicator.textContent = '● Fetching...';
   try {
-    const res = await fetch('/inventory/api/shipmonk');
+    const [res] = await Promise.all([fetch('/inventory/api/shipmonk'), fetchFbaData()]);
     const data = await res.json();
     if (data.success && data.inventory) {
       const whQty = (item, name) => { const w = (item.warehouses || []).find(w => (w.warehouse || '').toLowerCase().includes(name)); return w ? w.available : 0; };
@@ -422,65 +423,62 @@ function parseCSV(text) {
   return rows.slice(1).map(r => { const obj = {}; headers.forEach((h, i) => obj[h] = r[i] || ''); return obj; });
 }
 
-function handleFbaUpload(input) { if (input.files[0]) processFbaCSV(input.files[0]); }
-function processFbaCSV(file) {
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    try {
-      const rows = parseCSV(e.target.result);
-      fbaData = rows.map(r => {
-        // Support both Restock Inventory Report and Manage FBA Inventory report formats
-        const sku = r['Merchant SKU'] || r['seller-sku'] || r['sku'] || r['SKU'] || '';
-        const name = r['Product Name'] || r['product-name'] || '';
-        
-        // Restock Report: "Units Sold Last 30 Days", "Available", "Days of Supply at Amazon Fulfillment Network"
-        // Manage FBA: "afn-fulfillable-quantity", no velocity
-        const unitsSold30 = parseInt(r['Units Sold Last 30 Days'] || 0);
-        const available = parseInt(r['Available'] || r['afn-fulfillable-quantity'] || 0);
-        const daysOfSupply = parseInt(r['Days of Supply at Amazon Fulfillment Network'] || r['Total Days of Supply (including units from open shipments)'] || 0);
-        const alert = r['Alert'] || '';
-        const inbound = parseInt(r['Inbound'] || r['afn-inbound-working-quantity'] || 0) + parseInt(r['Shipped'] || r['afn-inbound-shipped-quantity'] || 0);
-        const asin = r['ASIN'] || r['asin'] || '';
-        
-        // Calculate daily velocity from 30-day sales
-        const fbaVelocity = unitsSold30 > 0 ? unitsSold30 / 30 : 0;
-        
-        return {
-          sku,
-          name,
-          asin,
-          fbaQuantity: available,
-          fbaVelocity,
-          fbaDaysOfSupply: daysOfSupply,
-          fbaInbound: inbound,
-          fbaAlert: alert,
-          fba30DaySales: unitsSold30,
-          hasFba: true
-        };
-      }).filter(r => r.sku);
-      
+// Pull cached FBA inventory from the Worker (Amazon SP-API → D1). Also refreshes the
+// connection dot + status line in Settings.
+async function fetchFbaData() {
+  const dot = document.getElementById('fbaConnectionDot');
+  const status = document.getElementById('fbaSyncStatus');
+  try {
+    const res = await fetch('/inventory/api/amazon-fba');
+    const data = await res.json();
+    if (data.success) {
+      fbaData = data.inventory || [];
       localStorage.setItem(STORAGE.fbaData, JSON.stringify(fbaData));
-      document.getElementById('fbaConnectionDot').className = 'connection-dot connected';
-      
-      const totalVelocity = fbaData.reduce((s, f) => s + f.fbaVelocity, 0).toFixed(1);
-      const lowStock = fbaData.filter(f => f.fbaAlert === 'low_stock').length;
-      
-      // Build detailed preview
-      let previewHtml = `<div class="upload-status success" style="margin-bottom:8px">✓ ${fbaData.length} FBA products · ${totalVelocity} units/day${lowStock > 0 ? ` · ⚠️ ${lowStock} low stock` : ''}</div>`;
-      previewHtml += '<div style="font-size:11px;color:var(--text-muted);max-height:120px;overflow-y:auto;background:var(--bg-secondary);padding:8px;border-radius:6px;margin-top:8px;">';
-      previewHtml += fbaData.map(f => {
-        const days = f.fbaDaysOfSupply || '?';
-        const vel = f.fbaVelocity > 0 ? f.fbaVelocity.toFixed(1) + '/day' : 'no velocity';
-        const alert = f.fbaAlert === 'low_stock' ? ' 🔴' : '';
-        return `<div style="padding:2px 0;border-bottom:1px solid var(--border)"><strong style="color:var(--fba)">${f.sku}</strong>: ${f.fbaQuantity} units · ${days} days · ${vel}${alert}</div>`;
-      }).join('');
-      previewHtml += '</div>';
-      
-      document.getElementById('fbaUploadStatus').innerHTML = previewHtml;
-      refreshData();
-    } catch (err) { document.getElementById('fbaUploadStatus').innerHTML = `<div style="color:var(--danger);font-size:12px;margin-top:8px">Error: ${err.message}</div>`; }
-  };
-  reader.readAsText(file);
+      if (dot) dot.className = fbaData.length ? 'connection-dot connected' : 'connection-dot pending';
+      if (status) {
+        if (data.updated_at) status.textContent = `✓ ${fbaData.length} SKUs · synced ${fmtSynced(data.updated_at)}`;
+        else if (data.pending) status.textContent = '⏳ Report generating — will appear within a couple minutes';
+        else if (data.last_error) status.textContent = '⚠️ ' + data.last_error;
+        else status.textContent = 'Not synced yet — click Sync from Amazon';
+      }
+    } else if (status) {
+      status.textContent = data.error || 'Amazon SP-API not configured';
+    }
+  } catch (e) {
+    if (status) status.textContent = 'Could not reach FBA sync';
+  }
+}
+
+// Request a fresh report, then poll the cache a few times so the UI updates on its own.
+async function syncFbaFromAmazon(btn) {
+  const status = document.getElementById('fbaSyncStatus');
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = '⏳ Requesting report from Amazon…';
+  try {
+    const res = await fetch('/inventory/api/amazon-fba?sync=1');
+    const data = await res.json();
+    if (!data.success) { if (status) status.textContent = data.error || 'Sync failed'; return; }
+    if (status) status.textContent = '⏳ Report requested — refreshing automatically…';
+    let tries = 0;
+    const poll = async () => {
+      tries++;
+      await fetchFbaData();
+      mergeFbaData();
+      renderWarehouseTab();
+      if (fbaData.length === 0 && tries < 6) setTimeout(poll, 15000);
+    };
+    setTimeout(poll, 12000);
+  } catch (e) {
+    if (status) status.textContent = 'Sync error: ' + e.message;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Format a UTC SQLite datetime ("YYYY-MM-DD HH:MM:SS") as a short local time.
+function fmtSynced(s) {
+  try { const d = new Date(s.replace(' ', 'T') + 'Z'); return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+  catch { return s; }
 }
 function mergeFbaData() {
   fbaData.forEach(fp => {
@@ -617,7 +615,7 @@ function renderInventoryTable() {
       }
       const alertIcon = item.fbaAlert === 'low_stock' ? '🔴 ' : '';
       const velocityText = fbaV > 0 ? `${fbaV.toFixed(1)}/day` : '';
-      fbaHtml = `<div class="fba-value">${alertIcon}${fbaQ.toLocaleString()}</div><div class="fba-days ${daysClass}">${daysText}${velocityText ? ' · ' + velocityText : ''}</div>`;
+      fbaHtml = `<div class="fba-value">${alertIcon}${fbaQ.toLocaleString()}</div><div class="fba-days ${daysClass}">${daysText}${velocityText ? ' · ' + velocityText : ''}</div>${barcodeBadge(item.fbaSku || item.sku)}`;
     }
     
     // ShipMonk velocity (30 day average)
@@ -646,6 +644,24 @@ function setFilter(f) {
   renderInventoryTable();
 }
 function sortTable(field) { if (sortField === field) sortAsc = !sortAsc; else { sortField = field; sortAsc = true; } renderInventoryTable(); }
+
+// Manual barcode-type tag: click to cycle unset → AMZ (Amazon FNSKU) → MFR (manufacturer).
+function barcodeBadge(sku) {
+  const bc = barcodeTypes[sku] || '';
+  const label = bc === 'amazon' ? 'AMZ' : bc === 'manufacturer' ? 'MFR' : 'barcode?';
+  const title = bc === 'amazon' ? 'Requires Amazon FNSKU label (click to change)' : bc === 'manufacturer' ? 'Manufacturer barcode OK (click to change)' : 'Set barcode type';
+  const cls = bc === 'amazon' ? 'bc-amz' : bc === 'manufacturer' ? 'bc-mfr' : 'bc-unset';
+  const safe = String(sku).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  return `<span class="bc-badge ${cls}" title="${title}" onclick="cycleBarcodeType('${safe}',event)">${label}</span>`;
+}
+function cycleBarcodeType(sku, ev) {
+  if (ev) ev.stopPropagation();
+  const order = ['', 'amazon', 'manufacturer'];
+  const next = order[(order.indexOf(barcodeTypes[sku] || '') + 1) % order.length];
+  if (next) barcodeTypes[sku] = next; else delete barcodeTypes[sku];
+  localStorage.setItem(STORAGE.barcodeTypes, JSON.stringify(barcodeTypes));
+  renderInventoryTable();
+}
 
 function renderOrderPipeline() {
   ['need_to_order', 'ordered', 'shipped', 'in_transit', 'received'].forEach(stage => {
@@ -703,7 +719,7 @@ function saveLeadTimes() {
   localStorage.setItem(STORAGE.leadTimes, JSON.stringify({ production: document.getElementById('lt-production').value, ship: document.getElementById('lt-ship').value, port: document.getElementById('lt-port').value, delivery: document.getElementById('lt-delivery').value }));
   alert('Lead times saved!');
 }
-function clearFbaData() { if(confirm('Clear FBA data?')) { localStorage.removeItem(STORAGE.fbaData); fbaData=[]; document.getElementById('fbaConnectionDot').className='connection-dot pending'; document.getElementById('fbaUploadStatus').innerHTML=''; refreshData(); }}
+function clearFbaData() { if(confirm('Clear the local FBA cache and re-pull from Amazon?')) { localStorage.removeItem(STORAGE.fbaData); fbaData=[]; document.getElementById('fbaConnectionDot').className='connection-dot pending'; refreshData(); }}
 function clearFinaleData() { if(confirm('Clear Finale data?')) { localStorage.removeItem(STORAGE.finaleData); finaleData=[]; document.getElementById('finaleConnectionDot').className='connection-dot pending'; document.getElementById('finaleUploadStatus').innerHTML=''; refreshData(); }}
 function clearAllOrders() { if(confirm('Clear all orders?')) { localStorage.removeItem(STORAGE.orders); supplierOrders=[]; renderOrderPipeline(); }}
 

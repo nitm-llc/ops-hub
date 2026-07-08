@@ -101,10 +101,12 @@ function useApi(path, deps = []) {
   return { data, error, loading, reload };
 }
 
-function StatusPanel({ status, onSync, syncing, syncMsg }) {
+function StatusPanel({ status, onSync, syncing, syncMsg, statusKey }) {
+  const { data: stageStatus } = useApi(`/icp/api/sync/stage-metafields/status?_=${statusKey}`, [statusKey]);
   if (!status) return null;
   const profilesSync = status.sync_state?.find(r => r.key === "profiles_last_sync");
   const eventsSync = status.sync_state?.find(r => r.key === "events_last_sync");
+  const stageSum = stageStatus?.last_summary;
   return (
     <div className="panel">
       <h2>Data sync status</h2>
@@ -127,6 +129,21 @@ function StatusPanel({ status, onSync, syncing, syncMsg }) {
           <div className="stat-label">Events last synced</div>
           <div className="stat-value" style={{fontSize: 14}}>{fmtDate(eventsSync?.updated_at)}</div>
         </div>
+        <div className="stat">
+          <div className="stat-label">Stages → Shopify</div>
+          <div className="stat-value" style={{fontSize: 14}}>
+            {stageSum ? `${fmtNum(stageSum.matched)} matched` : "—"}
+          </div>
+          <div className="status-line">
+            {stageStatus?.last_error
+              ? `error: ${stageStatus.last_error.slice(0, 80)}`
+              : stageStatus?.in_progress
+              ? "run in progress…"
+              : stageSum
+                ? `${fmtNum(stageSum.written)} written · ${fmtNum(stageSum.dated || 0)} dated · ${fmtNum(stageSum.unmatched)} unmatched · ${fmtDate(stageStatus?.last_completed)}`
+                : "never run"}
+          </div>
+        </div>
       </div>
       <div className="row" style={{marginTop: 16}}>
         <button onClick={() => onSync("profiles")} disabled={syncing}>Sync profiles from Klaviyo</button>
@@ -134,6 +151,7 @@ function StatusPanel({ status, onSync, syncing, syncMsg }) {
         <button className="primary" onClick={() => onSync("events", true)} disabled={syncing}>
           Backfill since Mar 2026
         </button>
+        <button onClick={() => onSync("stage", true)} disabled={syncing}>Sync stages → Shopify</button>
         {syncing && <span className="status-line">Syncing… this can take several minutes</span>}
         {syncMsg && <span className="status-line">{syncMsg}</span>}
       </div>
@@ -141,6 +159,10 @@ function StatusPanel({ status, onSync, syncing, syncMsg }) {
         First time? Click <code>Sync profiles</code> first, then <code>Backfill since Mar 2026</code>.
         Subsequent runs: just <code>Sync profiles</code> + <code>Sync recent orders</code> (incremental).
         Order data starts at March 1, 2026 because that's when <code>role_or_stage</code> began being collected.
+        <br />
+        <code>Sync stages → Shopify</code> writes each customer's stage onto the Shopify customer
+        metafield <code>custom.nursing_journey_stage</code> (matched by email). It also runs nightly on its
+        own; a large first run may finish across a few cron ticks. Unmatched = Klaviyo profiles with no Shopify customer.
       </div>
     </div>
   );
@@ -372,12 +394,16 @@ function App() {
     setSyncing(true);
     setSyncMsg("");
     try {
-      const url = kind === "profiles" ? "/icp/api/sync/profiles" : `/icp/api/sync/events${full ? "?full=1" : ""}`;
+      const url = kind === "profiles" ? "/icp/api/sync/profiles"
+        : kind === "stage" ? `/icp/api/sync/stage-metafields${full ? "?full=1" : ""}`
+        : `/icp/api/sync/events${full ? "?full=1" : ""}`;
       const res = await fetch(url, { method: "POST" });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
       setSyncMsg(kind === "profiles"
         ? `Synced ${j.profiles_synced} profiles across ${j.pages} pages.`
+        : kind === "stage"
+        ? `Stage sync${j.done ? " complete" : " (partial — cron will finish)"}: ${j.matched} matched, ${j.written} written, ${j.unchanged} unchanged, ${j.unmatched} unmatched.`
         : `Synced ${j.events_synced} order line items across ${j.pages} pages.`);
       setStatusKey(k => k + 1);
     } catch (e) {
@@ -394,7 +420,7 @@ function App() {
 
       {statusError && <div className="error">{statusError}</div>}
 
-      <StatusPanel status={status} onSync={onSync} syncing={syncing} syncMsg={syncMsg} />
+      <StatusPanel status={status} onSync={onSync} syncing={syncing} syncMsg={syncMsg} statusKey={statusKey} />
 
       <div className="tabs">
         <div className={"tab " + (tab === "overview" ? "active" : "")} onClick={() => setTab("overview")}>Segment overview</div>
