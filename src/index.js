@@ -3092,6 +3092,25 @@ async function handleCxAgentAPI(request, env, path) {
     // Mirrors captureHumanReply WITHOUT inserting — shows exactly why a reply did or
     // didn't get captured (ticket-in-DB? which comments are public? which author_ids
     // match support_staff_ids?). If no ticket given, picks the most recent drafted ticket.
+    // GET /cx-agent/api/diag/recent — one-page health view: recent tickets (with turn
+    // claims), recent drafts, and recent follow-up traces. For "replies aren't running".
+    if (path === '/cx-agent/api/diag/recent' && request.method === 'GET') {
+      const tickets = (await db.prepare("SELECT id, zendesk_ticket_id, status, classified_intent, final_action, last_followup_comment_id, received_at, completed_at FROM agent_tickets ORDER BY id DESC LIMIT 10").all()).results || [];
+      const responses = (await db.prepare("SELECT id, ticket_id, is_followup, turn_number, status, substr(customer_message,1,80) as msg, created_at FROM agent_responses ORDER BY id DESC LIMIT 12").all()).results || [];
+      const traces = (await db.prepare("SELECT ticket_id, step_name, status, error_message, created_at FROM agent_decisions WHERE step_name LIKE 'followup%' OR step_name='pipeline_error' ORDER BY id DESC LIMIT 15").all()).results || [];
+      return new Response(JSON.stringify({ now: new Date().toISOString(), tickets, responses, followup_traces: traces }, null, 2), { headers: cors });
+    }
+
+    // GET|POST /cx-agent/api/diag/retry-followup?ticket=<zid> — release the turn claim so
+    // the next cron sweep re-detects and re-drafts the latest customer reply.
+    if (path === '/cx-agent/api/diag/retry-followup') {
+      const url = new URL(request.url);
+      const zid = url.searchParams.get('ticket');
+      if (!zid) return new Response(JSON.stringify({ error: 'pass ?ticket=<zendesk_ticket_id>' }), { status: 400, headers: cors });
+      await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = NULL WHERE zendesk_ticket_id = ?").bind(String(zid)).run();
+      return new Response(JSON.stringify({ released: true, ticket: zid, note: 'The 2-min sweep will re-handle the latest customer reply (if <2h old and no human takeover).' }), { headers: cors });
+    }
+
     // GET|POST /cx-agent/api/diag/simulate-followup?ticket=<id>&message=<text>
     // Runs the follow-up pipeline directly (bypasses the Zendesk trigger + takeover check) so
     // you can SEE the agent respond to a follow-up. Drafts/sends per current mode. If no
@@ -3816,77 +3835,78 @@ async function handleIcpAPI(request, env, path) {
     }
 
     if (path === "/icp/api/stage-affinity" && request.method === "GET") {
-      // Which products are distinctively bought by a particular stage — via lift
-      // (over-indexing) rather than raw share, so big stages don't dominate.
-      // Unit of analysis = distinct buyers per (SKU, stage).
+      // Products distinctively bought by a particular stage — via lift (over-indexing)
+      // × in-stage-share, so neither big stages nor tiny ones dominate. Unit = distinct
+      // buyers per (SKU, stage). source=klaviyo (directional icp_order_items, default)
+      // or shopify (exact all-time from the affinity build).
       const url = new URL(request.url);
       const days = parseInt(url.searchParams.get("days") || "365");
       const minBuyers = Math.max(1, parseInt(url.searchParams.get("min_buyers") || "10"));
-      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const source = url.searchParams.get("source") === "shopify" ? "shopify" : "klaviyo";
 
-      // Baseline: distinct staged buyers per stage in the window.
-      const baseRows = (await db.prepare(`
-        SELECT p.role_or_stage AS role, COUNT(DISTINCT oi.profile_id) AS buyers
-        FROM icp_order_items oi
-        JOIN icp_profiles p ON p.profile_id = oi.profile_id
-        WHERE p.role_or_stage IS NOT NULL AND oi.order_date >= ?
-        GROUP BY p.role_or_stage
-      `).bind(cutoff).all()).results;
-      const allStagedBuyers = baseRows.reduce((s, r) => s + (r.buyers || 0), 0) || 1;
-      const stageShare = {};
-      const baseline = baseRows.map((r) => {
-        const share = (r.buyers || 0) / allStagedBuyers;
-        stageShare[r.role] = share;
-        return { role: r.role, buyers: r.buyers || 0, share };
-      }).sort((a, b) => b.buyers - a.buyers);
-
-      // Buyers per (product, sku, stage).
-      const skuRows = (await db.prepare(`
-        SELECT COALESCE(oi.product_name, oi.sku, '(unknown)') AS product, oi.sku AS sku,
-               p.role_or_stage AS role, COUNT(DISTINCT oi.profile_id) AS buyers
-        FROM icp_order_items oi
-        JOIN icp_profiles p ON p.profile_id = oi.profile_id
-        WHERE p.role_or_stage IS NOT NULL AND oi.order_date >= ?
-        GROUP BY product, oi.sku, p.role_or_stage
-      `).bind(cutoff).all()).results;
-
-      // Aggregate per product: total buyers + per-stage breakdown, then lift/exclusivity.
-      const byKey = new Map();
-      for (const r of skuRows) {
-        const key = `${r.product}||${r.sku ?? ""}`;
-        if (!byKey.has(key)) byKey.set(key, { product: r.product, sku: r.sku || null, total_buyers: 0, stages: {} });
-        const e = byKey.get(key);
-        e.stages[r.role] = (e.stages[r.role] || 0) + (r.buyers || 0);
-        e.total_buyers += r.buyers || 0;
+      let baseRows, skuRows;
+      const meta = { source };
+      if (source === "shopify") {
+        await ensureAffinityTables(env.DB);
+        baseRows = (await db.prepare(`SELECT stage AS role, buyers FROM affinity_stage_totals`).all()).results;
+        skuRows = (await db.prepare(`SELECT product, sku, stage AS role, buyers FROM affinity_counts`).all()).results;
+        meta.last_completed = await icpState(env, "affinity_last_completed");
+        meta.in_progress = (await icpState(env, "affinity_running")) !== null;
+        meta.build = (await readStageSummary(env, "affinity_running") !== null)
+          ? await readStageSummary(env, "affinity_summary")
+          : await readStageSummary(env, "affinity_last_summary");
+      } else {
+        const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        baseRows = (await db.prepare(`
+          SELECT p.role_or_stage AS role, COUNT(DISTINCT oi.profile_id) AS buyers
+          FROM icp_order_items oi JOIN icp_profiles p ON p.profile_id = oi.profile_id
+          WHERE p.role_or_stage IS NOT NULL AND oi.order_date >= ?
+          GROUP BY p.role_or_stage`).bind(cutoff).all()).results;
+        skuRows = (await db.prepare(`
+          SELECT COALESCE(oi.product_name, oi.sku, '(unknown)') AS product, oi.sku AS sku,
+                 p.role_or_stage AS role, COUNT(DISTINCT oi.profile_id) AS buyers
+          FROM icp_order_items oi JOIN icp_profiles p ON p.profile_id = oi.profile_id
+          WHERE p.role_or_stage IS NOT NULL AND oi.order_date >= ?
+          GROUP BY product, oi.sku, p.role_or_stage`).bind(cutoff).all()).results;
+        meta.days = days;
       }
 
-      const products = [];
-      for (const e of byKey.values()) {
-        if (e.total_buyers < minBuyers) continue;
-        const by_stage = {};
-        // Signature stage = max of lift × in-stage-share. This rewards a product for
-        // being BOTH over-indexed AND concentrated in a stage, so a tiny stage can't
-        // win on lift alone (8% of buyers), and a big stage can't win on share alone
-        // (low lift). exclusivity = the single largest in-stage share.
-        let topStage = null, topScore = -1, topLift = 0, topShare = 0, exclusivity = 0;
-        for (const [role, buyers] of Object.entries(e.stages)) {
-          const share = buyers / e.total_buyers;          // this SKU's buyers that are in `role`
-          const base = stageShare[role] || 0;
-          const lift = base > 0 ? share / base : 0;         // >1 = over-indexed to this stage
-          by_stage[role] = { buyers, share, lift };
-          if (share > exclusivity) exclusivity = share;
-          const score = lift * share;
-          if (score > topScore) { topScore = score; topStage = role; topLift = lift; topShare = share; }
-        }
-        products.push({
-          product: e.product, sku: e.sku, total_buyers: e.total_buyers,
-          by_stage, top_stage: topStage, top_lift: topLift, top_share: topShare, score: topScore,
-          exclusivity, exclusive: topShare >= 0.6 && topLift >= 1.5,
-        });
-      }
-      products.sort((a, b) => b.score - a.score);
+      const { baseline, products } = computeStageAffinity(baseRows, skuRows, minBuyers);
+      return new Response(JSON.stringify({ ...meta, min_buyers: minBuyers, baseline, products }), { headers: cors });
+    }
 
-      return new Response(JSON.stringify({ days, min_buyers: minBuyers, baseline, products }), { headers: cors });
+    if (path === "/icp/api/affinity/build" && request.method === "POST") {
+      if (!env.SHOPIFY_ACCESS_TOKEN) {
+        return new Response(JSON.stringify({ error: "SHOPIFY_ACCESS_TOKEN not configured" }), { status: 500, headers: cors });
+      }
+      const reqUrl = new URL(request.url);
+      if (env.SYNC_SECRET && reqUrl.searchParams.get("secret") !== env.SYNC_SECRET) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: cors });
+      }
+      const restart = reqUrl.searchParams.get("restart") === "1";
+      const full = reqUrl.searchParams.get("full") === "1";
+      const result = await buildStageAffinity(env, { restart, full });
+      return new Response(JSON.stringify({ ok: true, ...result }), { headers: cors });
+    }
+
+    if (path === "/icp/api/affinity/status" && request.method === "GET") {
+      await ensureAffinityTables(env.DB);
+      const [running, cursor, lastCompleted, lastSummary, cur, lastError] = await Promise.all([
+        icpState(env, "affinity_running"),
+        icpState(env, "affinity_cursor"),
+        icpState(env, "affinity_last_completed"),
+        readStageSummary(env, "affinity_last_summary"),
+        readStageSummary(env, "affinity_summary"),
+        icpState(env, "affinity_last_error"),
+      ]);
+      return new Response(JSON.stringify({
+        in_progress: running !== null,
+        page_cursor: cursor,
+        last_completed: lastCompleted,
+        last_summary: lastSummary,
+        running_summary: cur,
+        last_error: lastError,
+      }), { headers: cors });
     }
 
     if (path === "/icp/api/first-purchase" && request.method === "GET") {
@@ -4336,6 +4356,204 @@ async function tickStageMetafieldSync(env) {
   } catch (e) {
     await icpState(env, "stage_mf_last_error_at", new Date().toISOString());
     await icpState(env, "stage_mf_last_error", String(e.message || e).slice(0, 300));
+  }
+}
+
+// ===== STAGE AFFINITY (exact, from Shopify order history) =====
+// Phase 2 of the stage analysis: instead of Klaviyo order events (partial/stale),
+// pull each staged customer's real Shopify orders and tally distinct buyers per SKU
+// per stage into D1, so the affinity view can run on exact all-time data. Pages all
+// customers (same as the stage sync), and for each that has the stage metafield pulls
+// their orders' line items. Resumable via a customer-page cursor; idempotent per
+// customer via affinity_customers (so resumes/overlaps don't double-count buyers).
+
+async function ensureAffinityTables(db) {
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS affinity_counts (
+      pkey TEXT NOT NULL, product TEXT, sku TEXT, stage TEXT NOT NULL, buyers INTEGER DEFAULT 0,
+      PRIMARY KEY (pkey, stage))`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS affinity_stage_totals (
+      stage TEXT PRIMARY KEY, buyers INTEGER DEFAULT 0)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS affinity_customers (gid TEXT PRIMARY KEY)`),
+  ]);
+}
+
+// Shared lift×share computation used by both the Klaviyo (directional) and Shopify
+// (exact) sources. Input rows: baseRows=[{role,buyers}], skuRows=[{product,sku,role,buyers}].
+function computeStageAffinity(baseRows, skuRows, minBuyers) {
+  const allStagedBuyers = baseRows.reduce((s, r) => s + (r.buyers || 0), 0) || 1;
+  const stageShare = {};
+  const baseline = baseRows.map((r) => {
+    const share = (r.buyers || 0) / allStagedBuyers;
+    stageShare[r.role] = share;
+    return { role: r.role, buyers: r.buyers || 0, share };
+  }).sort((a, b) => b.buyers - a.buyers);
+
+  const byKey = new Map();
+  for (const r of skuRows) {
+    const key = `${r.product}||${r.sku ?? ""}`;
+    if (!byKey.has(key)) byKey.set(key, { product: r.product, sku: r.sku || null, total_buyers: 0, stages: {} });
+    const e = byKey.get(key);
+    e.stages[r.role] = (e.stages[r.role] || 0) + (r.buyers || 0);
+    e.total_buyers += r.buyers || 0;
+  }
+
+  const products = [];
+  for (const e of byKey.values()) {
+    if (e.total_buyers < minBuyers) continue;
+    const by_stage = {};
+    let topStage = null, topScore = -1, topLift = 0, topShare = 0, exclusivity = 0;
+    for (const [role, buyers] of Object.entries(e.stages)) {
+      const share = buyers / e.total_buyers;
+      const base = stageShare[role] || 0;
+      const lift = base > 0 ? share / base : 0;
+      by_stage[role] = { buyers, share, lift };
+      if (share > exclusivity) exclusivity = share;
+      const score = lift * share;   // reward both over-indexing and concentration
+      if (score > topScore) { topScore = score; topStage = role; topLift = lift; topShare = share; }
+    }
+    products.push({
+      product: e.product, sku: e.sku, total_buyers: e.total_buyers,
+      by_stage, top_stage: topStage, top_lift: topLift, top_share: topShare, score: topScore,
+      exclusivity, exclusive: topShare >= 0.6 && topLift >= 1.5,
+    });
+  }
+  products.sort((a, b) => b.score - a.score);
+  return { baseline, products };
+}
+
+// Pull the set of distinct products a customer has ever bought (paginating orders).
+async function affinityCustomerSkus(env, shopDomain, gid, counters) {
+  const query = `
+    query CustOrders($id: ID!, $after: String) {
+      customer(id: $id) {
+        orders(first: 20, after: $after) {
+          edges { node { lineItems(first: 30) { edges { node { sku title } } } } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }`;
+  const skus = new Map(); // pkey -> {product, sku}
+  let after = null, guard = 0;
+  while (guard++ < 25) {
+    const data = await shopifyGraphQL(env, shopDomain, query, { id: gid, after }, { counters });
+    const orders = data?.customer?.orders;
+    if (!orders) break;
+    for (const oe of orders.edges || []) {
+      for (const le of oe.node.lineItems?.edges || []) {
+        const sku = le.node.sku || null;
+        const product = le.node.title || sku || "(unknown)";
+        const pkey = `${product}||${sku ?? ""}`;
+        if (!skus.has(pkey)) skus.set(pkey, { product, sku });
+      }
+    }
+    if (!orders.pageInfo?.hasNextPage) break;
+    after = orders.pageInfo.endCursor;
+  }
+  return skus;
+}
+
+async function beginAffinityRun(env) {
+  await ensureAffinityTables(env.DB);
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM affinity_counts`),
+    env.DB.prepare(`DELETE FROM affinity_stage_totals`),
+    env.DB.prepare(`DELETE FROM affinity_customers`),
+  ]);
+  await icpState(env, "affinity_running", "1");
+  await icpState(env, "affinity_cursor", null);
+  await icpState(env, "affinity_summary", null);
+  await icpState(env, "affinity_last_error", null);
+}
+
+async function runAffinityBatch(env, { pagesPerRun = 20 } = {}) {
+  await ensureAffinityTables(env.DB);
+  const shopDomain = await shopifyStoreDomain(env);
+  let after = await icpState(env, "affinity_cursor");
+  if (after === "") after = null;
+
+  const running = (await readStageSummary(env, "affinity_summary")) ||
+    { considered: 0, staged: 0, customers_counted: 0, orders_customers: 0, throttle_retries: 0 };
+  const counters = { throttle_retries: running.throttle_retries || 0 };
+
+  let pages = 0, hasNext = true, cursor = after;
+  while (pages < pagesPerRun) {
+    const data = await shopifyGraphQL(env, shopDomain, CUSTOMERS_PAGE_QUERY, { after: cursor }, { counters });
+    const conn = data.customers;
+    const edges = conn.edges || [];
+    pages++;
+
+    for (const e of edges) {
+      const node = e.node;
+      running.considered++;
+      const stage = node.stage?.value ?? null;
+      if (!stage) continue;
+      running.staged++;
+      // Idempotency: count each staged customer at most once across resumes.
+      const ins = await env.DB.prepare(`INSERT OR IGNORE INTO affinity_customers (gid) VALUES (?)`).bind(node.id).run();
+      if (!ins.meta?.changes) continue; // already counted
+      const skus = await affinityCustomerSkus(env, shopDomain, node.id, counters);
+      running.orders_customers++;
+      const stmts = [ env.DB.prepare(
+        `INSERT INTO affinity_stage_totals (stage, buyers) VALUES (?, 1)
+         ON CONFLICT(stage) DO UPDATE SET buyers = buyers + 1`).bind(stage) ];
+      for (const { product, sku } of skus.values()) {
+        const pkey = `${product}||${sku ?? ""}`;
+        stmts.push(env.DB.prepare(
+          `INSERT INTO affinity_counts (pkey, product, sku, stage, buyers) VALUES (?, ?, ?, ?, 1)
+           ON CONFLICT(pkey, stage) DO UPDATE SET buyers = buyers + 1`).bind(pkey, product, sku, stage));
+      }
+      await env.DB.batch(stmts);
+      running.customers_counted++;
+    }
+
+    running.throttle_retries = counters.throttle_retries;
+    cursor = conn.pageInfo.endCursor;
+    hasNext = conn.pageInfo.hasNextPage;
+    await icpState(env, "affinity_summary", JSON.stringify(running));
+    await icpState(env, "affinity_cursor", cursor || "");
+    if (!hasNext) break;
+  }
+
+  if (!hasNext) {
+    await icpState(env, "affinity_last_summary", JSON.stringify(running));
+    await icpState(env, "affinity_last_completed", new Date().toISOString());
+    await icpState(env, "affinity_running", null);
+    await icpState(env, "affinity_cursor", null);
+    await icpState(env, "affinity_summary", null);
+    return { ...running, done: true, pages };
+  }
+  return { ...running, done: false, pages, page_cursor: cursor };
+}
+
+// Manual driver: restart clears prior counts; full loops pages within a budget.
+async function buildStageAffinity(env, { restart = false, full = false, pagesPerRun = 20, pageBudget = 50 } = {}) {
+  await ensureAffinityTables(env.DB);
+  const inProgress = (await icpState(env, "affinity_running")) !== null;
+  if (restart || !inProgress) await beginAffinityRun(env);
+  if (!full) return await runAffinityBatch(env, { pagesPerRun });
+  let last = null, pagesDone = 0;
+  while (pagesDone < pageBudget) {
+    last = await runAffinityBatch(env, { pagesPerRun });
+    pagesDone += last.pages || 0;
+    if (last.done) break;
+  }
+  return last || { done: false };
+}
+
+// Cron: only advance an in-progress affinity build (do NOT auto-start — it's a heavy
+// full-customer scan the user kicks on demand). 1hr error backoff.
+async function tickStageAffinity(env) {
+  if (!env.SHOPIFY_ACCESS_TOKEN) return;
+  await ensureAffinityTables(env.DB);
+  if ((await icpState(env, "affinity_running")) === null) return;
+  const lastError = await icpState(env, "affinity_last_error_at");
+  if (lastError && (Date.now() - new Date(lastError).getTime()) < 60 * 60 * 1000) return;
+  try {
+    await runAffinityBatch(env, { pagesPerRun: 40 });
+  } catch (e) {
+    await icpState(env, "affinity_last_error_at", new Date().toISOString());
+    await icpState(env, "affinity_last_error", String(e.message || e).slice(0, 300));
   }
 }
 
@@ -5365,6 +5583,10 @@ export default {
     // per tick while a run is in progress; starts fresh ~once a day).
     ctx.waitUntil((async () => {
       try { await tickStageMetafieldSync(env); } catch (e) { /* cron sync errors are non-fatal */ }
+    })());
+    // Advance an in-progress exact stage-affinity build (user-kicked; not auto-started).
+    ctx.waitUntil((async () => {
+      try { await tickStageAffinity(env); } catch (e) { /* cron sync errors are non-fatal */ }
     })());
   },
 };

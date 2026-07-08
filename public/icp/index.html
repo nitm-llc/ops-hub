@@ -323,7 +323,25 @@ function ProductCrossTab({ days }) {
 
 function StageAffinity({ days }) {
   const [minBuyers, setMinBuyers] = useState(10);
-  const { data, error, loading } = useApi(`/icp/api/stage-affinity?days=${days}&min_buyers=${minBuyers}`, [days, minBuyers]);
+  const [source, setSource] = useState("klaviyo");
+  const [building, setBuilding] = useState(false);
+  const [buildMsg, setBuildMsg] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const { data, error, loading } = useApi(`/icp/api/stage-affinity?days=${days}&min_buyers=${minBuyers}&source=${source}&_=${refreshKey}`, [days, minBuyers, source, refreshKey]);
+
+  const onBuild = async () => {
+    setBuilding(true); setBuildMsg("");
+    try {
+      const res = await fetch("/icp/api/affinity/build?full=1&restart=1", { method: "POST" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || ("HTTP " + res.status));
+      setBuildMsg(j.done
+        ? `Build complete: ${fmtNum(j.customers_counted)} customers processed.`
+        : `Building… ${fmtNum(j.customers_counted || 0)} customers so far (continues in the background). Refresh in a bit.`);
+      setRefreshKey(k => k + 1);
+    } catch (e) { setBuildMsg("Error: " + e.message); }
+    finally { setBuilding(false); }
+  };
 
   // Group products under the stage they over-index to, best lift first.
   const byStage = useMemo(() => {
@@ -343,19 +361,44 @@ function StageAffinity({ days }) {
 
   return (
     <div className="panel">
-      <h2>Products distinctive to each stage <span className="badge">last {days} days</span></h2>
-      <div className="row" style={{marginBottom: 12}}>
-        <span style={{fontSize: 13, color: "var(--muted)"}}>Min buyers per product:</span>
+      <h2>Products distinctive to each stage {source === "klaviyo" && <span className="badge">last {days} days</span>}</h2>
+      <div className="row" style={{marginBottom: 12, flexWrap: "wrap"}}>
+        <span style={{fontSize: 13, color: "var(--muted)"}}>Data:</span>
+        <select value={source} onChange={e => setSource(e.target.value)}>
+          <option value="klaviyo">Directional (Klaviyo, since Mar 2026)</option>
+          <option value="shopify">Exact (Shopify, all-time)</option>
+        </select>
+        <span style={{fontSize: 13, color: "var(--muted)", marginLeft: 8}}>Min buyers:</span>
         <select value={minBuyers} onChange={e => setMinBuyers(parseInt(e.target.value))}>
           <option value={5}>5</option>
           <option value={10}>10</option>
           <option value={20}>20</option>
           <option value={50}>50</option>
         </select>
-        <span style={{fontSize: 12, color: "#64748b"}}>Higher = fewer, more reliable products.</span>
+        {source === "shopify" && (
+          <>
+            <button onClick={onBuild} disabled={building}>{building ? "Building…" : "Build / refresh exact data"}</button>
+            <button onClick={() => setRefreshKey(k => k + 1)} disabled={building}>↻ Refresh</button>
+          </>
+        )}
       </div>
 
-      {!byStage.length && <div className="empty">No clearly stage-specific products at this threshold. Try lowering the min-buyers filter.</div>}
+      {source === "shopify" && (
+        <div className="status-line" style={{marginBottom: 10}}>
+          {data?.in_progress ? "Exact build in progress (runs in the background)… " : ""}
+          {data?.build ? `${fmtNum(data.build.customers_counted || 0)} customers processed` : "not built yet"}
+          {data?.last_completed ? ` · completed ${fmtDate(data.last_completed)}` : ""}
+          {buildMsg ? ` — ${buildMsg}` : ""}
+        </div>
+      )}
+
+      {!byStage.length && (
+        <div className="empty">
+          {source === "shopify" && !data?.build
+            ? "No exact data yet. Click “Build / refresh exact data” to pull Shopify order history (runs in the background)."
+            : "No clearly stage-specific products at this threshold. Try lowering the min-buyers filter."}
+        </div>
+      )}
 
       {byStage.map(({ role, items }) => (
         <div key={role} style={{marginBottom: 22}}>
@@ -397,8 +440,9 @@ function StageAffinity({ days }) {
         (2× = twice as likely; controls for big stages dominating). <strong>In this stage</strong> = share of
         that product's buyers who are in this stage — near 100% with 🔒 means it's essentially exclusive to it.
         <br />
-        Directional only: counts each buyer under their <em>current</em> stage, from Klaviyo order data since
-        Mar 2026 (~2 months stale). We'll rebuild this on exact all-time Shopify orders next.
+        {source === "shopify"
+          ? "Exact: each buyer counted once under their current stage, from their complete all-time Shopify order history."
+          : "Directional: counts each buyer under their current stage, from Klaviyo order data since Mar 2026 (~2 months stale). Switch “Data” to Exact for complete Shopify order history."}
       </div>
     </div>
   );
