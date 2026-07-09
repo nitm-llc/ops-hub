@@ -1107,10 +1107,10 @@ async function handleCxAgentReplyWebhook(request, env, ctx) {
     const requesterId = td.ticket?.requester_id;
     const publicComments = (td.comments || []).filter(c => c.public === true);
 
-    // Human takeover → back off completely (a teammate, not the bot, replied publicly).
-    const humanTookOver = publicComments.some(c =>
+    // A teammate (not the bot) has replied publicly → the human owns the ticket. We STILL
+    // draft internal-note suggestions on customer follow-ups (labeled), but never auto-send.
+    const humanActive = publicComments.some(c =>
       typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && c.author_id !== botId);
-    if (humanTookOver) return;
 
     // Latest customer message; only act on a genuine follow-up (a 2nd+ customer comment).
     const customerComments = publicComments
@@ -1119,11 +1119,18 @@ async function handleCxAgentReplyWebhook(request, env, ctx) {
     if (customerComments.length < 2) return;
     const latest = customerComments[0];
 
+    // Already answered? If anyone (team or AI) publicly replied AFTER the customer's latest
+    // message, there's nothing to suggest — don't draft noise for a handled turn.
+    const answered = publicComments.some(c =>
+      typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId &&
+      new Date(c.created_at) > new Date(latest.created_at));
+    if (answered) return;
+
     const row = await db.prepare("SELECT last_followup_comment_id FROM agent_tickets WHERE id = ?").bind(ticket.id).first();
     if (row?.last_followup_comment_id === String(latest.id)) return; // already handled this turn
     // Claim, run, release-on-failure so a failed draft gets retried by the sweep.
     await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = ? WHERE id = ?").bind(String(latest.id), ticket.id).run();
-    const ok = await runCxAgentFollowup(ticket, td, latest, db, env);
+    const ok = await runCxAgentFollowup(ticket, td, latest, db, env, { humanActive });
     if (!ok) {
       await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = NULL WHERE id = ? AND last_followup_comment_id = ?").bind(ticket.id, String(latest.id)).run();
     }
@@ -1280,7 +1287,7 @@ function cxBuildTranscript(comments, requesterId, botId) {
 
 // v4.10: respond to a customer's follow-up reply using full-thread context. Same routing
 // and mode/guardrails as the initial pipeline; never re-runs ebook-code delivery.
-async function runCxAgentFollowup(ticketRow, ticketData, latestCustomerComment, db, env) {
+async function runCxAgentFollowup(ticketRow, ticketData, latestCustomerComment, db, env, opts = {}) {
   const ticketId = ticketRow.id;
   const tracer = new CxTracer(db, ticketId);
   try {
@@ -1290,7 +1297,7 @@ async function runCxAgentFollowup(ticketRow, ticketData, latestCustomerComment, 
     const latestMsg = cxCleanReplyText(latestCustomerComment.plain_body || latestCustomerComment.body || '');
 
     // Conversation-aware view of the ticket for the classifier + drafter.
-    const followTd = { ...ticketData, firstMessage: latestMsg, conversationTranscript: transcript, isFollowup: true, turnNumber: (prior?.c || 1) + 1 };
+    const followTd = { ...ticketData, firstMessage: latestMsg, conversationTranscript: transcript, isFollowup: true, turnNumber: (prior?.c || 1) + 1, humanActive: !!opts.humanActive };
 
     const intent = await tracer.trace('followup_intent_classification', async () => cxClassifyIntent(followTd, db, env));
     await db.prepare(`UPDATE agent_tickets SET classified_intent = ?, intent_confidence = ? WHERE id = ?`).bind(intent.intent, intent.confidence, ticketId).run();
@@ -1340,17 +1347,20 @@ async function sweepFollowups(env) {
       if (!td) continue;
       const requesterId = td.ticket?.requester_id;
       const publicComments = (td.comments || []).filter(c => c.public === true);
-      // Human took over (public reply that isn't the bot) → leave it alone.
-      if (publicComments.some(c => typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && c.author_id !== botId)) continue;
+      // A teammate replied publicly → human owns the ticket. Still draft suggestions
+      // (labeled), never auto-send.
+      const humanActive = publicComments.some(c => typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && c.author_id !== botId);
       const cc = publicComments.filter(c => c.author_id === requesterId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       if (cc.length < 2) continue;                                  // no follow-up yet
       const latest = cc[0];
+      // Skip if someone (team or AI) already publicly replied AFTER the customer's latest message.
+      if (publicComments.some(c => typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && new Date(c.created_at) > new Date(latest.created_at))) continue;
       if (row.last_followup_comment_id === String(latest.id)) continue; // already handled
       if (Date.now() - new Date(latest.created_at).getTime() > 2 * 60 * 60 * 1000) continue; // stale (>2h); don't answer old threads
       // Claim the turn first (dedupes against the webhook path), but if drafting FAILS,
       // release the claim so the next sweep retries instead of silently dropping the turn.
       await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = ? WHERE id = ?").bind(String(latest.id), row.id).run();
-      const ok = await runCxAgentFollowup(row, td, latest, db, env);
+      const ok = await runCxAgentFollowup(row, td, latest, db, env, { humanActive });
       if (!ok) {
         await db.prepare("UPDATE agent_tickets SET last_followup_comment_id = NULL WHERE id = ? AND last_followup_comment_id = ?").bind(row.id, String(latest.id)).run();
       }
@@ -2163,7 +2173,10 @@ Write the reply as Kristine.`;
   // tag, still draft) | auto_reply (send when all gates pass, else fall back to a draft).
   const mode = await cxGetConfig(db, 'mode');
   let decision = { pass: false, reason: 'mode=internal_note' };
-  if (mode === 'shadow' || mode === 'auto_reply') {
+  if (ticketData.humanActive) {
+    // A teammate owns this ticket — NEVER auto-send over them, regardless of mode/gates.
+    decision = { pass: false, reason: 'a teammate has replied on this ticket — suggestion only' };
+  } else if (mode === 'shadow' || mode === 'auto_reply') {
     decision = await tracer.trace('auto_reply_decision', async () => ({ ...(await cxAutoReplyDecision(db, intent.intent, response.confidence)), mode }));
   }
 
@@ -2178,9 +2191,10 @@ Write the reply as Kristine.`;
 
   // Otherwise post the draft as a note. In shadow / held cases, prepend a banner showing
   // what the autonomous decision WOULD have been, so you can validate the gates safely.
-  const banner = (mode === 'shadow' || mode === 'auto_reply')
+  let banner = (mode === 'shadow' || mode === 'auto_reply')
     ? `[${mode === 'auto_reply' ? 'AUTO-REPLY HELD' : 'SHADOW'}] Would auto-send: ${decision.pass ? 'YES ✅' : 'NO ⏸'} — ${decision.reason}\n\n`
     : '';
+  if (ticketData.humanActive) banner = `👤 A teammate is handling this ticket — this is a suggestion to help, the AI will not send anything here.\n\n` + banner;
   const tags = ['ai-processed', 'ai-suggested', `ai-intent-${intent.intent}`];
   if (mode === 'shadow') tags.push(decision.pass ? 'ai-shadow-would-send' : 'ai-shadow-hold');
   if (fu) tags.push('ai-followup');
@@ -3154,14 +3168,17 @@ async function handleCxAgentAPI(request, env, path) {
       const teamPublic = publicComments.filter(c => typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && c.author_id !== botId);
       const customerComments = publicComments.filter(c => c.author_id === requesterId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       const latest = customerComments[0];
+      const answered = latest ? publicComments.some(c => typeof c.author_id === 'number' && c.author_id > 0 && c.author_id !== requesterId && new Date(c.created_at) > new Date(latest.created_at)) : false;
+      const stale = latest ? (Date.now() - new Date(latest.created_at).getTime() > 2 * 60 * 60 * 1000) : false;
       let verdict;
       if (!ticketRow) verdict = 'SKIP — ticket not in agent DB (was it processed initially?)';
       else if (followupEnabled === false) verdict = 'SKIP — followup_enabled is off';
       else if (!td) verdict = 'SKIP — could not fetch ticket from Zendesk';
-      else if (teamPublic.length) verdict = `SKIP — human takeover (public reply from author ${teamPublic[0].author_id})`;
       else if (customerComments.length < 2) verdict = `SKIP — only ${customerComments.length} public comment(s) from the requester (need ≥2 for a follow-up)`;
+      else if (answered) verdict = 'SKIP — the latest customer message was already publicly answered (by team or AI)';
       else if (ticketRow.last_followup_comment_id === String(latest?.id)) verdict = 'SKIP — this customer turn was already handled';
-      else verdict = 'WOULD RESPOND ✅ — if the webhook fired, this turn gets an AI reply';
+      else if (stale) verdict = 'SKIP — latest customer message is older than 2h (sweep won\'t answer stale threads)';
+      else verdict = `WOULD RESPOND ✅ — next sweep (≤2 min) drafts a suggestion${teamPublic.length ? ' (labeled: teammate handling — suggestion only, never auto-sent)' : ''}`;
       return new Response(JSON.stringify({
         zendesk_ticket_id: zid,
         ticket_in_agent_db: !!ticketRow,
@@ -3170,7 +3187,8 @@ async function handleCxAgentAPI(request, env, path) {
         requester_id: requesterId,
         public_comment_count: publicComments.length,
         public_comment_authors: [...new Set(publicComments.map(c => c.author_id))],
-        team_public_replies: teamPublic.length,
+        human_active: teamPublic.length > 0,
+        latest_customer_msg_answered: answered,
         customer_public_comments: customerComments.length,
         latest_customer_comment_id: latest?.id ?? null,
         last_handled_comment_id: ticketRow?.last_followup_comment_id ?? null,
