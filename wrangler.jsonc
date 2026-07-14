@@ -24,6 +24,10 @@
     {
       "binding": "CX_UPLOADS",
       "bucket_name": "cx-agent-uploads"
+    },
+    {
+      "binding": "MED_IMAGES",
+      "bucket_name": "med-supplies-images"
     }
   ],
   "triggers": {

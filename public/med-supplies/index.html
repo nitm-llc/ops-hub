@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Medical Supplies — NITM Ops</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent: #0f766e; --accent-text: #ffffff;
+    --red: #dc2626; --red-bg: #fee2e2; --amber: #b45309; --amber-bg: #fef3c7;
+    --green: #15803d; --green-bg: #dcfce7;
+  }
+  :root[data-theme="dark"] {
+    --accent: #14b8a6; --accent-text: #06211e;
+    --red: #f87171; --red-bg: #431a1a; --amber: #fbbf24; --amber-bg: #422f06;
+    --green: #4ade80; --green-bg: #10331c;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 40px; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 12px; }
+
+  .page-head { display: flex; align-items: center; gap: 10px; padding: 14px 2px 10px; }
+  .page-head h1 { font-size: 19px; font-weight: 700; flex: 1; }
+  .btn { border: 1px solid var(--border2); background: var(--panel); color: var(--text); border-radius: 10px;
+         padding: 10px 14px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; min-height: 44px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .btn.danger { color: var(--red); }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  .tabs { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 4px; margin-bottom: 12px; }
+  .tabs button { flex: 1; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px;
+                 font-weight: 600; padding: 9px 4px; border-radius: 9px; cursor: pointer; min-height: 40px; }
+  .tabs button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .tabs button .cnt { font-size: 11px; color: var(--faint); font-weight: 500; }
+
+  .search { width: 100%; padding: 11px 14px; font: inherit; font-size: 15px; border: 1px solid var(--border2);
+            border-radius: 12px; background: var(--panel); color: var(--text); margin-bottom: 10px; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 6px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: 0 0 auto; border: 1px solid var(--border2); background: var(--panel); color: var(--text2);
+          border-radius: 999px; padding: 7px 13px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; min-height: 36px; }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+          cursor: pointer; text-align: left; padding: 0; font: inherit; color: var(--text); display: flex; flex-direction: column; }
+  .card:active { transform: scale(.98); }
+  .thumb { aspect-ratio: 4/3; background: var(--surface); display: flex; align-items: center; justify-content: center;
+           font-size: 34px; color: var(--faint); overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .card-body { padding: 9px 11px 11px; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+  .card-name { font-size: 13.5px; font-weight: 600; line-height: 1.25; }
+  .card-sub { font-size: 11.5px; color: var(--muted); }
+  .card-foot { margin-top: auto; padding-top: 5px; display: flex; align-items: center; gap: 6px; }
+  .stock { font-size: 12.5px; font-weight: 700; }
+  .badge { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+  .badge.out { background: var(--red-bg); color: var(--red); }
+  .badge.low { background: var(--amber-bg); color: var(--amber); }
+  .badge.unc { background: var(--surface); color: var(--muted); }
+  .badge.order { background: var(--green-bg); color: var(--green); }
+
+  .rows { display: flex; flex-direction: column; gap: 8px; }
+  .sec-label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin: 14px 2px 2px; }
+  .row { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+         display: flex; align-items: center; gap: 11px; }
+  .row .rthumb { width: 46px; height: 46px; border-radius: 9px; background: var(--surface); flex: 0 0 auto;
+                 display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--faint); overflow: hidden; cursor: pointer; }
+  .row .rthumb img { width: 100%; height: 100%; object-fit: cover; }
+  .row .rmain { flex: 1; min-width: 0; }
+  .row .rname { font-size: 14px; font-weight: 600; line-height: 1.25; }
+  .row .rsub { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .row .racts { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+  .sm-btn { border: 1px solid var(--border2); background: var(--surface); color: var(--text); border-radius: 8px;
+            padding: 7px 10px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; min-height: 36px; }
+  .sm-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .link-btn { color: var(--accent); text-decoration: none; font-size: 12.5px; font-weight: 600; padding: 7px 4px; }
+
+  .empty { text-align: center; color: var(--muted); padding: 46px 10px; font-size: 14px; }
+
+  /* bottom sheet */
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1100; display: none; }
+  .overlay.open { display: block; }
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1101; background: var(--panel);
+           border-radius: 18px 18px 0 0; border: 1px solid var(--border); border-bottom: 0;
+           max-height: 88vh; overflow-y: auto; padding: 10px 16px calc(18px + env(safe-area-inset-bottom));
+           transform: translateY(105%); transition: transform .22s ease; }
+  .sheet.open { transform: none; }
+  @media (min-width: 700px) { .sheet { max-width: 560px; margin: 0 auto; } }
+  .grip { width: 40px; height: 4px; border-radius: 2px; background: var(--border2); margin: 2px auto 12px; }
+  .sheet-photo { width: 100%; max-height: 230px; border-radius: 12px; background: var(--surface); object-fit: contain; display: block; }
+  .sheet-photo.ph { display: flex; align-items: center; justify-content: center; height: 110px; font-size: 40px; color: var(--faint); }
+  .sheet h2 { font-size: 18px; margin: 12px 0 2px; }
+  .meta { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .meta b { color: var(--text2); font-weight: 600; }
+  .sheet-stock { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 15px; font-weight: 700; }
+  .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .acts .btn.full { grid-column: 1 / -1; }
+
+  .panel { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-top: 12px; background: var(--bg); }
+  .panel h3 { font-size: 14px; margin-bottom: 10px; }
+  .frow { margin-bottom: 10px; }
+  .frow label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+  .frow input, .frow select, .frow textarea { width: 100%; padding: 10px 12px; font: inherit; font-size: 15px;
+    border: 1px solid var(--border2); border-radius: 10px; background: var(--panel); color: var(--text); min-height: 44px; }
+  .frow textarea { min-height: 64px; resize: vertical; }
+  .stepper { display: flex; align-items: center; gap: 10px; }
+  .stepper button { width: 48px; height: 44px; font-size: 22px; border: 1px solid var(--border2); background: var(--panel);
+                    color: var(--text); border-radius: 10px; cursor: pointer; }
+  .stepper input { width: 70px; text-align: center; font-size: 18px; font-weight: 700; }
+  .seg { display: flex; gap: 6px; }
+  .seg button { flex: 1; border: 1px solid var(--border2); background: var(--panel); color: var(--text2); border-radius: 10px;
+                padding: 10px 4px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; min-height: 44px; }
+  .seg button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .panel-acts { display: flex; gap: 8px; margin-top: 6px; }
+  .panel-acts .btn { flex: 1; }
+
+  .move { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--border);
+          border-radius: 12px; padding: 10px 12px; }
+  .move .mico { font-size: 18px; flex: 0 0 auto; }
+  .move .mmain { flex: 1; min-width: 0; }
+  .move .mtitle { font-size: 13.5px; font-weight: 600; }
+  .move .msub { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .move .legacy { color: var(--faint); font-style: italic; }
+  .undo { border: 0; background: none; color: var(--red); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 8px; }
+
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 1200;
+           background: var(--text); color: var(--bg); font-size: 14px; font-weight: 600;
+           padding: 11px 18px; border-radius: 999px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<script defer src="/shared/nav.js"></script>
+
+<div class="wrap">
+  <div class="page-head">
+    <h1>🩺 Medical Supplies</h1>
+    <button class="btn primary" id="addItemBtn">+ Add item</button>
+  </div>
+
+  <div class="tabs" id="tabs">
+    <button data-tab="inv" class="on">Inventory <span class="cnt" id="cntInv"></span></button>
+    <button data-tab="shop">Shopping List <span class="cnt" id="cntShop"></span></button>
+    <button data-tab="log">Activity</button>
+  </div>
+
+  <div id="tab-inv">
+    <input class="search" id="search" type="search" placeholder="Search items, categories, notes…">
+    <div class="chips" id="chips"></div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="invEmpty" style="display:none">No items match.</div>
+  </div>
+
+  <div id="tab-shop" style="display:none"><div id="shopBody"></div></div>
+
+  <div id="tab-log" style="display:none"><div class="rows" id="logBody" style="margin-top:4px"></div></div>
+</div>
+
+<div class="overlay" id="overlay"></div>
+<div class="sheet" id="sheet"></div>
+<div class="toast" id="toast"></div>
+<datalist id="videoList"></datalist>
+<input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+
+<script>
+const API = '/med-supplies/api';
+const USERS = ['Molly', 'Diana', 'Tia'];
+
+let items = [], categories = [], videos = [];
+let activeCat = null, searchTerm = '', currentItem = null, photoTarget = null;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const imgUrl = (key) => key ? `${API}/img/${encodeURIComponent(key).replace(/%2F/g, '/')}` : null;
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+async function api(path, opts = {}) {
+  if (opts.body && !(opts.body instanceof Blob)) {
+    opts.headers = { 'Content-Type': 'application/json', ...opts.headers };
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API + path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+  return data.data;
+}
+
+// ── current user (remembered; first visit seeded from the Access login email) ──
+function getUser() {
+  try { const u = localStorage.getItem('med-user'); if (u) return u; } catch (e) {}
+  return null;
+}
+function setUser(u) { try { localStorage.setItem('med-user', u); } catch (e) {} }
+async function seedUserFromEmail() {
+  if (getUser()) return;
+  try {
+    const me = await api('/me');
+    const prefix = (me.email || '').split('@')[0].toLowerCase();
+    const hit = USERS.find((u) => prefix.includes(u.toLowerCase()));
+    if (hit) setUser(hit);
+  } catch (e) {}
+}
+
+// ── stock badges ──
+function badge(it) {
+  if (it.uncounted) return '<span class="badge unc">Uncounted</span>';
+  if (it.remaining <= 0) return '<span class="badge out">Out</span>';
+  if (it.restock_level != null && it.remaining <= it.restock_level) return '<span class="badge low">Low</span>';
+  return '';
+}
+function orderBadge(it) {
+  if (it.order_status === 'to_order') return '<span class="badge order">To order</span>';
+  if (it.order_status === 'ordered') return '<span class="badge order">Ordered</span>';
+  return '';
+}
+
+// ── data loads ──
+async function loadAll() {
+  const [i, c, v] = await Promise.all([api('/items'), api('/categories'), api('/videos')]);
+  items = i; categories = c; videos = v;
+  $('videoList').innerHTML = videos.map((v) => `<option value="${esc(v)}">`).join('');
+  renderChips(); renderInventory(); renderShopping();
+}
+async function reloadItems() {
+  items = await api('/items');
+  renderInventory(); renderShopping();
+}
+
+// ── inventory tab ──
+function renderChips() {
+  const counts = {};
+  items.forEach((it) => { if (it.category) counts[it.category] = (counts[it.category] || 0) + 1; });
+  let html = `<button class="chip${activeCat === null ? ' on' : ''}" data-cat="">All</button>`;
+  categories.forEach((c) => {
+    if (!counts[c.name]) return;
+    html += `<button class="chip${activeCat === c.name ? ' on' : ''}" data-cat="${esc(c.name)}">${c.icon || ''} ${esc(c.name)}</button>`;
+  });
+  $('chips').innerHTML = html;
+  $('chips').querySelectorAll('.chip').forEach((b) => b.onclick = () => {
+    activeCat = b.dataset.cat || null;
+    renderChips(); renderInventory();
+  });
+}
+
+function filteredItems() {
+  const q = searchTerm.trim().toLowerCase();
+  return items.filter((it) => {
+    if (activeCat && it.category !== activeCat) return false;
+    if (!q) return true;
+    return [it.name, it.category, it.notes, it.simulated_label, it.dose, it.size, it.sublocation]
+      .some((f) => f && f.toLowerCase().includes(q));
+  });
+}
+
+function renderInventory() {
+  const list = filteredItems();
+  $('cntInv').textContent = `(${items.length})`;
+  $('invEmpty').style.display = list.length ? 'none' : '';
+  $('grid').innerHTML = list.map((it) => {
+    const img = imgUrl(it.primary_image_key);
+    const sub = [it.dose, it.size].filter(Boolean).join(' · ');
+    return `<button class="card" data-id="${esc(it.id)}">
+      <div class="thumb">${img ? `<img loading="lazy" src="${img}" alt="" onerror="this.parentNode.textContent='🩹'">` : '🩹'}</div>
+      <div class="card-body">
+        <div class="card-name">${esc(it.name)}</div>
+        ${sub ? `<div class="card-sub">${esc(sub)}</div>` : ''}
+        <div class="card-foot">
+          <span class="stock">${it.uncounted ? '—' : it.remaining}</span>
+          ${badge(it)} ${orderBadge(it)}
+        </div>
+      </div>
+    </button>`;
+  }).join('');
+  $('grid').querySelectorAll('.card').forEach((c) => c.onclick = () => openItem(c.dataset.id));
+}
+
+// ── shopping list tab ──
+function renderShopping() {
+  const toOrder = items.filter((it) => it.order_status === 'to_order');
+  const ordered = items.filter((it) => it.order_status === 'ordered');
+  const low = items.filter((it) => it.order_status === 'none' && !it.uncounted &&
+    ((it.restock_level != null && it.remaining <= it.restock_level) || it.remaining <= 0));
+  $('cntShop').textContent = `(${toOrder.length + ordered.length})`;
+
+  const row = (it, acts) => {
+    const img = imgUrl(it.primary_image_key);
+    return `<div class="row">
+      <div class="rthumb" data-open="${esc(it.id)}">${img ? `<img loading="lazy" src="${img}" alt="" onerror="this.parentNode.textContent='🩹'">` : '🩹'}</div>
+      <div class="rmain">
+        <div class="rname">${esc(it.name)}</div>
+        <div class="rsub">${it.uncounted ? 'uncounted' : `${it.remaining} left`}${it.qty_to_order ? ` · need ${it.qty_to_order}` : ''}</div>
+      </div>
+      <div class="racts">${it.purchase_link ? `<a class="link-btn" href="${esc(it.purchase_link)}" target="_blank" rel="noopener">Buy ↗</a>` : ''}${acts}</div>
+    </div>`;
+  };
+
+  let html = '';
+  if (toOrder.length) html += `<div class="sec-label">To order (${toOrder.length})</div><div class="rows">` +
+    toOrder.map((it) => row(it, `<button class="sm-btn primary" data-act="ordered" data-id="${esc(it.id)}">Mark ordered</button>`)).join('') + '</div>';
+  if (ordered.length) html += `<div class="sec-label">Ordered — waiting (${ordered.length})</div><div class="rows">` +
+    ordered.map((it) => row(it, `<button class="sm-btn primary" data-act="received" data-id="${esc(it.id)}">Received</button>`)).join('') + '</div>';
+  if (low.length) html += `<div class="sec-label">Low stock (${low.length})</div><div class="rows">` +
+    low.map((it) => row(it, `<button class="sm-btn" data-act="toorder" data-id="${esc(it.id)}">Add to order</button>`)).join('') + '</div>';
+  $('shopBody').innerHTML = html || '<div class="empty">Shopping list is empty 🎉</div>';
+
+  $('shopBody').querySelectorAll('[data-open]').forEach((el) => el.onclick = () => openItem(el.dataset.open));
+  $('shopBody').querySelectorAll('[data-act]').forEach((b) => b.onclick = async () => {
+    const it = items.find((x) => x.id === b.dataset.id);
+    try {
+      if (b.dataset.act === 'ordered') {
+        await api(`/items/${encodeURIComponent(it.id)}`, { method: 'PUT', body: { order_status: 'ordered' } });
+        toast('Marked ordered');
+      } else if (b.dataset.act === 'received') {
+        const qty = parseInt(prompt(`How many "${it.name}" arrived?`, it.qty_to_order || 1), 10);
+        if (!qty || qty <= 0) return;
+        await api('/receive', { method: 'POST', body: { item_id: it.id, qty, user_name: getUser() } });
+        toast(`Received ${qty} — stock updated`);
+      } else if (b.dataset.act === 'toorder') {
+        const qty = parseInt(prompt(`How many "${it.name}" to order?`, Math.max(1, (it.restock_level || 0) - it.remaining + 1)), 10);
+        if (!qty || qty <= 0) return;
+        await api(`/items/${encodeURIComponent(it.id)}`, { method: 'PUT', body: { order_status: 'to_order', qty_to_order: qty } });
+        toast('Added to order list');
+      }
+      await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); }
+  });
+}
+
+// ── activity tab ──
+const MOVE_ICON = { checkout: '📤', receive: '📥', adjust: '🔧' };
+function fmtWhen(ts) {
+  if (!ts) return '';
+  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
+  if (isNaN(d)) return ts;
+  const days = (Date.now() - d.getTime()) / 86400000;
+  if (days < 1) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (days < 300) return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+}
+async function renderLog() {
+  const moves = await api('/moves?limit=100');
+  $('logBody').innerHTML = moves.map((m) => {
+    const qty = Math.abs(m.qty_delta);
+    const what = m.type === 'checkout' ? `took ${qty}` : m.type === 'receive' ? `received ${qty}` : `adjusted ${m.qty_delta > 0 ? '+' : ''}${m.qty_delta}`;
+    const name = m.item_name ? esc(m.item_name) : `<span class="legacy">deleted item${m.raw_item_ref ? ` (#${esc(m.raw_item_ref)})` : ''}</span>`;
+    return `<div class="move">
+      <div class="mico">${MOVE_ICON[m.type] || '•'}</div>
+      <div class="mmain">
+        <div class="mtitle">${m.user_name ? esc(m.user_name) : 'Someone'} ${what} — ${name}</div>
+        <div class="msub">${fmtWhen(m.created_at)}${m.video_name ? ' · 🎬 ' + esc(m.video_name) : ''}${m.note ? ' · ' + esc(m.note) : ''}${m.counted ? '' : ' · imported history'}</div>
+      </div>
+      ${m.counted ? `<button class="undo" data-id="${esc(m.id)}">Undo</button>` : ''}
+    </div>`;
+  }).join('') || '<div class="empty">No activity yet.</div>';
+  $('logBody').querySelectorAll('.undo').forEach((b) => b.onclick = async () => {
+    if (!confirm('Undo this entry? Stock will be recalculated.')) return;
+    try { await api(`/moves/${b.dataset.id}`, { method: 'DELETE' }); toast('Undone'); await reloadItems(); renderLog(); }
+    catch (e) { toast('Error: ' + e.message); }
+  });
+}
+
+// ── bottom sheet ──
+function openSheet(html) {
+  $('sheet').innerHTML = '<div class="grip"></div>' + html;
+  $('overlay').classList.add('open');
+  requestAnimationFrame(() => $('sheet').classList.add('open'));
+}
+function closeSheet() {
+  $('sheet').classList.remove('open');
+  $('overlay').classList.remove('open');
+  currentItem = null;
+}
+$('overlay').onclick = closeSheet;
+
+function openItem(id) {
+  const it = items.find((x) => x.id === id);
+  if (!it) return;
+  currentItem = it;
+  const img = imgUrl(it.primary_image_key);
+  const metaBits = [
+    it.category && `<b>${esc(it.category)}</b>`,
+    it.dose && `Dose: ${esc(it.dose)}`,
+    it.size && `Size: ${esc(it.size)}`,
+    it.variant && `Variant: ${esc(it.variant)}`,
+    it.sublocation && `📍 ${esc(it.sublocation)}`,
+    it.simulated_label && `Label: ${esc(it.simulated_label)}`,
+    it.shared_supply === 1 && 'Shared supply',
+  ].filter(Boolean).join(' · ');
+  openSheet(`
+    ${img ? `<img class="sheet-photo" src="${img}" alt="" onerror="this.outerHTML='<div class=\\'sheet-photo ph\\'>🩹</div>'">` : '<div class="sheet-photo ph">🩹</div>'}
+    <h2>${esc(it.name)}</h2>
+    ${metaBits ? `<div class="meta">${metaBits}</div>` : ''}
+    ${it.notes ? `<div class="meta" style="margin-top:6px">${esc(it.notes)}</div>` : ''}
+    <div class="sheet-stock">${it.uncounted ? 'Uncounted' : `${it.remaining} in stock`} ${badge(it)} ${orderBadge(it)}</div>
+    ${it.purchase_link ? `<a class="link-btn" href="${esc(it.purchase_link)}" target="_blank" rel="noopener" style="padding-left:0">Purchase link ↗</a>` : ''}
+    <div class="acts">
+      <button class="btn primary full" id="actCheckout">📤 Check out</button>
+      <button class="btn" id="actReceive">📥 Receive</button>
+      <button class="btn" id="actRecount">🔢 Recount</button>
+      <button class="btn" id="actPhoto">📷 ${it.primary_image_key ? 'Replace photo' : 'Add photo'}</button>
+      <button class="btn" id="actEdit">✏️ Edit</button>
+    </div>
+    <div id="sheetPanel"></div>
+  `);
+  $('actCheckout').onclick = () => showMovePanel('checkout');
+  $('actReceive').onclick = () => showMovePanel('receive');
+  $('actRecount').onclick = showRecountPanel;
+  $('actEdit').onclick = showEditPanel;
+  $('actPhoto').onclick = () => { photoTarget = it.id; $('photoInput').click(); };
+}
+
+function stepperHtml(id, val) {
+  return `<div class="stepper">
+    <button type="button" data-step="-1">−</button>
+    <input id="${id}" type="number" inputmode="numeric" min="1" value="${val}">
+    <button type="button" data-step="1">+</button>
+  </div>`;
+}
+function wireStepper(panel, inputId) {
+  panel.querySelectorAll('[data-step]').forEach((b) => b.onclick = () => {
+    const inp = $(inputId);
+    inp.value = Math.max(1, (parseInt(inp.value, 10) || 1) + parseInt(b.dataset.step, 10));
+  });
+}
+function userSegHtml() {
+  const cur = getUser();
+  return `<div class="seg" id="userSeg">${USERS.map((u) =>
+    `<button type="button" data-u="${u}"${u === cur ? ' class="on"' : ''}>${u}</button>`).join('')}</div>`;
+}
+function wireUserSeg(panel) {
+  panel.querySelectorAll('#userSeg button').forEach((b) => b.onclick = () => {
+    panel.querySelectorAll('#userSeg button').forEach((x) => x.classList.remove('on'));
+    b.classList.add('on');
+    setUser(b.dataset.u);
+  });
+}
+
+function showMovePanel(kind) {
+  const it = currentItem;
+  const isCo = kind === 'checkout';
+  $('sheetPanel').innerHTML = `<div class="panel">
+    <h3>${isCo ? '📤 Check out' : '📥 Receive stock'}</h3>
+    <div class="frow"><label>Quantity</label>${stepperHtml('mvQty', 1)}</div>
+    <div class="frow"><label>Who</label>${userSegHtml()}</div>
+    ${isCo ? `<div class="frow"><label>Video / shoot (optional)</label>
+      <input id="mvVideo" list="videoList" placeholder="e.g. 2026.1842 - Focused Assessment"></div>` : ''}
+    <div class="panel-acts">
+      <button class="btn" id="mvCancel">Cancel</button>
+      <button class="btn primary" id="mvGo">${isCo ? 'Check out' : 'Receive'}</button>
+    </div>
+  </div>`;
+  const panel = $('sheetPanel');
+  wireStepper(panel, 'mvQty'); wireUserSeg(panel);
+  $('mvCancel').onclick = () => panel.innerHTML = '';
+  $('mvGo').onclick = async () => {
+    const qty = parseInt($('mvQty').value, 10);
+    if (!qty || qty <= 0) return toast('Enter a quantity');
+    $('mvGo').disabled = true;
+    try {
+      const r = await api('/' + kind, { method: 'POST', body: {
+        item_id: it.id, qty, user_name: getUser(),
+        ...(isCo ? { video_name: $('mvVideo').value.trim() || null } : {}),
+      }});
+      toast(`${isCo ? 'Checked out' : 'Received'} ${qty} — ${r.item.remaining} left`);
+      closeSheet(); await loadAll();
+    } catch (e) { toast('Error: ' + e.message); $('mvGo').disabled = false; }
+  };
+}
+
+function showRecountPanel() {
+  const it = currentItem;
+  $('sheetPanel').innerHTML = `<div class="panel">
+    <h3>🔢 Recount — set the real total on the shelf</h3>
+    <div class="frow"><label>Counted total</label>
+      <input id="rcTotal" type="number" inputmode="numeric" min="0" value="${it.uncounted ? '' : Math.max(0, it.remaining)}" placeholder="e.g. 12"></div>
+    <div class="frow"><label>Who</label>${userSegHtml()}</div>
+    <div class="panel-acts">
+      <button class="btn" id="rcCancel">Cancel</button>
+      <button class="btn primary" id="rcGo">Save count</button>
+    </div>
+  </div>`;
+  wireUserSeg($('sheetPanel'));
+  $('rcCancel').onclick = () => $('sheetPanel').innerHTML = '';
+  $('rcGo').onclick = async () => {
+    const total = parseInt($('rcTotal').value, 10);
+    if (isNaN(total) || total < 0) return toast('Enter the counted total');
+    $('rcGo').disabled = true;
+    try {
+      await api('/adjust', { method: 'POST', body: { item_id: it.id, new_total: total, user_name: getUser(), note: 'recount' } });
+      toast(`Count saved: ${total}`);
+      closeSheet(); await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); $('rcGo').disabled = false; }
+  };
+}
+
+function itemFormHtml(it) {
+  const f = (v) => esc(v ?? '');
+  return `
+    <div class="frow"><label>Name *</label><input id="efName" value="${f(it.name)}"></div>
+    <div class="frow"><label>Category</label><select id="efCat">
+      <option value="">—</option>
+      ${categories.map((c) => `<option${it.category === c.name ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}
+    </select></div>
+    <div class="frow"><label>Dose / strength</label><input id="efDose" value="${f(it.dose)}"></div>
+    <div class="frow"><label>Size / volume</label><input id="efSize" value="${f(it.size)}"></div>
+    <div class="frow"><label>Model / variant</label><input id="efVariant" value="${f(it.variant)}"></div>
+    <div class="frow"><label>Sublocation</label><input id="efSubloc" value="${f(it.sublocation)}"></div>
+    <div class="frow"><label>Restock when at or below</label><input id="efRestock" type="number" inputmode="numeric" min="0" value="${it.restock_level ?? ''}" placeholder="leave blank for none"></div>
+    <div class="frow"><label>Purchase link</label><input id="efLink" type="url" value="${f(it.purchase_link)}" placeholder="https://…"></div>
+    <div class="frow"><label>Simulated label</label><input id="efSim" value="${f(it.simulated_label)}"></div>
+    <div class="frow"><label>Notes</label><textarea id="efNotes">${f(it.notes)}</textarea></div>`;
+}
+function readItemForm() {
+  const restock = $('efRestock').value.trim();
+  return {
+    name: $('efName').value.trim(),
+    category: $('efCat').value || null,
+    dose: $('efDose').value.trim() || null,
+    size: $('efSize').value.trim() || null,
+    variant: $('efVariant').value.trim() || null,
+    sublocation: $('efSubloc').value.trim() || null,
+    restock_level: restock === '' ? null : parseInt(restock, 10),
+    purchase_link: $('efLink').value.trim() || null,
+    simulated_label: $('efSim').value.trim() || null,
+    notes: $('efNotes').value.trim() || null,
+  };
+}
+
+function showEditPanel() {
+  const it = currentItem;
+  $('sheetPanel').innerHTML = `<div class="panel">
+    <h3>✏️ Edit item</h3>
+    ${itemFormHtml(it)}
+    <div class="frow"><label>Order status</label><select id="efStatus">
+      <option value="none"${it.order_status === 'none' ? ' selected' : ''}>Not on shopping list</option>
+      <option value="to_order"${it.order_status === 'to_order' ? ' selected' : ''}>To order</option>
+      <option value="ordered"${it.order_status === 'ordered' ? ' selected' : ''}>Ordered</option>
+    </select></div>
+    <div class="frow"><label>Qty to order</label><input id="efQtyOrder" type="number" inputmode="numeric" min="0" value="${it.qty_to_order ?? ''}"></div>
+    <div class="panel-acts">
+      <button class="btn" id="efCancel">Cancel</button>
+      <button class="btn primary" id="efSave">Save</button>
+    </div>
+    <div style="text-align:center;margin-top:10px">
+      <button class="btn danger" id="efArchive" style="border:0;background:none">Archive item</button>
+    </div>
+  </div>`;
+  $('efCancel').onclick = () => $('sheetPanel').innerHTML = '';
+  $('efSave').onclick = async () => {
+    const body = readItemForm();
+    if (!body.name) return toast('Name is required');
+    body.order_status = $('efStatus').value;
+    const qo = $('efQtyOrder').value.trim();
+    body.qty_to_order = qo === '' ? null : parseInt(qo, 10);
+    $('efSave').disabled = true;
+    try {
+      await api(`/items/${encodeURIComponent(it.id)}`, { method: 'PUT', body });
+      toast('Saved');
+      closeSheet(); await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); $('efSave').disabled = false; }
+  };
+  $('efArchive').onclick = async () => {
+    if (!confirm(`Archive "${it.name}"? It disappears from the inventory (history is kept).`)) return;
+    try {
+      await api(`/items/${encodeURIComponent(it.id)}`, { method: 'DELETE' });
+      toast('Archived');
+      closeSheet(); await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); }
+  };
+}
+
+$('addItemBtn').onclick = () => {
+  currentItem = null;
+  openSheet(`<div class="panel" style="margin-top:4px">
+    <h3>➕ New item</h3>
+    ${itemFormHtml({})}
+    <div class="frow"><label>Current quantity on shelf</label><input id="efQty" type="number" inputmode="numeric" min="0" placeholder="e.g. 5"></div>
+    <div class="panel-acts">
+      <button class="btn" id="efCancel">Cancel</button>
+      <button class="btn primary" id="efCreate">Add item</button>
+    </div>
+  </div>`);
+  $('efCancel').onclick = closeSheet;
+  $('efCreate').onclick = async () => {
+    const body = readItemForm();
+    if (!body.name) return toast('Name is required');
+    const qty = $('efQty').value.trim();
+    if (qty !== '') body.office_qty = parseInt(qty, 10);
+    $('efCreate').disabled = true;
+    try {
+      const created = await api('/items', { method: 'POST', body });
+      toast('Item added');
+      closeSheet(); await reloadItems();
+      openItem(created.id);
+    } catch (e) { toast('Error: ' + e.message); $('efCreate').disabled = false; }
+  };
+};
+
+// ── photo upload: downscale on-device, then PUT raw JPEG bytes ──
+$('photoInput').onchange = async () => {
+  const file = $('photoInput').files[0];
+  $('photoInput').value = '';
+  if (!file || !photoTarget) return;
+  toast('Uploading photo…');
+  try {
+    const blob = await downscale(file, 1600);
+    const res = await fetch(`${API}/img/items/${encodeURIComponent(photoTarget)}/primary`, {
+      method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: blob,
+    });
+    const data = await res.json();
+    if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+    toast('Photo saved');
+    const id = photoTarget;
+    await reloadItems();
+    if (currentItem) openItem(id);
+  } catch (e) { toast('Error: ' + e.message); }
+  photoTarget = null;
+};
+function downscale(file, maxDim) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((b) => b ? resolve(b) : reject(new Error('could not encode image')), 'image/jpeg', 0.85);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => reject(new Error('could not read image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+// ── tabs & search ──
+$('tabs').querySelectorAll('button').forEach((b) => b.onclick = () => {
+  $('tabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+  ['inv', 'shop', 'log'].forEach((t) => $('tab-' + t).style.display = b.dataset.tab === t ? '' : 'none');
+  if (b.dataset.tab === 'log') renderLog();
+});
+let searchTimer;
+$('search').oninput = () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { searchTerm = $('search').value; renderInventory(); }, 150);
+};
+
+// ── boot ──
+seedUserFromEmail();
+loadAll().catch((e) => { $('grid').innerHTML = ''; $('invEmpty').style.display = ''; $('invEmpty').textContent = 'Failed to load: ' + e.message; });
+</script>
+</body>
+</html>

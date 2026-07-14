@@ -1,0 +1,3 @@
+# Generated from the AppSheet CSV exports (contain team activity data —
+# repo is public, so never commit them; rerun build_seed.mjs to regenerate).
+out/

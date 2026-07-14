@@ -474,6 +474,232 @@ async function handleAmazonFbaAPI(request, env) {
   }
 }
 
+// ===== MEDICAL SUPPLIES API (D1-backed inventory + checkout ledger) =====
+// Stock model: med_items.office_qty is the imported AppSheet baseline (immutable;
+// NULL = never counted). All changes flow through med_moves (checkout -, receive +,
+// adjust signed). remaining = COALESCE(office_qty,0) + SUM(qty_delta WHERE counted=1).
+// Imported AppSheet history has counted=0 (the export's Office Qty already reflects it).
+let medTablesReady = false;
+async function ensureMedTables(env) {
+  if (medTablesReady) return;
+  // Safety net only — canonical DDL lives in tools/med-supplies/out/schema.sql (keep in sync).
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_items (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT, dose TEXT, size TEXT,
+      variant TEXT, sublocation TEXT, office_qty INTEGER, purchase_link TEXT,
+      primary_image_key TEXT, alt_image_key TEXT, notes TEXT,
+      order_status TEXT NOT NULL DEFAULT 'none', qty_to_order INTEGER, restock_level INTEGER,
+      simulated_label TEXT, shared_supply INTEGER, archived INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now'))
+    )`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_moves (
+      id TEXT PRIMARY KEY, item_id TEXT, raw_item_ref TEXT, type TEXT NOT NULL,
+      qty_delta INTEGER NOT NULL, counted INTEGER NOT NULL DEFAULT 1, user_name TEXT,
+      video_name TEXT, note TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`),
+    env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_med_moves_item ON med_moves(item_id)`),
+    env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_med_moves_created ON med_moves(created_at DESC)`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_videos (name TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')))`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_categories (name TEXT PRIMARY KEY, icon TEXT, sort_order INTEGER DEFAULT 100)`),
+  ]);
+  medTablesReady = true;
+}
+
+// remaining-stock subquery shared by items list / shopping list / single-item reads
+const MED_STOCK_SQL = `
+  SELECT i.*,
+         COALESCE(i.office_qty, 0) + COALESCE(m.delta, 0) AS remaining,
+         CASE WHEN i.office_qty IS NULL AND m.delta IS NULL THEN 1 ELSE 0 END AS uncounted
+  FROM med_items i
+  LEFT JOIN (SELECT item_id, SUM(qty_delta) AS delta FROM med_moves WHERE counted = 1 GROUP BY item_id) m
+    ON m.item_id = i.id
+  WHERE i.archived = 0`;
+
+const MED_IMG_CT = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", heic: "image/heic" };
+
+async function medItemWithStock(env, id) {
+  return env.DB.prepare(`${MED_STOCK_SQL} AND i.id = ?`).bind(id).first();
+}
+
+async function handleMedSuppliesAPI(request, env, path) {
+  const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Content-Type": "application/json" };
+  if (request.method === "OPTIONS") return new Response(null, { headers: cors });
+  const ok = (data) => new Response(JSON.stringify({ success: true, data, ...(Array.isArray(data) ? { count: data.length } : {}) }), { headers: cors });
+  const fail = (error, status = 400) => new Response(JSON.stringify({ success: false, error }), { status, headers: cors });
+
+  try {
+    await ensureMedTables(env);
+    const method = request.method;
+    const sub = path.slice("/med-supplies/api/".length);
+
+    // ---- images (served through the Worker so they stay behind Cloudflare Access) ----
+    if (sub.startsWith("img/") && method === "GET") {
+      if (!env.MED_IMAGES) return fail("R2 not configured", 500);
+      const key = decodeURIComponent(sub.slice(4));
+      if (!key.startsWith("items/") || key.includes("..")) return fail("bad key");
+      const obj = await env.MED_IMAGES.get(key);
+      if (!obj) return new Response("not found", { status: 404 });
+      const ext = key.split(".").pop().toLowerCase();
+      return new Response(obj.body, {
+        headers: {
+          "Content-Type": obj.httpMetadata?.contentType || MED_IMG_CT[ext] || "application/octet-stream",
+          // private: never let a shared cache hold images that Cloudflare Access protects
+          "Cache-Control": "private, max-age=86400",
+          ...(obj.httpEtag ? { ETag: obj.httpEtag } : {}),
+        },
+      });
+    }
+    const imgPut = sub.match(/^img\/items\/([^/]+)\/(primary|alt)$/);
+    if (imgPut && method === "PUT") {
+      if (!env.MED_IMAGES) return fail("R2 not configured", 500);
+      const [, itemId, slot] = imgPut;
+      const item = await env.DB.prepare("SELECT id FROM med_items WHERE id = ? AND archived = 0").bind(itemId).first();
+      if (!item) return fail("item not found", 404);
+      const ct = (request.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+      const ext = Object.keys(MED_IMG_CT).find((e) => MED_IMG_CT[e] === ct);
+      if (!ext) return fail("unsupported image content-type: " + ct);
+      const bytes = await request.arrayBuffer();
+      if (bytes.byteLength === 0) return fail("empty body");
+      if (bytes.byteLength > 8 * 1024 * 1024) return fail("image too large (8MB max)", 413);
+      // timestamped key so the browser's cached old image self-heals on replace
+      const key = `items/${itemId}-${slot}-${Date.now()}.${ext}`;
+      await env.MED_IMAGES.put(key, bytes, { httpMetadata: { contentType: ct } });
+      await env.DB.prepare(`UPDATE med_items SET ${slot === "primary" ? "primary_image_key" : "alt_image_key"} = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, itemId).run();
+      return ok({ key });
+    }
+
+    // ---- items ----
+    if (sub === "items" && method === "GET") {
+      const { results } = await env.DB.prepare(`${MED_STOCK_SQL} ORDER BY i.name COLLATE NOCASE`).all();
+      return ok(results);
+    }
+    if (sub === "items" && method === "POST") {
+      const b = await request.json();
+      if (!b.name || !String(b.name).trim()) return fail("name is required");
+      const id = crypto.randomUUID();
+      await env.DB.prepare(`INSERT INTO med_items
+        (id, name, category, dose, size, variant, sublocation, office_qty, purchase_link, notes,
+         order_status, qty_to_order, restock_level, simulated_label, shared_supply)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(id, String(b.name).trim(), b.category ?? null, b.dose ?? null, b.size ?? null,
+          b.variant ?? null, b.sublocation ?? null,
+          Number.isInteger(b.office_qty) ? b.office_qty : null, // initial count — only settable at creation
+          b.purchase_link ?? null, b.notes ?? null,
+          ["none", "to_order", "ordered"].includes(b.order_status) ? b.order_status : "none",
+          Number.isInteger(b.qty_to_order) ? b.qty_to_order : null,
+          Number.isInteger(b.restock_level) ? b.restock_level : null,
+          b.simulated_label ?? null, [0, 1].includes(b.shared_supply) ? b.shared_supply : null)
+        .run();
+      return ok(await medItemWithStock(env, id));
+    }
+    const itemMatch = sub.match(/^items\/([^/]+)$/);
+    if (itemMatch && method === "PUT") {
+      const b = await request.json();
+      if ("office_qty" in b) return fail("office_qty is immutable — use /adjust to recount");
+      const FIELDS = ["name", "category", "dose", "size", "variant", "sublocation", "purchase_link",
+        "notes", "order_status", "qty_to_order", "restock_level", "simulated_label", "shared_supply"];
+      const sets = [], vals = [];
+      for (const f of FIELDS) {
+        if (!(f in b)) continue;
+        if (f === "name" && !String(b.name || "").trim()) return fail("name cannot be empty");
+        if (f === "order_status" && !["none", "to_order", "ordered"].includes(b.order_status)) return fail("bad order_status");
+        sets.push(`${f} = ?`); vals.push(b[f] === "" ? null : b[f]);
+      }
+      if (!sets.length) return fail("no editable fields in body");
+      const r = await env.DB.prepare(`UPDATE med_items SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ? AND archived = 0`)
+        .bind(...vals, itemMatch[1]).run();
+      if (!r.meta.changes) return fail("item not found", 404);
+      return ok(await medItemWithStock(env, itemMatch[1]));
+    }
+    if (itemMatch && method === "DELETE") {
+      const r = await env.DB.prepare("UPDATE med_items SET archived = 1, updated_at = datetime('now') WHERE id = ? AND archived = 0").bind(itemMatch[1]).run();
+      if (!r.meta.changes) return fail("item not found", 404);
+      return ok({ archived: itemMatch[1] });
+    }
+
+    // ---- stock moves ----
+    if ((sub === "checkout" || sub === "receive") && method === "POST") {
+      const b = await request.json();
+      const qty = b.qty;
+      if (!Number.isInteger(qty) || qty <= 0) return fail("qty must be a positive integer");
+      const item = await env.DB.prepare("SELECT id FROM med_items WHERE id = ? AND archived = 0").bind(b.item_id || "").first();
+      if (!item) return fail("item not found", 404);
+      const id = crypto.randomUUID();
+      const delta = sub === "checkout" ? -qty : qty;
+      const stmts = [
+        env.DB.prepare(`INSERT INTO med_moves (id, item_id, type, qty_delta, user_name, video_name, note)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .bind(id, b.item_id, sub, delta, b.user_name ?? null, b.video_name?.trim() || null, b.note ?? null),
+      ];
+      if (sub === "checkout" && b.video_name?.trim()) {
+        stmts.push(env.DB.prepare("INSERT OR IGNORE INTO med_videos (name) VALUES (?)").bind(b.video_name.trim()));
+      }
+      if (sub === "receive") {
+        stmts.push(env.DB.prepare("UPDATE med_items SET order_status = 'none', qty_to_order = NULL, updated_at = datetime('now') WHERE id = ?").bind(b.item_id));
+      }
+      await env.DB.batch(stmts);
+      return ok({ move_id: id, item: await medItemWithStock(env, b.item_id) });
+    }
+    if (sub === "adjust" && method === "POST") {
+      const b = await request.json();
+      if (!Number.isInteger(b.new_total) || b.new_total < 0) return fail("new_total must be a non-negative integer");
+      const item = await medItemWithStock(env, b.item_id || "");
+      if (!item) return fail("item not found", 404);
+      const delta = b.new_total - item.remaining;
+      if (delta === 0) return ok({ move_id: null, item });
+      const id = crypto.randomUUID();
+      await env.DB.prepare(`INSERT INTO med_moves (id, item_id, type, qty_delta, user_name, note) VALUES (?, ?, 'adjust', ?, ?, ?)`)
+        .bind(id, b.item_id, delta, b.user_name ?? null, b.note ?? null).run();
+      return ok({ move_id: id, item: await medItemWithStock(env, b.item_id) });
+    }
+    if (sub.startsWith("moves") && method === "GET") {
+      const url = new URL(request.url);
+      const limit = Math.min(parseInt(url.searchParams.get("limit") || "100", 10) || 100, 500);
+      const itemId = url.searchParams.get("item_id");
+      const { results } = await env.DB.prepare(`
+        SELECT m.*, i.name AS item_name FROM med_moves m LEFT JOIN med_items i ON i.id = m.item_id
+        ${itemId ? "WHERE m.item_id = ?1" : ""} ORDER BY m.created_at DESC, m.id LIMIT ${limit}`)
+        .bind(...(itemId ? [itemId] : [])).all();
+      return ok(results);
+    }
+    const moveMatch = sub.match(/^moves\/([^/]+)$/);
+    if (moveMatch && method === "DELETE") {
+      // undo a mistaken move — imported AppSheet history (counted=0) is read-only
+      const r = await env.DB.prepare("DELETE FROM med_moves WHERE id = ? AND counted = 1").bind(moveMatch[1]).run();
+      if (!r.meta.changes) return fail("move not found (legacy history can't be deleted)", 404);
+      return ok({ deleted: moveMatch[1] });
+    }
+
+    // ---- lists ----
+    if (sub === "shopping-list" && method === "GET") {
+      const { results } = await env.DB.prepare(`
+        WITH stock AS (${MED_STOCK_SQL})
+        SELECT * FROM stock
+        WHERE order_status IN ('to_order','ordered')
+           OR COALESCE(qty_to_order, 0) > 0
+           OR (restock_level IS NOT NULL AND remaining <= restock_level)
+        ORDER BY CASE order_status WHEN 'to_order' THEN 0 WHEN 'ordered' THEN 1 ELSE 2 END, name COLLATE NOCASE`).all();
+      return ok(results);
+    }
+    if (sub === "videos" && method === "GET") {
+      // names start with "YYYY.NNN - …" so DESC ≈ newest first
+      const { results } = await env.DB.prepare("SELECT name FROM med_videos ORDER BY name DESC").all();
+      return ok(results.map((r) => r.name));
+    }
+    if (sub === "categories" && method === "GET") {
+      const { results } = await env.DB.prepare("SELECT name, icon FROM med_categories ORDER BY sort_order, name").all();
+      return ok(results);
+    }
+    if (sub === "me" && method === "GET") {
+      return ok({ email: request.headers.get("Cf-Access-Authenticated-User-Email") || null });
+    }
+
+    return fail("not found", 404);
+  } catch (e) {
+    return fail(e.message, 500);
+  }
+}
+
 // ===== 3PL API (D1-backed) =====
 async function handle3plAPI(request, env, path) {
   const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Content-Type": "application/json" };
@@ -5420,6 +5646,8 @@ export default {
     }
     // ===== 3PL API (D1-backed) =====
     if (path.startsWith("/3pl/api/")) { return handle3plAPI(request, env, path); }
+    // ===== MEDICAL SUPPLIES API (D1-backed) =====
+    if (path.startsWith("/med-supplies/api/")) { return handleMedSuppliesAPI(request, env, path); }
     // ===== CAMPAIGN ROUTER API (D1-backed, shared audience config) =====
     if (path === "/campaign-router/api/audiences") {
       const SEED = [
@@ -5573,6 +5801,7 @@ export default {
     if (path === "/cx-agent") return Response.redirect(url.origin + "/cx-agent/", 301);
     if (path === "/icp") return Response.redirect(url.origin + "/icp/", 301);
     if (path === "/growth") return Response.redirect(url.origin + "/growth/", 301);
+    if (path === "/med-supplies") return Response.redirect(url.origin + "/med-supplies/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }
     // ===== AMBASSADOR API =====
@@ -5674,6 +5903,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,-app
     <div class="app-grid">
       <a href="/inventory/" class="app-card"><div class="app-icon">\u{1F4CA}</div><div class="app-text"><div class="app-name">Inventory Dashboard</div><div class="app-desc">Stock levels, orders &amp; forecasting</div></div></a>
       <a href="/3pl/" class="app-card"><div class="app-icon">\u{1F4E6}</div><div class="app-text"><div class="app-name">3PL Dashboard</div><div class="app-desc">Warehouse &amp; fulfillment</div></div></a>
+      <a href="/med-supplies/" class="app-card"><div class="app-icon">\u{1FA7A}</div><div class="app-text"><div class="app-name">Medical Supplies</div><div class="app-desc">Filming props inventory &amp; checkout</div></div></a>
     </div>
   </div>
 
