@@ -142,6 +142,7 @@
   <div class="tabs" id="tabs">
     <button data-tab="inv" class="on">Inventory <span class="cnt" id="cntInv"></span></button>
     <button data-tab="shop">Shopping List <span class="cnt" id="cntShop"></span></button>
+    <button data-tab="bags">Bags <span class="cnt" id="cntBags"></span></button>
     <button data-tab="log">Activity</button>
   </div>
 
@@ -153,6 +154,8 @@
   </div>
 
   <div id="tab-shop" style="display:none"><div id="shopBody"></div></div>
+
+  <div id="tab-bags" style="display:none"><div id="bagsBody"></div></div>
 
   <div id="tab-log" style="display:none"><div class="rows" id="logBody" style="margin-top:4px"></div></div>
 </div>
@@ -167,8 +170,9 @@
 const API = '/med-supplies/api';
 const USERS = ['Molly', 'Diana', 'Tia'];
 
-let items = [], categories = [], videos = [];
+let items = [], categories = [], videos = [], bagLines = [];
 let activeCat = null, searchTerm = '', currentItem = null, photoTarget = null;
+let openBag = null, pickerForBag = false;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -224,14 +228,14 @@ function orderBadge(it) {
 
 // ── data loads ──
 async function loadAll() {
-  const [i, c, v] = await Promise.all([api('/items'), api('/categories'), api('/videos')]);
-  items = i; categories = c; videos = v;
+  const [i, c, v, b] = await Promise.all([api('/items'), api('/categories'), api('/videos'), api('/bag-items')]);
+  items = i; categories = c; videos = v; bagLines = b;
   $('videoList').innerHTML = videos.map((v) => `<option value="${esc(v)}">`).join('');
-  renderChips(); renderInventory(); renderShopping();
+  renderChips(); renderInventory(); renderShopping(); renderBags();
 }
 async function reloadItems() {
-  items = await api('/items');
-  renderInventory(); renderShopping();
+  [items, bagLines] = await Promise.all([api('/items'), api('/bag-items')]);
+  renderInventory(); renderShopping(); renderBags();
 }
 
 // ── inventory tab ──
@@ -377,6 +381,7 @@ function closeSheet() {
   $('sheet').classList.remove('open');
   $('overlay').classList.remove('open');
   currentItem = null;
+  pickerForBag = false;
 }
 $('overlay').onclick = closeSheet;
 
@@ -394,6 +399,7 @@ function openItem(id) {
     it.simulated_label && `Label: ${esc(it.simulated_label)}`,
     it.shared_supply === 1 && 'Shared supply',
   ].filter(Boolean).join(' · ');
+  const itsBags = bagLines.filter((l) => l.item_id === it.id);
   openSheet(`
     ${img ? `<img class="sheet-photo" src="${img}" alt="" onerror="this.outerHTML='<div class=\\'sheet-photo ph\\'>🩹</div>'">` : '<div class="sheet-photo ph">🩹</div>'}
     <h2>${esc(it.name)}</h2>
@@ -401,10 +407,13 @@ function openItem(id) {
     ${it.notes ? `<div class="meta" style="margin-top:6px">${esc(it.notes)}</div>` : ''}
     <div class="sheet-stock">${it.uncounted ? 'Uncounted' : `${it.remaining} in stock`} ${badge(it)} ${orderBadge(it)}</div>
     ${it.purchase_link ? `<a class="link-btn" href="${esc(it.purchase_link)}" target="_blank" rel="noopener" style="padding-left:0">Purchase link ↗</a>` : ''}
+    ${itsBags.length ? `<div class="meta" style="margin-top:6px">🎒 In bags: ${itsBags.map((l) =>
+      `<a href="#" class="link-btn" data-gobag="${esc(l.video_name)}" style="padding:2px 4px">${esc(l.video_name)} (×${l.qty_needed})</a>`).join(' ')}</div>` : ''}
     <div class="acts">
       <button class="btn primary full" id="actCheckout">📤 Check out</button>
       <button class="btn" id="actReceive">📥 Receive</button>
       <button class="btn" id="actRecount">🔢 Recount</button>
+      <button class="btn" id="actBag">🎒 Add to bag</button>
       <button class="btn" id="actPhoto">📷 ${it.primary_image_key ? 'Replace photo' : 'Add photo'}</button>
       <button class="btn" id="actEdit">✏️ Edit</button>
     </div>
@@ -414,7 +423,14 @@ function openItem(id) {
   $('actReceive').onclick = () => showMovePanel('receive');
   $('actRecount').onclick = showRecountPanel;
   $('actEdit').onclick = showEditPanel;
+  $('actBag').onclick = showBagAssignPanel;
   $('actPhoto').onclick = () => { photoTarget = it.id; $('photoInput').click(); };
+  $('sheet').querySelectorAll('[data-gobag]').forEach((a) => a.onclick = (ev) => {
+    ev.preventDefault();
+    closeSheet();
+    openBag = a.dataset.gobag;
+    $('tabs').querySelector('[data-tab="bags"]').click();
+  });
 }
 
 function stepperHtml(id, val) {
@@ -498,6 +514,33 @@ function showRecountPanel() {
       toast(`Count saved: ${total}`);
       closeSheet(); await reloadItems();
     } catch (e) { toast('Error: ' + e.message); $('rcGo').disabled = false; }
+  };
+}
+
+function showBagAssignPanel() {
+  const it = currentItem;
+  $('sheetPanel').innerHTML = `<div class="panel">
+    <h3>🎒 Add to a video's bag</h3>
+    <div class="frow"><label>Video / bag</label><input id="bgVideo" list="videoList" placeholder="e.g. 2026.1852 - Blood transfusion"></div>
+    <div class="frow"><label>Quantity needed</label>${stepperHtml('bgQty', 1)}</div>
+    <div class="panel-acts">
+      <button class="btn" id="bgCancel">Cancel</button>
+      <button class="btn primary" id="bgGo">Add to bag</button>
+    </div>
+  </div>`;
+  wireStepper($('sheetPanel'), 'bgQty');
+  $('bgCancel').onclick = () => $('sheetPanel').innerHTML = '';
+  $('bgGo').onclick = async () => {
+    const video = $('bgVideo').value.trim();
+    const qty = parseInt($('bgQty').value, 10);
+    if (!video) return toast('Enter the video name');
+    if (!qty || qty <= 0) return toast('Enter a quantity');
+    $('bgGo').disabled = true;
+    try {
+      await api('/bag-items', { method: 'POST', body: { video_name: video, item_id: it.id, qty_needed: qty } });
+      toast(`Added to the "${video}" bag`);
+      closeSheet(); await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); $('bgGo').disabled = false; }
   };
 }
 
@@ -597,9 +640,18 @@ $('addItemBtn').onclick = () => {
     $('efCreate').disabled = true;
     try {
       const created = await api('/items', { method: 'POST', body });
-      toast('Item added');
-      closeSheet(); await reloadItems();
-      openItem(created.id);
+      if (pickerForBag && openBag) {
+        // came from a bag's "create it" shortcut — assign straight into that bag
+        pickerForBag = false;
+        const qty = parseInt(prompt(`How many "${created.name}" needed for this video?`, 1), 10) || 1;
+        await api('/bag-items', { method: 'POST', body: { video_name: openBag, item_id: created.id, qty_needed: qty } });
+        toast('Item created & added to bag — flag it on the shopping list if it needs buying');
+        closeSheet(); await reloadItems();
+      } else {
+        toast('Item added');
+        closeSheet(); await reloadItems();
+        openItem(created.id);
+      }
     } catch (e) { toast('Error: ' + e.message); $('efCreate').disabled = false; }
   };
 };
@@ -641,11 +693,215 @@ function downscale(file, maxDim) {
   });
 }
 
+// ── bags (sim-lab packing lists per video) ──
+function lineStatus(line) {
+  const it = items.find((x) => x.id === line.item_id);
+  if (!it) return { key: 'gone', chip: '<span class="badge unc">item archived</span>', it: null };
+  if (line.packed_move_id) return { key: 'packed', chip: '<span class="badge order">Packed ✓</span>', it };
+  if (it.uncounted) return { key: 'uncounted', chip: '<span class="badge unc">Uncounted</span>', it };
+  if (it.remaining <= 0) return { key: 'buy', chip: '<span class="badge out">Not in office</span>', it, shortfall: line.qty_needed };
+  if (it.remaining < line.qty_needed) return { key: 'short', chip: `<span class="badge low">Short ${line.qty_needed - it.remaining}</span>`, it, shortfall: line.qty_needed - it.remaining };
+  return { key: 'ready', chip: '<span class="badge order">Ready</span>', it };
+}
+function bagsByVideo() {
+  const map = {};
+  bagLines.forEach((l) => { (map[l.video_name] = map[l.video_name] || []).push(l); });
+  return map;
+}
+
+function renderBags() {
+  const bags = bagsByVideo();
+  const names = Object.keys(bags).sort().reverse();
+  $('cntBags').textContent = names.length ? `(${names.length})` : '';
+  if (openBag !== null) return renderBagDetail();
+
+  let html = `<div style="margin:4px 0 10px"><button class="btn primary" id="newBagBtn">🎒 New bag</button></div>`;
+  if (!names.length) html += '<div class="empty">No bags yet. Make one per video, then assign the supplies it needs.</div>';
+  html += '<div class="rows">' + names.map((v) => {
+    const lines = bags[v];
+    const st = lines.map(lineStatus);
+    const packed = st.filter((s) => s.key === 'packed').length;
+    const buy = st.filter((s) => s.key === 'buy' || s.key === 'short').length;
+    const allPacked = packed === lines.length;
+    return `<div class="row" style="cursor:pointer" data-bag="${esc(v)}">
+      <div class="rthumb">🎒</div>
+      <div class="rmain">
+        <div class="rname">${esc(v)}</div>
+        <div class="rsub">${lines.length} item${lines.length === 1 ? '' : 's'} · ${packed} packed${buy ? ` · <b style="color:var(--amber)">${buy} to buy</b>` : ''}</div>
+      </div>
+      <div class="racts">${allPacked ? '<span class="badge order">Packed ✓</span>' : ''}<span style="color:var(--faint)">›</span></div>
+    </div>`;
+  }).join('') + '</div>';
+  $('bagsBody').innerHTML = html;
+  $('bagsBody').querySelectorAll('[data-bag]').forEach((el) => el.onclick = () => { openBag = el.dataset.bag; renderBags(); });
+  $('newBagBtn').onclick = () => {
+    $('bagsBody').querySelector('#newBagBtn').insertAdjacentHTML('afterend', `
+      <div class="panel" id="newBagPanel" style="margin:10px 0">
+        <div class="frow"><label>Video / bag name</label><input id="nbName" list="videoList" placeholder="e.g. 2026.1852 - Blood transfusion"></div>
+        <div class="panel-acts">
+          <button class="btn" id="nbCancel">Cancel</button>
+          <button class="btn primary" id="nbGo">Open bag</button>
+        </div>
+      </div>`);
+    $('newBagBtn').style.display = 'none';
+    $('nbName').focus();
+    $('nbCancel').onclick = () => renderBags();
+    $('nbGo').onclick = () => {
+      const v = $('nbName').value.trim();
+      if (!v) return toast('Enter a video name');
+      openBag = v; renderBags();
+    };
+  };
+}
+
+function renderBagDetail() {
+  const lines = bagsByVideo()[openBag] || [];
+  const st = lines.map((l) => ({ line: l, s: lineStatus(l) }));
+  const packed = st.filter((x) => x.s.key === 'packed').length;
+  const shortfalls = st.filter((x) => x.s.shortfall > 0);
+
+  let html = `
+    <div style="display:flex;align-items:center;gap:10px;margin:4px 0 2px">
+      <button class="btn" id="bagBack">‹ Bags</button>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:16px;font-weight:700;line-height:1.3">🎒 ${esc(openBag)}</div>
+        <div style="font-size:12.5px;color:var(--muted)">${lines.length ? `${packed}/${lines.length} packed` : 'empty bag'}${shortfalls.length ? ` · ${shortfalls.length} need buying` : ''}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+      <button class="btn primary" id="bagAdd">＋ Add supplies</button>
+      ${shortfalls.length ? `<button class="btn" id="bagShort">🛒 Send ${shortfalls.length} to shopping list</button>` : ''}
+      ${lines.length ? `<button class="btn danger" id="bagDelete">Delete bag</button>` : ''}
+    </div>`;
+
+  if (!lines.length) html += '<div class="empty">Nothing assigned yet — tap “Add supplies”.</div>';
+  html += '<div class="rows">' + st.map(({ line, s }) => {
+    const img = s.it ? imgUrl(s.it.primary_image_key) : null;
+    const name = s.it ? s.it.name : (line.item_name || 'archived item');
+    const stock = s.it ? (s.it.uncounted ? 'stock: uncounted' : `${s.it.remaining} at office`) : '';
+    return `<div class="row">
+      <div class="rthumb" ${s.it ? `data-open="${esc(s.it.id)}"` : ''}>${img ? `<img loading="lazy" src="${img}" alt="" onerror="this.parentNode.textContent='🩹'">` : '🩹'}</div>
+      <div class="rmain">
+        <div class="rname">${esc(name)}</div>
+        <div class="rsub"><button class="sm-btn" data-qty="${esc(line.item_id)}" style="padding:3px 8px;min-height:26px">need ${line.qty_needed} ✎</button> ${stock ? '· ' + stock : ''}</div>
+      </div>
+      <div class="racts">
+        ${s.chip}
+        ${s.key === 'packed'
+          ? `<button class="sm-btn" data-unpack="${esc(line.item_id)}">Unpack</button>`
+          : (s.it ? `<button class="sm-btn primary" data-pack="${esc(line.item_id)}">Pack</button>` : '')}
+        <button class="sm-btn" data-rm="${esc(line.item_id)}" title="Remove from bag">✕</button>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
+  $('bagsBody').innerHTML = html;
+
+  $('bagBack').onclick = () => { openBag = null; renderBags(); };
+  $('bagAdd').onclick = () => openPicker();
+  $('bagsBody').querySelectorAll('[data-open]').forEach((el) => el.onclick = () => openItem(el.dataset.open));
+
+  const bagShortBtn = $('bagShort');
+  if (bagShortBtn) bagShortBtn.onclick = async () => {
+    try {
+      for (const { s } of shortfalls) {
+        await api(`/items/${encodeURIComponent(s.it.id)}`, { method: 'PUT', body: {
+          order_status: s.it.order_status === 'ordered' ? 'ordered' : 'to_order',
+          qty_to_order: (s.it.qty_to_order || 0) + s.shortfall,
+        }});
+      }
+      toast(`Added ${shortfalls.length} item${shortfalls.length === 1 ? '' : 's'} to shopping list`);
+      await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); }
+  };
+  const bagDeleteBtn = $('bagDelete');
+  if (bagDeleteBtn) bagDeleteBtn.onclick = async () => {
+    if (!confirm(`Delete the bag for "${openBag}"? (Packed checkouts stay in the activity log.)`)) return;
+    try { await api(`/bags/${encodeURIComponent(openBag)}`, { method: 'DELETE' }); openBag = null; toast('Bag deleted'); await reloadItems(); }
+    catch (e) { toast('Error: ' + e.message); }
+  };
+
+  $('bagsBody').querySelectorAll('[data-qty]').forEach((b) => b.onclick = async (ev) => {
+    ev.stopPropagation();
+    const line = lines.find((l) => l.item_id === b.dataset.qty);
+    const q = parseInt(prompt('How many are needed for this video?', line.qty_needed), 10);
+    if (!q || q <= 0 || q === line.qty_needed) return;
+    if (line.packed_move_id) return toast('Unpack first, then change the quantity');
+    try { await api('/bag-items', { method: 'PUT', body: { video_name: openBag, item_id: line.item_id, qty_needed: q } }); await reloadItems(); }
+    catch (e) { toast('Error: ' + e.message); }
+  });
+  $('bagsBody').querySelectorAll('[data-pack]').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const r = await api('/bag-items/pack', { method: 'POST', body: { video_name: openBag, item_id: b.dataset.pack, user_name: getUser() } });
+      toast(`Packed — ${r.item.remaining} left at office`);
+      await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); b.disabled = false; }
+  });
+  $('bagsBody').querySelectorAll('[data-unpack]').forEach((b) => b.onclick = async () => {
+    b.disabled = true;
+    try { await api('/bag-items/unpack', { method: 'POST', body: { video_name: openBag, item_id: b.dataset.unpack } }); toast('Unpacked — stock restored'); await reloadItems(); }
+    catch (e) { toast('Error: ' + e.message); b.disabled = false; }
+  });
+  $('bagsBody').querySelectorAll('[data-rm]').forEach((b) => b.onclick = async () => {
+    const line = lines.find((l) => l.item_id === b.dataset.rm);
+    if (line.packed_move_id && !confirm('This line is packed — removing keeps the checkout. Remove anyway?')) return;
+    try { await api(`/bag-items?video_name=${encodeURIComponent(openBag)}&item_id=${encodeURIComponent(b.dataset.rm)}`, { method: 'DELETE' }); await reloadItems(); }
+    catch (e) { toast('Error: ' + e.message); }
+  });
+}
+
+// item picker sheet for assigning supplies to the open bag
+function openPicker() {
+  const inBag = new Set((bagsByVideo()[openBag] || []).map((l) => l.item_id));
+  openSheet(`
+    <h2 style="margin-top:2px">Add supplies to 🎒 ${esc(openBag)}</h2>
+    <input class="search" id="pkSearch" type="search" placeholder="Search inventory…" style="margin-top:10px">
+    <div style="margin:2px 0 8px"><button class="sm-btn" id="pkNew">➕ Item isn't in inventory yet — create it</button></div>
+    <div class="rows" id="pkRows"></div>
+  `);
+  const render = () => {
+    const q = $('pkSearch').value.trim().toLowerCase();
+    const list = items.filter((it) => !q || [it.name, it.category, it.notes, it.simulated_label]
+      .some((f) => f && f.toLowerCase().includes(q))).slice(0, 40);
+    $('pkRows').innerHTML = list.map((it) => {
+      const img = imgUrl(it.primary_image_key);
+      const added = inBag.has(it.id);
+      return `<div class="row">
+        <div class="rthumb">${img ? `<img loading="lazy" src="${img}" alt="" onerror="this.parentNode.textContent='🩹'">` : '🩹'}</div>
+        <div class="rmain">
+          <div class="rname">${esc(it.name)}</div>
+          <div class="rsub">${it.uncounted ? 'uncounted' : `${it.remaining} at office`}${it.category ? ' · ' + esc(it.category) : ''}</div>
+        </div>
+        <div class="racts">${added
+          ? '<span class="badge order">In bag ✓</span>'
+          : `<button class="sm-btn primary" data-add="${esc(it.id)}">＋ Add</button>`}</div>
+      </div>`;
+    }).join('') || '<div class="empty">No matches — create it as a new item.</div>';
+    $('pkRows').querySelectorAll('[data-add]').forEach((b) => b.onclick = async () => {
+      const qty = parseInt(prompt('How many needed for this video?', 1), 10);
+      if (!qty || qty <= 0) return;
+      b.disabled = true;
+      try {
+        await api('/bag-items', { method: 'POST', body: { video_name: openBag, item_id: b.dataset.add, qty_needed: qty } });
+        inBag.add(b.dataset.add);
+        toast('Added to bag');
+        bagLines = await api('/bag-items');
+        render();
+      } catch (e) { toast('Error: ' + e.message); b.disabled = false; }
+    });
+  };
+  let t;
+  $('pkSearch').oninput = () => { clearTimeout(t); t = setTimeout(render, 150); };
+  $('pkNew').onclick = () => { pickerForBag = true; $('addItemBtn').click(); };
+  render();
+}
+
 // ── tabs & search ──
 $('tabs').querySelectorAll('button').forEach((b) => b.onclick = () => {
   $('tabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-  ['inv', 'shop', 'log'].forEach((t) => $('tab-' + t).style.display = b.dataset.tab === t ? '' : 'none');
+  ['inv', 'shop', 'bags', 'log'].forEach((t) => $('tab-' + t).style.display = b.dataset.tab === t ? '' : 'none');
   if (b.dataset.tab === 'log') renderLog();
+  if (b.dataset.tab === 'bags') renderBags();
 });
 let searchTimer;
 $('search').oninput = () => {

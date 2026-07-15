@@ -237,6 +237,18 @@ CREATE TABLE IF NOT EXISTS med_categories (
   icon TEXT,
   sort_order INTEGER DEFAULT 100
 );
+
+-- Sim-lab packing: each video has a "bag"; supplies are assigned per video.
+-- Packing a line records a real checkout move (packed_move_id) so stock stays true.
+CREATE TABLE IF NOT EXISTS med_bag_items (
+  video_name TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  qty_needed INTEGER NOT NULL DEFAULT 1,
+  packed_move_id TEXT,                 -- NULL = not packed yet
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (video_name, item_id)
+);
 `;
 
 // ---------- seed.sql (rerunnable; no BEGIN/COMMIT — wrangler d1 execute manages its own txn) ----------

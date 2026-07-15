@@ -501,6 +501,11 @@ async function ensureMedTables(env) {
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_med_moves_created ON med_moves(created_at DESC)`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_videos (name TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')))`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_categories (name TEXT PRIMARY KEY, icon TEXT, sort_order INTEGER DEFAULT 100)`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_bag_items (
+      video_name TEXT NOT NULL, item_id TEXT NOT NULL, qty_needed INTEGER NOT NULL DEFAULT 1,
+      packed_move_id TEXT, note TEXT, created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (video_name, item_id)
+    )`),
   ]);
   medTablesReady = true;
 }
@@ -668,6 +673,81 @@ async function handleMedSuppliesAPI(request, env, path) {
       const r = await env.DB.prepare("DELETE FROM med_moves WHERE id = ? AND counted = 1").bind(moveMatch[1]).run();
       if (!r.meta.changes) return fail("move not found (legacy history can't be deleted)", 404);
       return ok({ deleted: moveMatch[1] });
+    }
+
+    // ---- video bags (sim-lab packing lists) ----
+    if (sub === "bag-items" && method === "GET") {
+      const { results } = await env.DB.prepare(`
+        SELECT b.*, i.name AS item_name FROM med_bag_items b
+        LEFT JOIN med_items i ON i.id = b.item_id
+        ORDER BY b.video_name DESC, i.name COLLATE NOCASE`).all();
+      return ok(results);
+    }
+    if (sub === "bag-items" && method === "POST") {
+      const b = await request.json();
+      const video = (b.video_name || "").trim();
+      if (!video) return fail("video_name is required");
+      const qty = Number.isInteger(b.qty_needed) && b.qty_needed > 0 ? b.qty_needed : 1;
+      const item = await env.DB.prepare("SELECT id FROM med_items WHERE id = ? AND archived = 0").bind(b.item_id || "").first();
+      if (!item) return fail("item not found", 404);
+      await env.DB.batch([
+        env.DB.prepare("INSERT OR IGNORE INTO med_videos (name) VALUES (?)").bind(video),
+        env.DB.prepare(`INSERT INTO med_bag_items (video_name, item_id, qty_needed, note) VALUES (?, ?, ?, ?)
+          ON CONFLICT(video_name, item_id) DO UPDATE SET qty_needed = excluded.qty_needed, note = COALESCE(excluded.note, note)`)
+          .bind(video, b.item_id, qty, b.note ?? null),
+      ]);
+      return ok({ video_name: video, item_id: b.item_id, qty_needed: qty });
+    }
+    if (sub === "bag-items" && method === "PUT") {
+      const b = await request.json();
+      if (!Number.isInteger(b.qty_needed) || b.qty_needed <= 0) return fail("qty_needed must be a positive integer");
+      const r = await env.DB.prepare("UPDATE med_bag_items SET qty_needed = ? WHERE video_name = ? AND item_id = ?")
+        .bind(b.qty_needed, b.video_name || "", b.item_id || "").run();
+      if (!r.meta.changes) return fail("bag line not found", 404);
+      return ok({ updated: true });
+    }
+    if (sub === "bag-items" && method === "DELETE") {
+      const url = new URL(request.url);
+      const r = await env.DB.prepare("DELETE FROM med_bag_items WHERE video_name = ? AND item_id = ?")
+        .bind(url.searchParams.get("video_name") || "", url.searchParams.get("item_id") || "").run();
+      if (!r.meta.changes) return fail("bag line not found", 404);
+      return ok({ deleted: true });
+    }
+    if (sub === "bag-items/pack" && method === "POST") {
+      // packing = a real checkout against the video, so stock + activity stay true
+      const b = await request.json();
+      const line = await env.DB.prepare("SELECT * FROM med_bag_items WHERE video_name = ? AND item_id = ?")
+        .bind(b.video_name || "", b.item_id || "").first();
+      if (!line) return fail("bag line not found", 404);
+      if (line.packed_move_id) return fail("already packed");
+      const moveId = crypto.randomUUID();
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO med_moves (id, item_id, type, qty_delta, user_name, video_name, note)
+          VALUES (?, ?, 'checkout', ?, ?, ?, 'packed for bag')`)
+          .bind(moveId, line.item_id, -line.qty_needed, b.user_name ?? null, line.video_name),
+        env.DB.prepare("UPDATE med_bag_items SET packed_move_id = ? WHERE video_name = ? AND item_id = ?")
+          .bind(moveId, line.video_name, line.item_id),
+      ]);
+      return ok({ packed_move_id: moveId, item: await medItemWithStock(env, line.item_id) });
+    }
+    if (sub === "bag-items/unpack" && method === "POST") {
+      const b = await request.json();
+      const line = await env.DB.prepare("SELECT * FROM med_bag_items WHERE video_name = ? AND item_id = ?")
+        .bind(b.video_name || "", b.item_id || "").first();
+      if (!line) return fail("bag line not found", 404);
+      if (!line.packed_move_id) return fail("not packed");
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM med_moves WHERE id = ? AND counted = 1").bind(line.packed_move_id),
+        env.DB.prepare("UPDATE med_bag_items SET packed_move_id = NULL WHERE video_name = ? AND item_id = ?")
+          .bind(line.video_name, line.item_id),
+      ]);
+      return ok({ unpacked: true, item: await medItemWithStock(env, line.item_id) });
+    }
+    const bagMatch = sub.match(/^bags\/(.+)$/);
+    if (bagMatch && method === "DELETE") {
+      const video = decodeURIComponent(bagMatch[1]);
+      const r = await env.DB.prepare("DELETE FROM med_bag_items WHERE video_name = ?").bind(video).run();
+      return ok({ deleted_lines: r.meta.changes });
     }
 
     // ---- lists ----
