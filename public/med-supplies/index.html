@@ -108,6 +108,10 @@
   .stepper button { width: 48px; height: 44px; font-size: 22px; border: 1px solid var(--border2); background: var(--panel);
                     color: var(--text); border-radius: 10px; cursor: pointer; }
   .stepper input { width: 70px; text-align: center; font-size: 18px; font-weight: 700; }
+  .mini { display: inline-flex; align-items: center; gap: 4px; }
+  .mini button { width: 34px; height: 34px; border: 1px solid var(--border2); background: var(--panel);
+                 color: var(--text); border-radius: 8px; font-size: 17px; cursor: pointer; flex: 0 0 auto; }
+  .mini .mv { min-width: 26px; text-align: center; font-weight: 700; font-size: 15px; }
   .seg { display: flex; gap: 6px; }
   .seg button { flex: 1; border: 1px solid var(--border2); background: var(--panel); color: var(--text2); border-radius: 10px;
                 padding: 10px 4px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; min-height: 44px; }
@@ -170,7 +174,7 @@
 const API = '/med-supplies/api';
 const USERS = ['Molly', 'Diana', 'Tia'];
 
-let items = [], categories = [], videos = [], bagLines = [];
+let items = [], categories = [], videos = [], bagLines = [], bags = [];
 let activeCat = null, searchTerm = '', currentItem = null, photoTarget = null;
 let openBag = null, pickerForBag = false;
 
@@ -184,6 +188,26 @@ function toast(msg) {
   t.classList.add('show');
   clearTimeout(t._h);
   t._h = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+// compact − N + control; returns {get, set}
+function miniStep(el, { value = 1, min = 1, max = Infinity } = {}) {
+  el.classList.add('mini');
+  el.innerHTML = `<button type="button" data-d="-1">−</button><span class="mv">${value}</span><button type="button" data-d="1">+</button>`;
+  const mv = el.querySelector('.mv');
+  el.querySelectorAll('button').forEach((b) => b.onclick = (ev) => {
+    ev.stopPropagation();
+    mv.textContent = Math.max(min, Math.min(max, parseInt(mv.textContent, 10) + parseInt(b.dataset.d, 10)));
+  });
+  return { get: () => parseInt(mv.textContent, 10), set: (v) => { mv.textContent = v; } };
+}
+// two-tap confirm: first tap arms the button, second tap within 2.5s runs fn
+function armConfirm(btn, fn, label = 'Sure?') {
+  if (btn.dataset.armed) { delete btn.dataset.armed; fn(); return; }
+  btn.dataset.armed = '1';
+  const old = btn.textContent;
+  btn.textContent = label;
+  setTimeout(() => { if (btn.isConnected && btn.dataset.armed) { delete btn.dataset.armed; btn.textContent = old; } }, 2500);
 }
 
 async function api(path, opts = {}) {
@@ -228,13 +252,13 @@ function orderBadge(it) {
 
 // ── data loads ──
 async function loadAll() {
-  const [i, c, v, b] = await Promise.all([api('/items'), api('/categories'), api('/videos'), api('/bag-items')]);
-  items = i; categories = c; videos = v; bagLines = b;
+  const [i, c, v, b, g] = await Promise.all([api('/items'), api('/categories'), api('/videos'), api('/bag-items'), api('/bags')]);
+  items = i; categories = c; videos = v; bagLines = b; bags = g;
   $('videoList').innerHTML = videos.map((v) => `<option value="${esc(v)}">`).join('');
   renderChips(); renderInventory(); renderShopping(); renderBags();
 }
 async function reloadItems() {
-  [items, bagLines] = await Promise.all([api('/items'), api('/bag-items')]);
+  [items, bagLines, bags] = await Promise.all([api('/items'), api('/bag-items'), api('/bags')]);
   renderInventory(); renderShopping(); renderBags();
 }
 
@@ -318,28 +342,49 @@ function renderShopping() {
   $('shopBody').querySelectorAll('[data-open]').forEach((el) => el.onclick = () => openItem(el.dataset.open));
   $('shopBody').querySelectorAll('[data-act]').forEach((b) => b.onclick = async () => {
     const it = items.find((x) => x.id === b.dataset.id);
-    try {
-      if (b.dataset.act === 'ordered') {
+    if (b.dataset.act === 'ordered') {
+      try {
         await api(`/items/${encodeURIComponent(it.id)}`, { method: 'PUT', body: { order_status: 'ordered' } });
         toast('Marked ordered');
-      } else if (b.dataset.act === 'received') {
-        const qty = parseInt(prompt(`How many "${it.name}" arrived?`, it.qty_to_order || 1), 10);
-        if (!qty || qty <= 0) return;
-        await api('/receive', { method: 'POST', body: { item_id: it.id, qty, user_name: getUser() } });
-        toast(`Received ${qty} — stock updated`);
-      } else if (b.dataset.act === 'toorder') {
-        const qty = parseInt(prompt(`How many "${it.name}" to order?`, Math.max(1, (it.restock_level || 0) - it.remaining + 1)), 10);
-        if (!qty || qty <= 0) return;
-        await api(`/items/${encodeURIComponent(it.id)}`, { method: 'PUT', body: { order_status: 'to_order', qty_to_order: qty } });
-        toast('Added to order list');
-      }
-      await reloadItems();
-    } catch (e) { toast('Error: ' + e.message); }
+        await reloadItems();
+      } catch (e) { toast('Error: ' + e.message); }
+      return;
+    }
+    // received / add-to-order: swap the row's buttons for an inline qty stepper
+    const isRecv = b.dataset.act === 'received';
+    const racts = b.closest('.racts');
+    racts.innerHTML = '';
+    const stepEl = document.createElement('span');
+    racts.appendChild(stepEl);
+    const s = miniStep(stepEl, { value: isRecv ? (it.qty_to_order || 1) : Math.max(1, (it.restock_level || 0) - it.remaining + 1) });
+    const go = document.createElement('button');
+    go.className = 'sm-btn primary';
+    go.textContent = isRecv ? '✓ To shelf' : '✓ To list';
+    go.onclick = async () => {
+      const qty = s.get();
+      go.disabled = true;
+      try {
+        if (isRecv) {
+          await api('/receive', { method: 'POST', body: { item_id: it.id, qty, user_name: getUser() } });
+          toast(`Restocked ${qty} — off the list`);
+        } else {
+          await api(`/items/${encodeURIComponent(it.id)}`, { method: 'PUT', body: { order_status: 'to_order', qty_to_order: qty } });
+          toast('Added to order list');
+        }
+        await reloadItems();
+      } catch (e) { toast('Error: ' + e.message); go.disabled = false; }
+    };
+    const no = document.createElement('button');
+    no.className = 'sm-btn';
+    no.textContent = '✕';
+    no.onclick = () => renderShopping();
+    racts.appendChild(go);
+    racts.appendChild(no);
   });
 }
 
 // ── activity tab ──
-const MOVE_ICON = { checkout: '📤', receive: '📥', adjust: '🔧' };
+const MOVE_ICON = { checkout: '📤', receive: '📥', adjust: '🔧', return: '↩️' };
 function fmtWhen(ts) {
   if (!ts) return '';
   const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
@@ -353,7 +398,10 @@ async function renderLog() {
   const moves = await api('/moves?limit=100');
   $('logBody').innerHTML = moves.map((m) => {
     const qty = Math.abs(m.qty_delta);
-    const what = m.type === 'checkout' ? `took ${qty}` : m.type === 'receive' ? `received ${qty}` : `adjusted ${m.qty_delta > 0 ? '+' : ''}${m.qty_delta}`;
+    const what = m.type === 'checkout' ? `took ${qty}`
+      : m.type === 'receive' ? `restocked ${qty}`
+      : m.type === 'return' ? `returned ${qty}`
+      : `adjusted ${m.qty_delta > 0 ? '+' : ''}${m.qty_delta}`;
     const name = m.item_name ? esc(m.item_name) : `<span class="legacy">deleted item${m.raw_item_ref ? ` (#${esc(m.raw_item_ref)})` : ''}</span>`;
     return `<div class="move">
       <div class="mico">${MOVE_ICON[m.type] || '•'}</div>
@@ -364,11 +412,10 @@ async function renderLog() {
       ${m.counted ? `<button class="undo" data-id="${esc(m.id)}">Undo</button>` : ''}
     </div>`;
   }).join('') || '<div class="empty">No activity yet.</div>';
-  $('logBody').querySelectorAll('.undo').forEach((b) => b.onclick = async () => {
-    if (!confirm('Undo this entry? Stock will be recalculated.')) return;
-    try { await api(`/moves/${b.dataset.id}`, { method: 'DELETE' }); toast('Undone'); await reloadItems(); renderLog(); }
+  $('logBody').querySelectorAll('.undo').forEach((b) => b.onclick = () => armConfirm(b, async () => {
+    try { await api(`/moves/${b.dataset.id}`, { method: 'DELETE' }); toast('Undone — stock recalculated'); await reloadItems(); renderLog(); }
     catch (e) { toast('Error: ' + e.message); }
-  });
+  }, 'Undo?'));
 }
 
 // ── bottom sheet ──
@@ -410,17 +457,17 @@ function openItem(id) {
     ${itsBags.length ? `<div class="meta" style="margin-top:6px">🎒 In bags: ${itsBags.map((l) =>
       `<a href="#" class="link-btn" data-gobag="${esc(l.video_name)}" style="padding:2px 4px">${esc(l.video_name)} (×${l.qty_needed})</a>`).join(' ')}</div>` : ''}
     <div class="acts">
-      <button class="btn primary full" id="actCheckout">📤 Check out</button>
-      <button class="btn" id="actReceive">📥 Receive</button>
-      <button class="btn" id="actRecount">🔢 Recount</button>
-      <button class="btn" id="actBag">🎒 Add to bag</button>
+      <button class="btn primary full" id="actBag">🎒 Add to a video's bag</button>
+      <button class="btn" id="actTake">📤 Take</button>
+      <button class="btn" id="actRestock">📥 Restock</button>
+      <button class="btn" id="actRecount">🔢 Count</button>
       <button class="btn" id="actPhoto">📷 ${it.primary_image_key ? 'Replace photo' : 'Add photo'}</button>
-      <button class="btn" id="actEdit">✏️ Edit</button>
+      <button class="btn full" id="actEdit">✏️ Edit details</button>
     </div>
     <div id="sheetPanel"></div>
   `);
-  $('actCheckout').onclick = () => showMovePanel('checkout');
-  $('actReceive').onclick = () => showMovePanel('receive');
+  $('actTake').onclick = () => showMovePanel('take');
+  $('actRestock').onclick = () => showMovePanel('restock');
   $('actRecount').onclick = showRecountPanel;
   $('actEdit').onclick = showEditPanel;
   $('actBag').onclick = showBagAssignPanel;
@@ -461,16 +508,15 @@ function wireUserSeg(panel) {
 
 function showMovePanel(kind) {
   const it = currentItem;
-  const isCo = kind === 'checkout';
+  const isTake = kind === 'take';
   $('sheetPanel').innerHTML = `<div class="panel">
-    <h3>${isCo ? '📤 Check out' : '📥 Receive stock'}</h3>
+    <h3>${isTake ? '📤 Take from the office' : '📥 Restock the shelf'}</h3>
+    ${isTake ? '<div class="meta" style="margin-bottom:10px">Packing for a video? Use its 🎒 bag instead so the packing list stays accurate — this is for one-off use.</div>' : ''}
     <div class="frow"><label>Quantity</label>${stepperHtml('mvQty', 1)}</div>
     <div class="frow"><label>Who</label>${userSegHtml()}</div>
-    ${isCo ? `<div class="frow"><label>Video / shoot (optional)</label>
-      <input id="mvVideo" list="videoList" placeholder="e.g. 2026.1842 - Focused Assessment"></div>` : ''}
     <div class="panel-acts">
       <button class="btn" id="mvCancel">Cancel</button>
-      <button class="btn primary" id="mvGo">${isCo ? 'Check out' : 'Receive'}</button>
+      <button class="btn primary" id="mvGo">${isTake ? 'Take' : 'Restock'}</button>
     </div>
   </div>`;
   const panel = $('sheetPanel');
@@ -481,11 +527,8 @@ function showMovePanel(kind) {
     if (!qty || qty <= 0) return toast('Enter a quantity');
     $('mvGo').disabled = true;
     try {
-      const r = await api('/' + kind, { method: 'POST', body: {
-        item_id: it.id, qty, user_name: getUser(),
-        ...(isCo ? { video_name: $('mvVideo').value.trim() || null } : {}),
-      }});
-      toast(`${isCo ? 'Checked out' : 'Received'} ${qty} — ${r.item.remaining} left`);
+      const r = await api(isTake ? '/checkout' : '/receive', { method: 'POST', body: { item_id: it.id, qty, user_name: getUser() } });
+      toast(`${isTake ? 'Took' : 'Restocked'} ${qty} — ${r.item.remaining} left`);
       closeSheet(); await loadAll();
     } catch (e) { toast('Error: ' + e.message); $('mvGo').disabled = false; }
   };
@@ -610,14 +653,13 @@ function showEditPanel() {
       closeSheet(); await reloadItems();
     } catch (e) { toast('Error: ' + e.message); $('efSave').disabled = false; }
   };
-  $('efArchive').onclick = async () => {
-    if (!confirm(`Archive "${it.name}"? It disappears from the inventory (history is kept).`)) return;
+  $('efArchive').onclick = () => armConfirm($('efArchive'), async () => {
     try {
       await api(`/items/${encodeURIComponent(it.id)}`, { method: 'DELETE' });
       toast('Archived');
       closeSheet(); await reloadItems();
     } catch (e) { toast('Error: ' + e.message); }
-  };
+  }, 'Tap again to archive');
 }
 
 $('addItemBtn').onclick = () => {
@@ -643,9 +685,8 @@ $('addItemBtn').onclick = () => {
       if (pickerForBag && openBag) {
         // came from a bag's "create it" shortcut — assign straight into that bag
         pickerForBag = false;
-        const qty = parseInt(prompt(`How many "${created.name}" needed for this video?`, 1), 10) || 1;
-        await api('/bag-items', { method: 'POST', body: { video_name: openBag, item_id: created.id, qty_needed: qty } });
-        toast('Item created & added to bag — flag it on the shopping list if it needs buying');
+        await api('/bag-items', { method: 'POST', body: { video_name: openBag, item_id: created.id, qty_needed: 1 } });
+        toast('Created & added ×1 — tap "need 1 ✎" in the bag to adjust');
         closeSheet(); await reloadItems();
       } else {
         toast('Item added');
@@ -709,20 +750,22 @@ function bagsByVideo() {
   return map;
 }
 
+function bagInfo(video) { return bags.find((b) => b.video_name === video); }
+
 function renderBags() {
-  const bags = bagsByVideo();
-  const names = Object.keys(bags).sort().reverse();
-  $('cntBags').textContent = names.length ? `(${names.length})` : '';
+  const map = bagsByVideo();
+  const names = [...new Set([...bags.map((b) => b.video_name), ...Object.keys(map)])].sort().reverse();
+  const active = names.filter((v) => (bagInfo(v)?.status || 'active') !== 'done');
+  const done = names.filter((v) => bagInfo(v)?.status === 'done');
+  $('cntBags').textContent = active.length ? `(${active.length})` : '';
   if (openBag !== null) return renderBagDetail();
 
-  let html = `<div style="margin:4px 0 10px"><button class="btn primary" id="newBagBtn">🎒 New bag</button></div>`;
-  if (!names.length) html += '<div class="empty">No bags yet. Make one per video, then assign the supplies it needs.</div>';
-  html += '<div class="rows">' + names.map((v) => {
-    const lines = bags[v];
+  const activeRow = (v) => {
+    const lines = map[v] || [];
     const st = lines.map(lineStatus);
     const packed = st.filter((s) => s.key === 'packed').length;
     const buy = st.filter((s) => s.key === 'buy' || s.key === 'short').length;
-    const allPacked = packed === lines.length;
+    const allPacked = lines.length > 0 && packed === lines.length;
     return `<div class="row" style="cursor:pointer" data-bag="${esc(v)}">
       <div class="rthumb">🎒</div>
       <div class="rmain">
@@ -731,7 +774,25 @@ function renderBags() {
       </div>
       <div class="racts">${allPacked ? '<span class="badge order">Packed ✓</span>' : ''}<span style="color:var(--faint)">›</span></div>
     </div>`;
-  }).join('') + '</div>';
+  };
+  const doneRow = (v) => {
+    const lines = map[v] || [];
+    const used = lines.reduce((n, l) => n + (l.return_move_id !== null || l.qty_returned !== null ? l.qty_needed - (l.qty_returned || 0) : 0), 0);
+    const back = lines.reduce((n, l) => n + (l.qty_returned || 0), 0);
+    return `<div class="row" style="cursor:pointer;opacity:.75" data-bag="${esc(v)}">
+      <div class="rthumb">✅</div>
+      <div class="rmain">
+        <div class="rname">${esc(v)}</div>
+        <div class="rsub">${back} returned · ${used} used up</div>
+      </div>
+      <div class="racts"><span style="color:var(--faint)">›</span></div>
+    </div>`;
+  };
+
+  let html = `<div style="margin:4px 0 10px"><button class="btn primary" id="newBagBtn">🎒 New bag</button></div>`;
+  if (!active.length && !done.length) html += '<div class="empty">No bags yet. Make one per video, then assign the supplies it needs.</div>';
+  if (active.length) html += '<div class="rows">' + active.map(activeRow).join('') + '</div>';
+  if (done.length) html += `<div class="sec-label">Done — returned after filming (${done.length})</div><div class="rows">` + done.map(doneRow).join('') + '</div>';
   $('bagsBody').innerHTML = html;
   $('bagsBody').querySelectorAll('[data-bag]').forEach((el) => el.onclick = () => { openBag = el.dataset.bag; renderBags(); });
   $('newBagBtn').onclick = () => {
@@ -756,10 +817,57 @@ function renderBags() {
 
 function renderBagDetail() {
   const lines = bagsByVideo()[openBag] || [];
+  const isDone = bagInfo(openBag)?.status === 'done';
   const st = lines.map((l) => ({ line: l, s: lineStatus(l) }));
   const packed = st.filter((x) => x.s.key === 'packed').length;
   const shortfalls = st.filter((x) => x.s.shortfall > 0);
 
+  // ---- done bag: read-only summary of what was returned vs used up ----
+  if (isDone) {
+    const used = lines.reduce((n, l) => n + (l.packed_move_id ? l.qty_needed - (l.qty_returned || 0) : 0), 0);
+    const back = lines.reduce((n, l) => n + (l.qty_returned || 0), 0);
+    $('bagsBody').innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin:4px 0 2px">
+        <button class="btn" id="bagBack">‹ Bags</button>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:16px;font-weight:700;line-height:1.3">✅ ${esc(openBag)}</div>
+          <div style="font-size:12.5px;color:var(--muted)">Returned — ${back} back on the shelf, ${used} used up</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+        <button class="btn" id="bagReopen">Reopen bag</button>
+        <button class="btn danger" id="bagDelete">Delete bag</button>
+      </div>
+      <div class="rows">` + lines.map((l) => {
+        const it = items.find((x) => x.id === l.item_id);
+        const img = it ? imgUrl(it.primary_image_key) : null;
+        const usedQty = l.packed_move_id ? l.qty_needed - (l.qty_returned || 0) : 0;
+        const detail = !l.packed_move_id ? 'never packed'
+          : usedQty === 0 ? `all ${l.qty_needed} returned`
+          : (l.qty_returned || 0) === 0 ? `all ${l.qty_needed} used up`
+          : `${l.qty_returned} returned · ${usedQty} used up`;
+        return `<div class="row">
+          <div class="rthumb" ${it ? `data-open="${esc(it.id)}"` : ''}>${img ? `<img loading="lazy" src="${img}" alt="" onerror="this.parentNode.textContent='🩹'">` : '🩹'}</div>
+          <div class="rmain">
+            <div class="rname">${esc(it ? it.name : (l.item_name || 'archived item'))}</div>
+            <div class="rsub">${detail}</div>
+          </div>
+        </div>`;
+      }).join('') + '</div>';
+    $('bagBack').onclick = () => { openBag = null; renderBags(); };
+    $('bagsBody').querySelectorAll('[data-open]').forEach((el) => el.onclick = () => openItem(el.dataset.open));
+    $('bagReopen').onclick = async () => {
+      try { await api(`/bags/${encodeURIComponent(openBag)}/reopen`, { method: 'POST', body: {} }); toast('Bag reopened'); await reloadItems(); }
+      catch (e) { toast('Error: ' + e.message); }
+    };
+    $('bagDelete').onclick = () => armConfirm($('bagDelete'), async () => {
+      try { await api(`/bags/${encodeURIComponent(openBag)}`, { method: 'DELETE' }); openBag = null; toast('Bag deleted'); await reloadItems(); }
+      catch (e) { toast('Error: ' + e.message); }
+    }, 'Delete?');
+    return;
+  }
+
+  // ---- active bag: packing checklist ----
   let html = `
     <div style="display:flex;align-items:center;gap:10px;margin:4px 0 2px">
       <button class="btn" id="bagBack">‹ Bags</button>
@@ -771,6 +879,7 @@ function renderBagDetail() {
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
       <button class="btn primary" id="bagAdd">＋ Add supplies</button>
       ${shortfalls.length ? `<button class="btn" id="bagShort">🛒 Send ${shortfalls.length} to shopping list</button>` : ''}
+      ${packed ? `<button class="btn" id="bagReturn">↩ Return bag…</button>` : ''}
       ${lines.length ? `<button class="btn danger" id="bagDelete">Delete bag</button>` : ''}
     </div>`;
 
@@ -778,12 +887,12 @@ function renderBagDetail() {
   html += '<div class="rows">' + st.map(({ line, s }) => {
     const img = s.it ? imgUrl(s.it.primary_image_key) : null;
     const name = s.it ? s.it.name : (line.item_name || 'archived item');
-    const stock = s.it ? (s.it.uncounted ? 'stock: uncounted' : `${s.it.remaining} at office`) : '';
+    const stock = s.it ? (s.it.uncounted ? '' : `${s.it.remaining} at office`) : '';
     return `<div class="row">
       <div class="rthumb" ${s.it ? `data-open="${esc(s.it.id)}"` : ''}>${img ? `<img loading="lazy" src="${img}" alt="" onerror="this.parentNode.textContent='🩹'">` : '🩹'}</div>
       <div class="rmain">
         <div class="rname">${esc(name)}</div>
-        <div class="rsub"><button class="sm-btn" data-qty="${esc(line.item_id)}" style="padding:3px 8px;min-height:26px">need ${line.qty_needed} ✎</button> ${stock ? '· ' + stock : ''}</div>
+        <div class="rsub" data-sub="${esc(line.item_id)}"><button class="sm-btn" data-qty="${esc(line.item_id)}" style="padding:3px 8px;min-height:26px">need ${line.qty_needed} ✎</button>${stock ? ' · ' + stock : ''}${s.key === 'uncounted' && s.it ? ` <button class="sm-btn" data-count="${esc(s.it.id)}" style="padding:3px 8px;min-height:26px">Count now</button>` : ''}</div>
       </div>
       <div class="racts">
         ${s.chip}
@@ -802,6 +911,7 @@ function renderBagDetail() {
 
   const bagShortBtn = $('bagShort');
   if (bagShortBtn) bagShortBtn.onclick = async () => {
+    bagShortBtn.disabled = true;
     try {
       for (const { s } of shortfalls) {
         await api(`/items/${encodeURIComponent(s.it.id)}`, { method: 'PUT', body: {
@@ -811,23 +921,42 @@ function renderBagDetail() {
       }
       toast(`Added ${shortfalls.length} item${shortfalls.length === 1 ? '' : 's'} to shopping list`);
       await reloadItems();
-    } catch (e) { toast('Error: ' + e.message); }
+    } catch (e) { toast('Error: ' + e.message); bagShortBtn.disabled = false; }
   };
+  const bagReturnBtn = $('bagReturn');
+  if (bagReturnBtn) bagReturnBtn.onclick = openReturnSheet;
   const bagDeleteBtn = $('bagDelete');
-  if (bagDeleteBtn) bagDeleteBtn.onclick = async () => {
-    if (!confirm(`Delete the bag for "${openBag}"? (Packed checkouts stay in the activity log.)`)) return;
+  if (bagDeleteBtn) bagDeleteBtn.onclick = () => armConfirm(bagDeleteBtn, async () => {
     try { await api(`/bags/${encodeURIComponent(openBag)}`, { method: 'DELETE' }); openBag = null; toast('Bag deleted'); await reloadItems(); }
     catch (e) { toast('Error: ' + e.message); }
-  };
+  }, 'Delete?');
 
-  $('bagsBody').querySelectorAll('[data-qty]').forEach((b) => b.onclick = async (ev) => {
+  // tap "need N" -> inline stepper right in the row
+  $('bagsBody').querySelectorAll('[data-qty]').forEach((b) => b.onclick = (ev) => {
     ev.stopPropagation();
     const line = lines.find((l) => l.item_id === b.dataset.qty);
-    const q = parseInt(prompt('How many are needed for this video?', line.qty_needed), 10);
-    if (!q || q <= 0 || q === line.qty_needed) return;
     if (line.packed_move_id) return toast('Unpack first, then change the quantity');
-    try { await api('/bag-items', { method: 'PUT', body: { video_name: openBag, item_id: line.item_id, qty_needed: q } }); await reloadItems(); }
-    catch (e) { toast('Error: ' + e.message); }
+    const sub = $('bagsBody').querySelector(`[data-sub="${CSS.escape(line.item_id)}"]`);
+    sub.innerHTML = '';
+    const stepEl = document.createElement('span');
+    sub.appendChild(stepEl);
+    const s = miniStep(stepEl, { value: line.qty_needed, min: 1 });
+    const goBtn = document.createElement('button');
+    goBtn.className = 'sm-btn primary'; goBtn.textContent = '✓';
+    goBtn.onclick = async () => {
+      goBtn.disabled = true;
+      try { await api('/bag-items', { method: 'PUT', body: { video_name: openBag, item_id: line.item_id, qty_needed: s.get() } }); await reloadItems(); }
+      catch (e) { toast('Error: ' + e.message); renderBags(); }
+    };
+    const noBtn = document.createElement('button');
+    noBtn.className = 'sm-btn'; noBtn.textContent = '✕';
+    noBtn.onclick = () => renderBags();
+    sub.appendChild(goBtn); sub.appendChild(noBtn);
+  });
+  $('bagsBody').querySelectorAll('[data-count]').forEach((b) => b.onclick = (ev) => {
+    ev.stopPropagation();
+    openItem(b.dataset.count);
+    showRecountPanel();
   });
   $('bagsBody').querySelectorAll('[data-pack]').forEach((b) => b.onclick = async () => {
     b.disabled = true;
@@ -842,12 +971,56 @@ function renderBagDetail() {
     try { await api('/bag-items/unpack', { method: 'POST', body: { video_name: openBag, item_id: b.dataset.unpack } }); toast('Unpacked — stock restored'); await reloadItems(); }
     catch (e) { toast('Error: ' + e.message); b.disabled = false; }
   });
-  $('bagsBody').querySelectorAll('[data-rm]').forEach((b) => b.onclick = async () => {
-    const line = lines.find((l) => l.item_id === b.dataset.rm);
-    if (line.packed_move_id && !confirm('This line is packed — removing keeps the checkout. Remove anyway?')) return;
+  $('bagsBody').querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => armConfirm(b, async () => {
     try { await api(`/bag-items?video_name=${encodeURIComponent(openBag)}&item_id=${encodeURIComponent(b.dataset.rm)}`, { method: 'DELETE' }); await reloadItems(); }
     catch (e) { toast('Error: ' + e.message); }
+  }));
+}
+
+// return-bag sheet: what came back on the shelf vs got used up during filming
+function openReturnSheet() {
+  const packedLines = (bagsByVideo()[openBag] || []).filter((l) => l.packed_move_id && !l.return_move_id);
+  if (!packedLines.length) return toast('Nothing packed to return');
+  openSheet(`
+    <h2 style="margin-top:2px">↩ Return 🎒 ${esc(openBag)}</h2>
+    <div class="meta" style="margin:6px 0 4px">How many of each came back? Returned items go back on the shelf; the rest counts as used up.</div>
+    <div style="margin:8px 0"><button class="sm-btn" id="rtAll">Everything came back</button></div>
+    <div class="rows" id="rtRows"></div>
+    <div class="panel-acts" style="margin-top:14px">
+      <button class="btn" id="rtCancel">Cancel</button>
+      <button class="btn primary" id="rtGo">Finish return</button>
+    </div>
+  `);
+  const steps = {};
+  $('rtRows').innerHTML = packedLines.map((l) => {
+    const it = items.find((x) => x.id === l.item_id);
+    const img = it ? imgUrl(it.primary_image_key) : null;
+    return `<div class="row">
+      <div class="rthumb">${img ? `<img loading="lazy" src="${img}" alt="" onerror="this.parentNode.textContent='🩹'">` : '🩹'}</div>
+      <div class="rmain">
+        <div class="rname">${esc(it ? it.name : 'item')}</div>
+        <div class="rsub">packed ${l.qty_needed}</div>
+      </div>
+      <div class="racts"><span data-step="${esc(l.item_id)}"></span></div>
+    </div>`;
+  }).join('');
+  packedLines.forEach((l) => {
+    steps[l.item_id] = miniStep($('rtRows').querySelector(`[data-step="${CSS.escape(l.item_id)}"]`),
+      { value: l.qty_needed, min: 0, max: l.qty_needed });
   });
+  $('rtAll').onclick = () => packedLines.forEach((l) => steps[l.item_id].set(l.qty_needed));
+  $('rtCancel').onclick = closeSheet;
+  $('rtGo').onclick = async () => {
+    $('rtGo').disabled = true;
+    try {
+      const r = await api(`/bags/${encodeURIComponent(openBag)}/return`, { method: 'POST', body: {
+        user_name: getUser(),
+        returns: packedLines.map((l) => ({ item_id: l.item_id, qty_returned: steps[l.item_id].get() })),
+      }});
+      toast(`Bag returned — ${r.returned} back on the shelf, ${r.consumed} used up`);
+      closeSheet(); await reloadItems();
+    } catch (e) { toast('Error: ' + e.message); $('rtGo').disabled = false; }
+  };
 }
 
 // item picker sheet for assigning supplies to the open bag
@@ -874,17 +1047,23 @@ function openPicker() {
         </div>
         <div class="racts">${added
           ? '<span class="badge order">In bag ✓</span>'
-          : `<button class="sm-btn primary" data-add="${esc(it.id)}">＋ Add</button>`}</div>
+          : `<span data-pkstep="${esc(it.id)}"></span><button class="sm-btn primary" data-add="${esc(it.id)}">Add</button>`}</div>
       </div>`;
     }).join('') || '<div class="empty">No matches — create it as a new item.</div>';
+    const pkSteps = {};
+    $('pkRows').querySelectorAll('[data-pkstep]').forEach((el) => {
+      pkSteps[el.dataset.pkstep] = miniStep(el, { value: 1, min: 1 });
+    });
     $('pkRows').querySelectorAll('[data-add]').forEach((b) => b.onclick = async () => {
-      const qty = parseInt(prompt('How many needed for this video?', 1), 10);
-      if (!qty || qty <= 0) return;
+      const it = items.find((x) => x.id === b.dataset.add);
+      const qty = pkSteps[b.dataset.add].get();
       b.disabled = true;
       try {
         await api('/bag-items', { method: 'POST', body: { video_name: openBag, item_id: b.dataset.add, qty_needed: qty } });
         inBag.add(b.dataset.add);
-        toast('Added to bag');
+        toast(!it.uncounted && qty > it.remaining
+          ? `Added — only ${Math.max(0, it.remaining)} at office, send the shortfall to the shopping list from the bag`
+          : 'Added to bag');
         bagLines = await api('/bag-items');
         render();
       } catch (e) { toast('Error: ' + e.message); b.disabled = false; }

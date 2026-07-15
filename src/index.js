@@ -501,9 +501,14 @@ async function ensureMedTables(env) {
     env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_med_moves_created ON med_moves(created_at DESC)`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_videos (name TEXT PRIMARY KEY, created_at TEXT DEFAULT (datetime('now')))`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_categories (name TEXT PRIMARY KEY, icon TEXT, sort_order INTEGER DEFAULT 100)`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_bags (
+      video_name TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now')), done_at TEXT
+    )`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS med_bag_items (
       video_name TEXT NOT NULL, item_id TEXT NOT NULL, qty_needed INTEGER NOT NULL DEFAULT 1,
-      packed_move_id TEXT, note TEXT, created_at TEXT DEFAULT (datetime('now')),
+      packed_move_id TEXT, qty_returned INTEGER, return_move_id TEXT,
+      note TEXT, created_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (video_name, item_id)
     )`),
   ]);
@@ -676,6 +681,47 @@ async function handleMedSuppliesAPI(request, env, path) {
     }
 
     // ---- video bags (sim-lab packing lists) ----
+    if (sub === "bags" && method === "GET") {
+      const { results } = await env.DB.prepare("SELECT * FROM med_bags ORDER BY video_name DESC").all();
+      return ok(results);
+    }
+    const bagAction = sub.match(/^bags\/(.+)\/(return|reopen)$/);
+    if (bagAction && method === "POST") {
+      const video = decodeURIComponent(bagAction[1]);
+      const bag = await env.DB.prepare("SELECT * FROM med_bags WHERE video_name = ?").bind(video).first();
+      if (!bag) return fail("bag not found", 404);
+      if (bagAction[2] === "reopen") {
+        await env.DB.prepare("UPDATE med_bags SET status = 'active', done_at = NULL WHERE video_name = ?").bind(video).run();
+        return ok({ status: "active" });
+      }
+      // return: restock what came back; consumption = packed - returned
+      if (bag.status === "done") return fail("bag already returned");
+      const b = await request.json();
+      const returns = new Map((b.returns || []).map((r) => [r.item_id, r.qty_returned]));
+      const { results: lines } = await env.DB.prepare(
+        "SELECT * FROM med_bag_items WHERE video_name = ? AND packed_move_id IS NOT NULL AND return_move_id IS NULL")
+        .bind(video).all();
+      const stmts = [];
+      let returned = 0, consumed = 0;
+      for (const line of lines) {
+        let qty = returns.has(line.item_id) ? returns.get(line.item_id) : line.qty_needed;
+        if (!Number.isInteger(qty)) qty = 0;
+        qty = Math.max(0, Math.min(qty, line.qty_needed));
+        returned += qty; consumed += line.qty_needed - qty;
+        let moveId = null;
+        if (qty > 0) {
+          moveId = crypto.randomUUID();
+          stmts.push(env.DB.prepare(`INSERT INTO med_moves (id, item_id, type, qty_delta, user_name, video_name, note)
+            VALUES (?, ?, 'return', ?, ?, ?, 'returned from bag')`)
+            .bind(moveId, line.item_id, qty, b.user_name ?? null, video));
+        }
+        stmts.push(env.DB.prepare("UPDATE med_bag_items SET qty_returned = ?, return_move_id = ? WHERE video_name = ? AND item_id = ?")
+          .bind(qty, moveId, video, line.item_id));
+      }
+      stmts.push(env.DB.prepare("UPDATE med_bags SET status = 'done', done_at = datetime('now') WHERE video_name = ?").bind(video));
+      await env.DB.batch(stmts);
+      return ok({ status: "done", returned, consumed });
+    }
     if (sub === "bag-items" && method === "GET") {
       const { results } = await env.DB.prepare(`
         SELECT b.*, i.name AS item_name FROM med_bag_items b
@@ -692,6 +738,8 @@ async function handleMedSuppliesAPI(request, env, path) {
       if (!item) return fail("item not found", 404);
       await env.DB.batch([
         env.DB.prepare("INSERT OR IGNORE INTO med_videos (name) VALUES (?)").bind(video),
+        env.DB.prepare("INSERT OR IGNORE INTO med_bags (video_name) VALUES (?)").bind(video),
+        env.DB.prepare("UPDATE med_bags SET status = 'active', done_at = NULL WHERE video_name = ?").bind(video),
         env.DB.prepare(`INSERT INTO med_bag_items (video_name, item_id, qty_needed, note) VALUES (?, ?, ?, ?)
           ON CONFLICT(video_name, item_id) DO UPDATE SET qty_needed = excluded.qty_needed, note = COALESCE(excluded.note, note)`)
           .bind(video, b.item_id, qty, b.note ?? null),
@@ -736,6 +784,7 @@ async function handleMedSuppliesAPI(request, env, path) {
         .bind(b.video_name || "", b.item_id || "").first();
       if (!line) return fail("bag line not found", 404);
       if (!line.packed_move_id) return fail("not packed");
+      if (line.return_move_id) return fail("bag already returned — reopen it first");
       await env.DB.batch([
         env.DB.prepare("DELETE FROM med_moves WHERE id = ? AND counted = 1").bind(line.packed_move_id),
         env.DB.prepare("UPDATE med_bag_items SET packed_move_id = NULL WHERE video_name = ? AND item_id = ?")
@@ -746,7 +795,10 @@ async function handleMedSuppliesAPI(request, env, path) {
     const bagMatch = sub.match(/^bags\/(.+)$/);
     if (bagMatch && method === "DELETE") {
       const video = decodeURIComponent(bagMatch[1]);
-      const r = await env.DB.prepare("DELETE FROM med_bag_items WHERE video_name = ?").bind(video).run();
+      const [r] = await env.DB.batch([
+        env.DB.prepare("DELETE FROM med_bag_items WHERE video_name = ?").bind(video),
+        env.DB.prepare("DELETE FROM med_bags WHERE video_name = ?").bind(video),
+      ]);
       return ok({ deleted_lines: r.meta.changes });
     }
 
