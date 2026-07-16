@@ -4285,6 +4285,49 @@ async function handleIcpAPI(request, env, path) {
       }), { headers: cors });
     }
 
+    if (path === "/icp/api/icp-product-mix" && request.method === "GET") {
+      // Composition table: for each product (variants merged), the % of its buyers in
+      // each of the 3 ICPs. Rows sum to 100%. Other-HC + Educators excluded from the
+      // denominator. Exact all-time Shopify data (affinity_counts).
+      const url = new URL(request.url);
+      const minBuyers = Math.max(1, parseInt(url.searchParams.get("min_buyers") || "15"));
+      await ensureAffinityTables(env.DB);
+      const rows = (await db.prepare(`SELECT product, sku, stage, buyers FROM affinity_counts`).all()).results;
+
+      const PRE = "Pre-nursing / A&P student";
+      const YR = "Nursing student (Year 1–2)";
+      const FINAL = "Nursing student (Final year / NCLEX prep)";
+      const NG = "New grad nurse (on the floor)";
+      const bucketOf = (stage) => stage === PRE ? "pre"
+        : stage === YR ? "nur"
+        : (stage === FINAL || stage === NG) ? "ncl" : null; // Other-HC / Educator -> excluded
+
+      const byProduct = new Map();
+      for (const r of rows) {
+        const b = bucketOf(r.stage);
+        if (!b) continue;
+        const name = canonicalizeProduct(r.product);
+        if (!byProduct.has(name)) byProduct.set(name, { product: name, pre: 0, nur: 0, ncl: 0 });
+        byProduct.get(name)[b] += r.buyers || 0;
+      }
+
+      const out = [];
+      for (const e of byProduct.values()) {
+        const total = e.pre + e.nur + e.ncl;
+        if (total < minBuyers) continue;
+        out.push({
+          product: e.product,
+          icp_buyers: total,
+          pre: { n: e.pre, pct: e.pre / total },
+          nur: { n: e.nur, pct: e.nur / total },
+          ncl: { n: e.ncl, pct: e.ncl / total },
+        });
+      }
+      out.sort((a, b) => b.icp_buyers - a.icp_buyers);
+      const lastCompleted = await icpState(env, "affinity_last_completed");
+      return new Response(JSON.stringify({ min_buyers: minBuyers, last_completed: lastCompleted, rows: out }), { headers: cors });
+    }
+
     if (path === "/icp/api/first-purchase" && request.method === "GET") {
       const url = new URL(request.url);
       const days = parseInt(url.searchParams.get("days") || "365");
@@ -4742,6 +4785,17 @@ async function tickStageMetafieldSync(env) {
 // customers (same as the stage sync), and for each that has the stage metafield pulls
 // their orders' line items. Resumable via a customer-page cursor; idempotent per
 // customer via affinity_customers (so resumes/overlaps don't double-count buyers).
+
+// Collapse SKU/title variants of the same product to one canonical name: drop
+// ®/™/© marks and a trailing "| <year>", collapse whitespace. (e.g. the several
+// "Complete Nursing School Bundle" variants → one.)
+function canonicalizeProduct(name) {
+  return String(name || "(unknown)")
+    .replace(/[®™©]/g, "")
+    .replace(/\s*\|\s*20\d\d\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 async function ensureAffinityTables(db) {
   await db.batch([

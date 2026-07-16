@@ -448,6 +448,81 @@ function StageAffinity({ days }) {
   );
 }
 
+function ProductIcpMix() {
+  const [minBuyers, setMinBuyers] = useState(15);
+  const { data, error, loading } = useApi(`/icp/api/icp-product-mix?source=shopify&min_buyers=${minBuyers}`, [minBuyers]);
+  const [copied, setCopied] = useState(false);
+
+  const rows = data?.rows || [];
+  const copyCsv = () => {
+    const header = ["Product", "ICP buyers", "Pre-Nursing %", "Nursing (Yr 1-2) %", "NCLEX %"];
+    const lines = [header.join(",")].concat(rows.map(r => [
+      '"' + r.product.replace(/"/g, '""') + '"',
+      r.icp_buyers,
+      Math.round(r.pre.pct * 100),
+      Math.round(r.nur.pct * 100),
+      Math.round(r.ncl.pct * 100),
+    ].join(",")));
+    const csv = lines.join("\n");
+    navigator.clipboard.writeText(csv).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+
+  if (loading) return <div className="panel"><div className="loading">Loading product × ICP mix…</div></div>;
+  if (error) return <div className="panel"><div className="error">{error}</div></div>;
+
+  return (
+    <div className="panel">
+      <h2>Products × ICP <span className="badge">exact · all-time Shopify</span></h2>
+      <div className="row" style={{marginBottom: 12, flexWrap: "wrap"}}>
+        <span style={{fontSize: 13, color: "var(--muted)"}}>Min buyers:</span>
+        <select value={minBuyers} onChange={e => setMinBuyers(parseInt(e.target.value))}>
+          <option value={5}>5</option>
+          <option value={15}>15</option>
+          <option value={25}>25</option>
+          <option value={50}>50</option>
+        </select>
+        <button onClick={copyCsv} disabled={!rows.length}>{copied ? "✓ Copied" : "Copy as CSV"}</button>
+        {data?.last_completed && <span style={{fontSize: 12, color: "#64748b"}}>data as of {fmtDate(data.last_completed)}</span>}
+      </div>
+
+      {!rows.length && <div className="empty">No products above this buyer threshold yet.</div>}
+
+      {rows.length > 0 && (
+        <div style={{overflowX: "auto"}}>
+          <table>
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th className="num">ICP buyers</th>
+                <th className="num">Pre-Nursing</th>
+                <th className="num">Nursing (Yr 1–2)</th>
+                <th className="num">NCLEX</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td className="product-cell" title={r.product}>{r.product}</td>
+                  <td className="num">{fmtNum(r.icp_buyers)}</td>
+                  <td className="num">{Math.round(r.pre.pct * 100)}%</td>
+                  <td className="num">{Math.round(r.nur.pct * 100)}%</td>
+                  <td className="num">{Math.round(r.ncl.pct * 100)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="help">
+        <strong>Composition:</strong> of everyone who bought a product (and has an ICP), the % in each ICP — rows sum to 100%.
+        Product variants (©, ™, "| 2026", etc.) are merged. <strong>NCLEX</strong> = final-semester + new-grad;
+        Other-HC and Nurse-educator buyers are excluded. Exact, all-time Shopify order history.
+      </div>
+    </div>
+  );
+}
+
 function FirstPurchase({ days }) {
   const { data, error, loading } = useApi(`/icp/api/first-purchase?days=${days}`, [days]);
   const grouped = useMemo(() => {
@@ -553,6 +628,7 @@ function App() {
         <div className={"tab " + (tab === "overview" ? "active" : "")} onClick={() => setTab("overview")}>Segment overview</div>
         <div className={"tab " + (tab === "products" ? "active" : "")} onClick={() => setTab("products")}>Product × segment</div>
         <div className={"tab " + (tab === "affinity" ? "active" : "")} onClick={() => setTab("affinity")}>Stage affinity</div>
+        <div className={"tab " + (tab === "icpmix" ? "active" : "")} onClick={() => setTab("icpmix")}>Products × ICP</div>
         <div className={"tab " + (tab === "first" ? "active" : "")} onClick={() => setTab("first")}>Gateway products</div>
       </div>
 
@@ -574,6 +650,7 @@ function App() {
       {tab === "overview" && <SegmentSummary days={days} />}
       {tab === "products" && <ProductCrossTab days={days} />}
       {tab === "affinity" && <StageAffinity days={days} />}
+      {tab === "icpmix" && <ProductIcpMix />}
       {tab === "first" && <FirstPurchase days={days} />}
     </div>
   );
