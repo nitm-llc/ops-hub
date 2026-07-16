@@ -5001,6 +5001,43 @@ async function tickStageAffinity(env) {
   }
 }
 
+// Weekly refresh state machine (cron-driven): keeps the exact ICP analysis current
+// without a heavy scan every night. Phase 1 re-syncs Klaviyo profiles (refreshes each
+// customer's CURRENT stage), in safe ~50-page chunks per tick; when complete, phase 2
+// restarts the exact affinity build (refreshes order data), advanced by
+// tickStageAffinity. Runs at most once every 7 days. Deploying with no prior
+// completion makes it due immediately (doubles as a manual kick).
+async function tickWeeklyIcpRefresh(env) {
+  if (!env.SHOPIFY_ACCESS_TOKEN || !env.KLAVIYO_API_KEY) return;
+  const phase = await icpState(env, "weekly_refresh_phase");
+
+  if (phase === null) {
+    const last = await icpState(env, "weekly_refresh_completed");
+    const due = !last || (Date.now() - new Date(last).getTime()) > 7 * 24 * 60 * 60 * 1000;
+    if (!due) return;
+    if ((await icpState(env, "affinity_running")) !== null) return; // don't collide with a manual build
+    await icpState(env, "weekly_refresh_phase", "profiles");
+    await icpState(env, "weekly_refresh_started", new Date().toISOString());
+    const r = await syncIcpProfiles(env, { restart: true, maxPagesPerSegment: 50 });
+    if (r.complete) { await icpState(env, "weekly_refresh_phase", "affinity"); await beginAffinityRun(env); }
+    return;
+  }
+
+  if (phase === "profiles") {
+    const r = await syncIcpProfiles(env, { maxPagesPerSegment: 50 });
+    if (r.complete) { await icpState(env, "weekly_refresh_phase", "affinity"); await beginAffinityRun(env); }
+    return;
+  }
+
+  if (phase === "affinity") {
+    // tickStageAffinity advances the build; when it finishes (affinity_running cleared) the cycle is done.
+    if ((await icpState(env, "affinity_running")) === null) {
+      await icpState(env, "weekly_refresh_completed", new Date().toISOString());
+      await icpState(env, "weekly_refresh_phase", null);
+    }
+  }
+}
+
 // ===== MAIN WORKER =====
 
 // ===== LIST GROWTH MODULE =====
@@ -6034,6 +6071,10 @@ export default {
     // Advance an in-progress exact stage-affinity build (user-kicked; not auto-started).
     ctx.waitUntil((async () => {
       try { await tickStageAffinity(env); } catch (e) { /* cron sync errors are non-fatal */ }
+    })());
+    // Weekly refresh: re-sync Klaviyo profiles (stages) then rebuild exact affinity (orders).
+    ctx.waitUntil((async () => {
+      try { await tickWeeklyIcpRefresh(env); } catch (e) { /* cron sync errors are non-fatal */ }
     })());
   },
 };
