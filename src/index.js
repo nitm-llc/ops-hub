@@ -4986,7 +4986,7 @@ async function runAffinityBatch(env, { pagesPerRun = 20 } = {}) {
 }
 
 // Manual driver: restart clears prior counts; full loops pages within a budget.
-async function buildStageAffinity(env, { restart = false, full = false, pagesPerRun = 20, pageBudget = 50 } = {}) {
+async function buildStageAffinity(env, { restart = false, full = false, pagesPerRun = 40, pageBudget = 250 } = {}) {
   await ensureAffinityTables(env.DB);
   const inProgress = (await icpState(env, "affinity_running")) !== null;
   if (restart || !inProgress) await beginAffinityRun(env);
@@ -5009,7 +5009,7 @@ async function tickStageAffinity(env) {
   const lastError = await icpState(env, "affinity_last_error_at");
   if (lastError && (Date.now() - new Date(lastError).getTime()) < 60 * 60 * 1000) return;
   try {
-    await runAffinityBatch(env, { pagesPerRun: 40 });
+    await runAffinityBatch(env, { pagesPerRun: 120 });
   } catch (e) {
     await icpState(env, "affinity_last_error_at", new Date().toISOString());
     await icpState(env, "affinity_last_error", String(e.message || e).slice(0, 300));
