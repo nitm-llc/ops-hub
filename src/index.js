@@ -4498,23 +4498,37 @@ async function shopifyGraphQL(env, shopDomain, query, variables, { maxRetries = 
       body: JSON.stringify({ query, variables }),
     });
 
-    if (res.status === 429) {
-      if (attempt++ >= maxRetries) throw new Error("Shopify 429 rate limited (max retries)");
+    // Retry transient transport errors: 429 rate limit + 5xx gateway/server errors
+    // (502/503/504 return non-JSON bodies, so parse them only after this check).
+    if (res.status === 429 || res.status >= 500) {
+      if (attempt++ >= maxRetries) throw new Error(`Shopify HTTP ${res.status} (max retries)`);
       if (counters) counters.throttle_retries = (counters.throttle_retries || 0) + 1;
-      await stageSleep(Math.min(4000, 500 * Math.pow(2, attempt)));
+      await stageSleep(Math.min(8000, 500 * Math.pow(2, attempt)));
       continue;
     }
 
-    const json = await res.json();
+    let json;
+    try {
+      json = await res.json();
+    } catch (e) {
+      // Non-JSON body on a non-5xx status (rare) — treat as transient and retry.
+      if (attempt++ >= maxRetries) throw new Error(`Shopify non-JSON response (HTTP ${res.status})`);
+      await stageSleep(Math.min(8000, 500 * Math.pow(2, attempt)));
+      continue;
+    }
+
     const errs = json.errors || [];
+    // THROTTLED and Shopify-side INTERNAL_SERVER_ERROR are both transient — back off + retry.
     const throttled = errs.some((e) => e?.extensions?.code === "THROTTLED");
-    if (throttled) {
-      if (attempt++ >= maxRetries) throw new Error("Shopify GraphQL THROTTLED (max retries)");
+    const serverErr = errs.some((e) => e?.extensions?.code === "INTERNAL_SERVER_ERROR");
+    if (throttled || serverErr) {
+      if (attempt++ >= maxRetries) throw new Error("Shopify GraphQL " + (throttled ? "THROTTLED" : "INTERNAL_SERVER_ERROR") + " (max retries)");
       if (counters) counters.throttle_retries = (counters.throttle_retries || 0) + 1;
       const cost = json.extensions?.cost;
       const restore = cost?.throttleStatus?.restoreRate || 50;
       const needed = cost?.requestedQueryCost || 100;
-      await stageSleep(Math.min(4000, Math.max(500, Math.ceil((needed / restore) * 1000))));
+      const wait = throttled ? Math.ceil((needed / restore) * 1000) : 500 * Math.pow(2, attempt);
+      await stageSleep(Math.min(8000, Math.max(500, wait)));
       continue;
     }
     if (errs.length) throw new Error("Shopify GraphQL: " + JSON.stringify(errs).slice(0, 400));
@@ -4894,6 +4908,7 @@ async function beginAffinityRun(env) {
   await icpState(env, "affinity_cursor", null);
   await icpState(env, "affinity_summary", null);
   await icpState(env, "affinity_last_error", null);
+  await icpState(env, "affinity_last_error_at", null); // clear backoff so a fresh build advances immediately
 }
 
 async function runAffinityBatch(env, { pagesPerRun = 20 } = {}) {
