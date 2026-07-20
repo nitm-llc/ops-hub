@@ -3908,30 +3908,43 @@ async function syncIcpProfiles(env, opts = {}) {
 
     let pages = 0;
     let writtenThisSegment = 0;
+    let missing = false;
 
-    while (url && pages < maxPagesPerSegment) {
-      const data = await klaviyoFetch(url, env);
-      const profiles = data.data || [];
+    try {
+      while (url && pages < maxPagesPerSegment) {
+        const data = await klaviyoFetch(url, env);
+        const profiles = data.data || [];
 
-      if (profiles.length > 0) {
-        const stmts = profiles.map(p =>
-          db.prepare(
-            `INSERT OR REPLACE INTO icp_profiles (profile_id, email, role_or_stage, created_kl, updated_kl, synced_at)
-             VALUES (?, ?, ?, ?, ?, datetime('now'))`
-          ).bind(
-            p.id,
-            p.attributes?.email || null,
-            role,
-            p.attributes?.created || null,
-            p.attributes?.updated || null,
-          )
-        );
-        await db.batch(stmts);
-        writtenThisSegment += profiles.length;
+        if (profiles.length > 0) {
+          const stmts = profiles.map(p =>
+            db.prepare(
+              `INSERT OR REPLACE INTO icp_profiles (profile_id, email, role_or_stage, created_kl, updated_kl, synced_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))`
+            ).bind(
+              p.id,
+              p.attributes?.email || null,
+              role,
+              p.attributes?.created || null,
+              p.attributes?.updated || null,
+            )
+          );
+          await db.batch(stmts);
+          writtenThisSegment += profiles.length;
+        }
+
+        url = data.links?.next || null;
+        pages++;
       }
-
-      url = data.links?.next || null;
-      pages++;
+    } catch (e) {
+      // A deleted/renamed Klaviyo segment 404s — skip it (mark done) instead of
+      // stalling the whole sync. Other errors still throw.
+      if (/404|not_found|does not exist/i.test(String(e.message || e))) {
+        missing = true;
+        url = null;
+        result.by_segment[role] = { skipped: true, missing_segment: segmentId };
+      } else {
+        throw e;
+      }
     }
 
     // Save cursor for this segment (empty if we finished it)
@@ -3942,7 +3955,7 @@ async function syncIcpProfiles(env, opts = {}) {
     result.profiles_synced += writtenThisSegment;
     result.total_pages += pages;
     result.segments_processed++;
-    result.by_segment[role] = { synced: writtenThisSegment, pages, complete: !url };
+    if (!missing) result.by_segment[role] = { synced: writtenThisSegment, pages, complete: !url };
 
     if (!url) {
       // Mark this segment as fully done
