@@ -4964,7 +4964,15 @@ async function runAffinityBatch(env, { pagesPerRun = 20 } = {}) {
       // Idempotency: count each staged customer at most once across resumes.
       const ins = await env.DB.prepare(`INSERT OR IGNORE INTO affinity_customers (gid) VALUES (?)`).bind(node.id).run();
       if (!ins.meta?.changes) continue; // already counted
-      const skus = await affinityCustomerSkus(env, shopDomain, node.id, counters);
+      let skus;
+      try {
+        skus = await affinityCustomerSkus(env, shopDomain, node.id, counters);
+      } catch (e) {
+        // Order pull failed (after retries): un-mark so a later pass retries this
+        // customer instead of leaving them counted-but-empty (which undercounts).
+        await env.DB.prepare(`DELETE FROM affinity_customers WHERE gid = ?`).bind(node.id).run();
+        throw e;
+      }
       running.orders_customers++;
       const stmts = [ env.DB.prepare(
         `INSERT INTO affinity_stage_totals (stage, buyers) VALUES (?, 1)
