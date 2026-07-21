@@ -865,6 +865,143 @@ async function handle3plAPI(request, env, path) {
     updated_at TEXT DEFAULT (datetime('now'))
   )`).run();
 
+  // Order lifecycle timestamps from the ShipMonk orders CSV export (the API
+  // doesn't expose submit/deliver timestamps). Keyed by Order Key, separate
+  // from tpl_orders (API sync, keyed by shipment_id) so neither clobbers the other.
+  await env.DB.batch([
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS tpl_order_phases (
+      order_key TEXT PRIMARY KEY,
+      order_number TEXT,
+      order_status TEXT,
+      shipping_status TEXT,
+      shipping_method TEXT,
+      warehouse TEXT,
+      store TEXT,
+      country TEXT,
+      state TEXT,
+      shipping_zone TEXT,
+      ordered_at TEXT,
+      submitted_at TEXT,
+      shipped_at TEXT,
+      delivered_at TEXT,
+      tracking_number TEXT,
+      item_quantity INTEGER DEFAULT 0,
+      weight_oz REAL DEFAULT 0,
+      order_total REAL DEFAULT 0,
+      shipping_cost REAL DEFAULT 0,
+      packaging_cost REAL DEFAULT 0,
+      pick_pack_cost REAL DEFAULT 0,
+      customer_shipping_paid REAL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS tpl_sla_targets (
+      shipping_method TEXT PRIMARY KEY,
+      transit_business_days REAL NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`),
+    env.DB.prepare(`INSERT OR IGNORE INTO tpl_sla_targets (shipping_method, transit_business_days) VALUES
+      ('ShipMonk 2 Day', 2),
+      ('UPS Next Day Air (by 10:30 AM next day)', 1),
+      ('UPS 2nd Day Air (by end of the day in two days)', 2),
+      ('ShipMonk Economy', 5),
+      ('ShipMonk Standard', 5),
+      ('USPS Priority Mail', 3),
+      ('Passport Priority DDP', 12)`),
+  ]);
+
+  // GET /3pl/api/phases — all order lifecycle rows
+  if (path === "/3pl/api/phases" && request.method === "GET") {
+    try {
+      const { results } = await env.DB.prepare("SELECT * FROM tpl_order_phases ORDER BY ordered_at DESC").all();
+      return new Response(JSON.stringify({ success: true, data: results, count: results.length }), { headers: cors });
+    } catch (e) {
+      return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: cors });
+    }
+  }
+
+  // POST /3pl/api/phases — upsert CSV-imported orders by order_key
+  if (path === "/3pl/api/phases" && request.method === "POST") {
+    try {
+      const body = await request.json();
+      const orders = body.orders || [];
+      if (orders.length === 0) return new Response(JSON.stringify({ success: true, received: 0 }), { headers: cors });
+
+      const batchSize = 25;
+      for (let i = 0; i < orders.length; i += batchSize) {
+        const batch = orders.slice(i, i + batchSize);
+        const stmts = batch.map(o => env.DB.prepare(`INSERT INTO tpl_order_phases (
+            order_key, order_number, order_status, shipping_status, shipping_method,
+            warehouse, store, country, state, shipping_zone,
+            ordered_at, submitted_at, shipped_at, delivered_at, tracking_number,
+            item_quantity, weight_oz, order_total, shipping_cost, packaging_cost,
+            pick_pack_cost, customer_shipping_paid, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+          ON CONFLICT(order_key) DO UPDATE SET
+            order_number=excluded.order_number, order_status=excluded.order_status,
+            shipping_status=excluded.shipping_status, shipping_method=excluded.shipping_method,
+            warehouse=excluded.warehouse, store=excluded.store, country=excluded.country,
+            state=excluded.state, shipping_zone=excluded.shipping_zone,
+            ordered_at=excluded.ordered_at, submitted_at=excluded.submitted_at,
+            shipped_at=excluded.shipped_at, delivered_at=excluded.delivered_at,
+            tracking_number=excluded.tracking_number, item_quantity=excluded.item_quantity,
+            weight_oz=excluded.weight_oz, order_total=excluded.order_total,
+            shipping_cost=excluded.shipping_cost, packaging_cost=excluded.packaging_cost,
+            pick_pack_cost=excluded.pick_pack_cost, customer_shipping_paid=excluded.customer_shipping_paid,
+            updated_at=datetime('now')
+          `).bind(
+            o.orderKey, o.orderNumber, o.orderStatus, o.shippingStatus, o.shippingMethod,
+            o.warehouse, o.store, o.country, o.state, o.shippingZone,
+            o.orderedAt, o.submittedAt, o.shippedAt, o.deliveredAt, o.trackingNumber,
+            o.itemQuantity || 0, o.weightOz || 0, o.orderTotal || 0, o.shippingCost || 0,
+            o.packagingCost || 0, o.pickPackCost || 0, o.customerShippingPaid || 0
+          ));
+        await env.DB.batch(stmts);
+      }
+      return new Response(JSON.stringify({ success: true, received: orders.length }), { headers: cors });
+    } catch (e) {
+      return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: cors });
+    }
+  }
+
+  // DELETE /3pl/api/phases — clear phase data only (leaves tpl_orders intact)
+  if (path === "/3pl/api/phases" && request.method === "DELETE") {
+    try {
+      await env.DB.prepare("DELETE FROM tpl_order_phases").run();
+      return new Response(JSON.stringify({ success: true }), { headers: cors });
+    } catch (e) {
+      return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: cors });
+    }
+  }
+
+  // GET /3pl/api/sla-targets — transit-day targets per shipping method
+  if (path === "/3pl/api/sla-targets" && request.method === "GET") {
+    try {
+      const { results } = await env.DB.prepare("SELECT * FROM tpl_sla_targets ORDER BY shipping_method").all();
+      return new Response(JSON.stringify({ success: true, data: results }), { headers: cors });
+    } catch (e) {
+      return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: cors });
+    }
+  }
+
+  // POST /3pl/api/sla-targets — upsert targets
+  if (path === "/3pl/api/sla-targets" && request.method === "POST") {
+    try {
+      const body = await request.json();
+      const targets = body.targets || [];
+      const stmts = targets
+        .filter(t => t.shippingMethod && Number.isFinite(Number(t.transitBusinessDays)))
+        .map(t => env.DB.prepare(`INSERT INTO tpl_sla_targets (shipping_method, transit_business_days, updated_at)
+          VALUES (?, ?, datetime('now'))
+          ON CONFLICT(shipping_method) DO UPDATE SET
+            transit_business_days=excluded.transit_business_days, updated_at=datetime('now')`)
+          .bind(t.shippingMethod, Number(t.transitBusinessDays)));
+      if (stmts.length) await env.DB.batch(stmts);
+      return new Response(JSON.stringify({ success: true, saved: stmts.length }), { headers: cors });
+    } catch (e) {
+      return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: cors });
+    }
+  }
+
   // GET /3pl/api/orders — return all orders
   if (path === "/3pl/api/orders" && request.method === "GET") {
     try {

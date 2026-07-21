@@ -311,6 +311,24 @@
         .comparison-table .trend.up-bad { color: var(--accent-red); background: var(--accent-red-dim); }
         .comparison-table .trend.down-good { color: var(--accent-green); background: var(--accent-green-dim); }
 
+        .phase-sub { font-size: 12.5px; color: var(--text-muted); line-height: 1.7; }
+        .phase-sub .mono { font-family: 'JetBrains Mono', monospace; color: var(--text-secondary); }
+        .sla-input {
+            width: 64px; padding: 6px 8px; background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: 6px; color: var(--text-primary); font-size: 13px;
+            font-family: 'JetBrains Mono', monospace; text-align: center;
+        }
+        .sla-input:focus { outline: none; border-color: var(--accent-blue); }
+        .ontime-pill { display: inline-block; padding: 3px 10px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-weight: 600; font-size: 13px; }
+        .ontime-pill.good { background: var(--accent-green-dim); color: var(--accent-green); }
+        .ontime-pill.ok { background: var(--accent-amber-dim); color: var(--accent-amber); }
+        .ontime-pill.bad { background: var(--accent-red-dim); color: var(--accent-red); }
+        .phase-flag {
+            display: flex; align-items: center; gap: 10px; padding: 12px 16px; margin-bottom: 16px;
+            background: var(--accent-amber-dim); border: 1px solid rgba(245, 158, 11, 0.35);
+            border-radius: var(--radius-sm); color: var(--accent-amber); font-size: 14px;
+        }
+
         @media (max-width: 768px) {
             .container { padding: 16px; }
             .charts-section { grid-template-columns: 1fr; }
@@ -345,6 +363,7 @@
         <div class="tab-nav">
             <button class="tab-btn active" data-tab="overview">Overview</button>
             <button class="tab-btn" data-tab="delivery-analysis">Delivery Status</button>
+            <button class="tab-btn" data-tab="shipping-phases">Shipping Phases</button>
         </div>
 
         <div class="sync-bar" style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
@@ -539,6 +558,146 @@
                     <p class="section-desc">In-transit and undeliverable orders</p>
                     <div class="analysis-table-wrapper">
                         <table class="analysis-table"><thead><tr><th>Order #</th><th>Status</th><th>Carrier</th><th>Service</th><th>State</th><th>Shipped</th></tr></thead><tbody id="dsAttentionBody"></tbody></table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Shipping Phases tab lives OUTSIDE dashboardContent: it has its own
+             data source (ShipMonk orders CSV) and must work even when the
+             API-synced order data is empty. -->
+        <div class="tab-content" id="tab-shipping-phases">
+            <div class="analysis-header">
+                <h2>Shipping Phases</h2>
+                <p>Order lifecycle timing from the ShipMonk orders CSV export — all timestamps UTC. Cancelled and Amazon FBA ("Fulfilled by 3rd") orders are excluded from phase stats.</p>
+            </div>
+
+            <div class="upload-zone" id="phasesUploadZone" onclick="document.getElementById('phasesFileInput').click()">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+                <h3>Upload ShipMonk Orders Export (.csv)</h3>
+                <p>ShipMonk → Orders → Export. Re-upload anytime — orders merge by Order Key. Upload the newest export last.</p>
+                <input type="file" id="phasesFileInput" accept=".csv" onchange="handlePhasesUpload(this)">
+                <div class="upload-progress" id="phasesProgress" onclick="event.stopPropagation()">
+                    <div class="progress-bar"><div class="progress-fill" id="phasesProgressFill"></div></div>
+                    <div class="progress-text" id="phasesProgressText"></div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;margin:-16px 0 24px;flex-wrap:wrap;">
+                <span id="phasesDbStatus" style="color:var(--text-muted);font-size:13px;">—</span>
+                <button class="btn-clear" id="phasesClearBtn" style="margin-left:auto;">Clear phase data</button>
+            </div>
+
+            <div class="controls-bar" id="phasesControls" style="display:none;">
+                <div class="control-group">
+                    <label>Ordered From</label>
+                    <input type="date" id="phDateFrom">
+                </div>
+                <div class="control-group">
+                    <label>Ordered To</label>
+                    <input type="date" id="phDateTo">
+                </div>
+                <div class="control-group">
+                    <label>Shipping Method</label>
+                    <select id="phMethod"><option value="">All methods</option></select>
+                </div>
+                <div class="control-group">
+                    <label>Warehouse</label>
+                    <select id="phWarehouse"><option value="">All warehouses</option></select>
+                </div>
+                <div class="control-group">
+                    <label>Store</label>
+                    <select id="phStore"><option value="">All stores</option></select>
+                </div>
+                <div class="control-group">
+                    <label>Destination</label>
+                    <select id="phDest">
+                        <option value="">All destinations</option>
+                        <option value="domestic">Domestic US</option>
+                        <option value="intl">International</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="empty-state" id="phasesEmptyState">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <h3>No phase data yet</h3>
+                <p>Upload a ShipMonk orders CSV export to see how long each stage of shipping takes</p>
+            </div>
+
+            <div id="phasesContent" style="display:none;">
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Order → Submitted</span>
+                            <div class="metric-icon purple"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="phKpiO2S">—</div>
+                        <div class="phase-sub" id="phKpiO2SSub"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Submitted → Shipped (Pick/Pack)</span>
+                            <div class="metric-icon amber"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="phKpiS2Sh">—</div>
+                        <div class="phase-sub" id="phKpiS2ShSub"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Shipped → Delivered (Transit)</span>
+                            <div class="metric-icon blue"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" /><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="phKpiSh2D">—</div>
+                        <div class="phase-sub" id="phKpiSh2DSub"></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-label">Order → Delivered (Total)</span>
+                            <div class="metric-icon green"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg></div>
+                        </div>
+                        <div class="metric-value" id="phKpiTotal">—</div>
+                        <div class="phase-sub" id="phKpiTotalSub"></div>
+                    </div>
+                </div>
+
+                <div class="charts-section">
+                    <div class="chart-card">
+                        <h3>Where the Time Goes — median days per phase by method</h3>
+                        <div class="chart-container"><canvas id="phaseStackChart"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h3>Order → Delivery Distribution (calendar days)</h3>
+                        <div class="chart-container"><canvas id="phaseHistChart"></canvas></div>
+                    </div>
+                </div>
+
+                <div class="analysis-section">
+                    <h3>Shipping Method Performance</h3>
+                    <p class="section-desc">Calendar days shown as median (p90). Transit target is in business days (weekdays) — edit and it saves for everyone. On-time = delivered within the target counted in business days after shipping.</p>
+                    <div class="analysis-table-wrapper">
+                        <table class="analysis-table">
+                            <thead><tr>
+                                <th>Method</th><th>Delivered</th><th>Ord→Sub</th><th>Sub→Ship</th><th>Ship→Del</th><th>Total</th>
+                                <th>Transit (biz days)</th><th>Target</th><th>On-time</th><th>Avg Ship Cost</th><th>Cust Paid</th>
+                            </tr></thead>
+                            <tbody id="phMethodTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="analysis-section">
+                    <h3>In-Flight Orders</h3>
+                    <p class="section-desc">Orders not yet delivered (excludes Cancelled / FBA). Age measured from time ordered; ages grow stale as the export ages — re-upload for fresh numbers.</p>
+                    <div id="phAgingFlag"></div>
+                    <div class="analysis-table-wrapper">
+                        <table class="analysis-table">
+                            <thead><tr><th>Status</th><th>Orders</th><th>Median Age (d)</th><th>Oldest (d)</th></tr></thead>
+                            <tbody id="phAgingTableBody"></tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -1139,9 +1298,467 @@
                 document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
                 btn.classList.add('active');
                 document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+                // Sync bar / date controls / empty state belong to the API-synced tabs;
+                // Shipping Phases has its own upload, filters, and empty state.
+                const isPhases = btn.dataset.tab === 'shipping-phases';
+                document.querySelector('.sync-bar').style.display = isPhases ? 'none' : 'flex';
+                document.querySelector('.controls-bar:not(#phasesControls)').style.display = isPhases ? 'none' : 'flex';
+                emptyState.style.display = (isPhases || masterData.length > 0) ? 'none' : 'block';
                 if (btn.dataset.tab === 'delivery-analysis') updateDeliveryStatus();
+                if (isPhases) initShippingPhases();
             });
         });
+
+        // ===== SHIPPING PHASES (ShipMonk orders CSV) =====
+        let phaseData = [];
+        let slaTargets = {};
+        let phaseStackChart = null;
+        let phaseHistChart = null;
+        let phasesInitialized = false;
+        let lastImportMsg = '';
+
+        const PHASE_EXCLUDED = d => d.orderStatus === 'Cancelled' || d.orderStatus === 'Fulfilled by 3rd';
+        const parseUTC = s => s ? new Date(s.replace(' ', 'T') + 'Z') : null;
+        const calDays = (a, b) => (parseUTC(b) - parseUTC(a)) / 86400000;
+        const median = arr => { if (!arr.length) return null; const s = [...arr].sort((x, y) => x - y); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+        const pct = (arr, q) => { if (!arr.length) return null; const s = [...arr].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * q))]; };
+        const fmtD = n => n === null ? '—' : n.toFixed(1);
+
+        // Business days (weekdays) elapsed between two UTC timestamps:
+        // ship Friday → deliver Monday counts as 1.
+        function businessDaysBetween(aStr, bStr) {
+            const a = parseUTC(aStr), b = parseUTC(bStr);
+            if (!a || !b || b < a) return null;
+            let count = 0;
+            const d = new Date(Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate()));
+            const end = Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate());
+            let guard = 0;
+            while (d.getTime() < end && guard++ < 2000) {
+                d.setUTCDate(d.getUTCDate() + 1);
+                const dow = d.getUTCDay();
+                if (dow !== 0 && dow !== 6) count++;
+            }
+            return count;
+        }
+
+        // ShipMonk exports prefix some numerics with an apostrophe ('-366.08)
+        function cleanNum(str) {
+            if (str === null || str === undefined) return 0;
+            const n = parseFloat(String(str).replace(/^'/, '').replace(/[$,\s]/g, ''));
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        // RFC-4180 parser: quoted headers, "" escapes, newlines inside quotes —
+        // the ShipMonk orders export needs all three (the older parseCSV doesn't handle them).
+        function parseCSVRobust(text) {
+            const rows = [];
+            let row = [], field = '', inQuotes = false;
+            for (let i = 0; i < text.length; i++) {
+                const c = text[i];
+                if (inQuotes) {
+                    if (c === '"') {
+                        if (text[i + 1] === '"') { field += '"'; i++; }
+                        else inQuotes = false;
+                    } else field += c;
+                } else if (c === '"') inQuotes = true;
+                else if (c === ',') { row.push(field); field = ''; }
+                else if (c === '\n' || c === '\r') {
+                    if (c === '\r' && text[i + 1] === '\n') i++;
+                    row.push(field); field = '';
+                    if (row.length > 1 || row[0].trim() !== '') rows.push(row);
+                    row = [];
+                }
+                else field += c;
+            }
+            if (field !== '' || row.length) { row.push(field); if (row.length > 1 || row[0].trim() !== '') rows.push(row); }
+            if (!rows.length) return { headers: [], rows: [] };
+            const headers = rows[0].map(h => h.trim());
+            return {
+                headers,
+                rows: rows.slice(1).map(r => {
+                    const o = {};
+                    headers.forEach((h, i) => o[h] = (r[i] ?? '').trim());
+                    return o;
+                })
+            };
+        }
+
+        function processPhaseRows(rows) {
+            const seen = new Set();
+            const records = [];
+            let skipped = 0;
+            const val = (row, ...keys) => { for (const k of keys) { if (row[k] !== undefined && row[k] !== '') return row[k]; } return ''; };
+            const tsOrNull = s => (s && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) ? s : null;
+            rows.forEach(row => {
+                const orderKey = val(row, 'Order Key');
+                if (!orderKey) { skipped++; return; }
+                if (seen.has(orderKey)) return;
+                seen.add(orderKey);
+                records.push({
+                    orderKey,
+                    orderNumber: val(row, 'Order Number'),
+                    orderStatus: val(row, 'Order Status'),
+                    shippingStatus: val(row, 'Shipping Status'),
+                    shippingMethod: val(row, 'Shipping Method'),
+                    warehouse: val(row, 'Warehouse'),
+                    store: val(row, 'Store'),
+                    country: val(row, 'Country'),
+                    state: val(row, 'State'),
+                    shippingZone: val(row, 'Shipping Zone'),
+                    orderedAt: tsOrNull(val(row, 'Ordered At (UTC)')),
+                    submittedAt: tsOrNull(val(row, 'Submit At (UTC)', 'Submitted At (UTC)')),
+                    shippedAt: tsOrNull(val(row, 'Shipped At (UTC)')),
+                    deliveredAt: tsOrNull(val(row, 'Delivered At (UTC)')),
+                    trackingNumber: val(row, 'Tracking Number'),
+                    itemQuantity: Math.round(cleanNum(val(row, 'Item Quantity'))),
+                    weightOz: cleanNum(val(row, 'Weight (oz)')),
+                    orderTotal: cleanNum(val(row, 'Order Total')),
+                    shippingCost: cleanNum(val(row, 'Shipping Cost')),
+                    packagingCost: cleanNum(val(row, 'Packaging Cost')),
+                    pickPackCost: cleanNum(val(row, 'Pick & Pack Cost')),
+                    customerShippingPaid: cleanNum(val(row, 'Customer Shipping Paid')),
+                });
+            });
+            return { records, skipped };
+        }
+
+        async function handlePhasesUpload(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const progress = document.getElementById('phasesProgress');
+            const fill = document.getElementById('phasesProgressFill');
+            const txt = document.getElementById('phasesProgressText');
+            progress.classList.add('visible');
+            fill.style.width = '0%';
+            txt.textContent = 'Parsing CSV…';
+            try {
+                const text = await file.text();
+                const { rows } = parseCSVRobust(text);
+                const { records, skipped } = processPhaseRows(rows);
+                if (!records.length) {
+                    txt.textContent = 'No rows with an Order Key found — is this the ShipMonk orders export?';
+                    input.value = '';
+                    return;
+                }
+                const batchSize = 200;
+                let sent = 0;
+                for (let i = 0; i < records.length; i += batchSize) {
+                    const batch = records.slice(i, i + batchSize);
+                    const r = await fetch(`${API_URL}/phases`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ orders: batch })
+                    }).then(res => res.json());
+                    if (!r.success) throw new Error(r.error || 'upload failed');
+                    sent += batch.length;
+                    fill.style.width = Math.round(sent / records.length * 100) + '%';
+                    txt.textContent = `Uploaded ${sent} of ${records.length} orders…`;
+                }
+                lastImportMsg = `last import: ${records.length} orders${skipped ? `, ${skipped} rows skipped (no Order Key)` : ''}`;
+                txt.textContent = `Done! Imported ${records.length} orders${skipped ? `, skipped ${skipped}` : ''}.`;
+                setTimeout(() => progress.classList.remove('visible'), 4000);
+                await loadPhaseData();
+                updateShippingPhases();
+            } catch (e) {
+                console.error('Phase upload error:', e);
+                txt.textContent = 'Upload error: ' + e.message;
+            }
+            input.value = '';
+        }
+
+        async function loadPhaseData() {
+            const r = await fetch(`${API_URL}/phases`).then(res => res.json());
+            if (!r.success) throw new Error(r.error || 'failed to load phase data');
+            phaseData = r.data.map(row => ({
+                orderKey: row.order_key,
+                orderNumber: row.order_number,
+                orderStatus: row.order_status,
+                shippingStatus: row.shipping_status,
+                shippingMethod: row.shipping_method,
+                warehouse: row.warehouse,
+                store: row.store,
+                country: row.country,
+                state: row.state,
+                shippingZone: row.shipping_zone,
+                orderedAt: row.ordered_at,
+                submittedAt: row.submitted_at,
+                shippedAt: row.shipped_at,
+                deliveredAt: row.delivered_at,
+                trackingNumber: row.tracking_number,
+                itemQuantity: row.item_quantity || 0,
+                weightOz: row.weight_oz || 0,
+                orderTotal: row.order_total || 0,
+                shippingCost: row.shipping_cost || 0,
+                packagingCost: row.packaging_cost || 0,
+                pickPackCost: row.pick_pack_cost || 0,
+                customerShippingPaid: row.customer_shipping_paid || 0,
+            }));
+            populatePhaseFilters();
+        }
+
+        async function loadSlaTargets() {
+            const r = await fetch(`${API_URL}/sla-targets`).then(res => res.json());
+            if (r.success) {
+                slaTargets = {};
+                r.data.forEach(t => { slaTargets[t.shipping_method] = t.transit_business_days; });
+            }
+        }
+
+        async function saveSlaTarget(method, days) {
+            if (!Number.isFinite(days) || days < 0) { updateShippingPhases(); return; }
+            await fetch(`${API_URL}/sla-targets`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targets: [{ shippingMethod: method, transitBusinessDays: days }] })
+            });
+            slaTargets[method] = days;
+            updateShippingPhases();
+        }
+
+        function populatePhaseFilters() {
+            const fill = (id, values) => {
+                const sel = document.getElementById(id);
+                const current = sel.value;
+                while (sel.options.length > 1) sel.remove(1);
+                values.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v;
+                    opt.textContent = v || '(none)';
+                    sel.appendChild(opt);
+                });
+                if ([...sel.options].some(o => o.value === current)) sel.value = current;
+            };
+            const uniq = key => [...new Set(phaseData.map(d => d[key] || ''))].sort();
+            fill('phMethod', uniq('shippingMethod'));
+            fill('phWarehouse', uniq('warehouse').filter(Boolean));
+            fill('phStore', uniq('store').filter(Boolean));
+        }
+
+        function getFilteredPhases() {
+            const from = document.getElementById('phDateFrom').value;
+            const to = document.getElementById('phDateTo').value;
+            const method = document.getElementById('phMethod').value;
+            const wh = document.getElementById('phWarehouse').value;
+            const store = document.getElementById('phStore').value;
+            const dest = document.getElementById('phDest').value;
+            const methodFilterOn = document.getElementById('phMethod').selectedIndex > 0;
+            return phaseData.filter(d => {
+                if (!d.orderedAt) return false;
+                const day = d.orderedAt.slice(0, 10);
+                if (from && day < from) return false;
+                if (to && day > to) return false;
+                if (methodFilterOn && (d.shippingMethod || '') !== method) return false;
+                if (wh && d.warehouse !== wh) return false;
+                if (store && d.store !== store) return false;
+                if (dest) {
+                    const isUS = /^(UNITED STATES|USA?)$/.test((d.country || '').trim().toUpperCase());
+                    if (dest === 'domestic' && !isUS) return false;
+                    if (dest === 'intl' && isUS) return false;
+                }
+                return true;
+            });
+        }
+
+        // A phase duration if both endpoints exist and the span is sane, else null
+        function phaseDur(d, fromKey, toKey) {
+            if (!d[fromKey] || !d[toKey]) return null;
+            const days = calDays(d[fromKey], d[toKey]);
+            return days >= 0 ? days : null;
+        }
+
+        function renderPhaseKpi(valueId, subId, rows, fromKey, toKey) {
+            const cal = [], biz = [];
+            rows.forEach(d => {
+                const days = phaseDur(d, fromKey, toKey);
+                if (days === null) return;
+                cal.push(days);
+                const b = businessDaysBetween(d[fromKey], d[toKey]);
+                if (b !== null) biz.push(b);
+            });
+            document.getElementById(valueId).textContent = cal.length ? fmtD(median(cal)) + 'd' : '—';
+            document.getElementById(subId).innerHTML = cal.length
+                ? `p90 <span class="mono">${fmtD(pct(cal, 0.9))}d</span> · biz days <span class="mono">${fmtD(median(biz))}</span> (p90 <span class="mono">${fmtD(pct(biz, 0.9))}</span>) · n=<span class="mono">${cal.length.toLocaleString()}</span>`
+                : 'No orders with both timestamps in this filter';
+            return cal.length;
+        }
+
+        function updateShippingPhases() {
+            const hasData = phaseData.length > 0;
+            document.getElementById('phasesEmptyState').style.display = hasData ? 'none' : 'block';
+            document.getElementById('phasesContent').style.display = hasData ? 'block' : 'none';
+            document.getElementById('phasesControls').style.display = hasData ? 'flex' : 'none';
+
+            const newest = phaseData.reduce((m, d) => d.orderedAt > m ? d.orderedAt : m, '');
+            document.getElementById('phasesDbStatus').textContent = hasData
+                ? `${phaseData.length.toLocaleString()} orders in DB · newest order ${newest.slice(0, 10)}${lastImportMsg ? ' · ' + lastImportMsg : ''}`
+                : 'No phase data in DB';
+            if (!hasData) return;
+
+            const filtered = getFilteredPhases();
+            const analyzable = filtered.filter(d => !PHASE_EXCLUDED(d));
+
+            renderPhaseKpi('phKpiO2S', 'phKpiO2SSub', analyzable, 'orderedAt', 'submittedAt');
+            renderPhaseKpi('phKpiS2Sh', 'phKpiS2ShSub', analyzable, 'submittedAt', 'shippedAt');
+            renderPhaseKpi('phKpiSh2D', 'phKpiSh2DSub', analyzable, 'shippedAt', 'deliveredAt');
+            renderPhaseKpi('phKpiTotal', 'phKpiTotalSub', analyzable, 'orderedAt', 'deliveredAt');
+
+            renderPhaseStackChart(analyzable);
+            renderPhaseHistChart(analyzable);
+            renderMethodTable(analyzable);
+            renderAging(filtered);
+        }
+
+        function renderPhaseStackChart(rows) {
+            const byMethod = {};
+            rows.forEach(d => {
+                const m = d.shippingMethod || '(none)';
+                (byMethod[m] = byMethod[m] || []).push(d);
+            });
+            const methods = Object.entries(byMethod)
+                .filter(([, list]) => list.some(d => phaseDur(d, 'orderedAt', 'deliveredAt') !== null))
+                .sort((a, b) => b[1].length - a[1].length)
+                .slice(0, 8)
+                .map(([m]) => m);
+            const phaseMed = (m, fromKey, toKey) => {
+                const arr = byMethod[m].map(d => phaseDur(d, fromKey, toKey)).filter(v => v !== null);
+                return arr.length ? median(arr) : 0;
+            };
+            const datasets = [
+                { label: 'Order → Submitted', key: ['orderedAt', 'submittedAt'], color: '#a855f7' },
+                { label: 'Submitted → Shipped', key: ['submittedAt', 'shippedAt'], color: '#f59e0b' },
+                { label: 'Shipped → Delivered', key: ['shippedAt', 'deliveredAt'], color: '#3b82f6' },
+            ].map(p => ({
+                label: p.label,
+                data: methods.map(m => +phaseMed(m, p.key[0], p.key[1]).toFixed(2)),
+                backgroundColor: p.color,
+                borderRadius: 2,
+            }));
+            if (phaseStackChart) phaseStackChart.destroy();
+            phaseStackChart = new Chart(document.getElementById('phaseStackChart'), {
+                type: 'bar',
+                data: { labels: methods, datasets },
+                options: {
+                    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom', labels: { color: '#a1a1aa', padding: 12, boxWidth: 14 } } },
+                    scales: {
+                        x: { stacked: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#71717a' }, title: { display: true, text: 'median days', color: '#71717a' } },
+                        y: { stacked: true, grid: { display: false }, ticks: { color: '#a1a1aa' } }
+                    }
+                }
+            });
+        }
+
+        function renderPhaseHistChart(rows) {
+            const buckets = new Array(16).fill(0);
+            rows.forEach(d => {
+                const days = phaseDur(d, 'orderedAt', 'deliveredAt');
+                if (days === null) return;
+                buckets[Math.min(15, Math.floor(days))]++;
+            });
+            const labels = [...Array(15).keys()].map(i => `${i}–${i + 1}`).concat('15+');
+            if (phaseHistChart) phaseHistChart.destroy();
+            phaseHistChart = new Chart(document.getElementById('phaseHistChart'), {
+                type: 'bar',
+                data: { labels, datasets: [{ label: 'Orders', data: buckets, backgroundColor: 'rgba(34, 197, 94, 0.8)', borderRadius: 3 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#71717a' }, title: { display: true, text: 'days from order to delivery', color: '#71717a' } },
+                        y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#71717a' } }
+                    }
+                }
+            });
+        }
+
+        function renderMethodTable(rows) {
+            const byMethod = {};
+            rows.forEach(d => {
+                const m = d.shippingMethod || '(none)';
+                (byMethod[m] = byMethod[m] || []).push(d);
+            });
+            const medP90 = (list, fromKey, toKey) => {
+                const arr = list.map(d => phaseDur(d, fromKey, toKey)).filter(v => v !== null);
+                return arr.length ? `${fmtD(median(arr))} <span style="color:var(--text-muted)">(${fmtD(pct(arr, 0.9))})</span>` : '—';
+            };
+            const html = Object.entries(byMethod)
+                .map(([method, list]) => {
+                    const delivered = list.filter(d => d.orderStatus === 'Delivered');
+                    const transitBiz = delivered.map(d => (d.shippedAt && d.deliveredAt) ? businessDaysBetween(d.shippedAt, d.deliveredAt) : null).filter(v => v !== null);
+                    const target = slaTargets[method];
+                    let ontimeCell = '—';
+                    if (target !== undefined && transitBiz.length) {
+                        const pctOn = transitBiz.filter(b => b <= target).length / transitBiz.length * 100;
+                        const cls = pctOn >= 90 ? 'good' : pctOn >= 75 ? 'ok' : 'bad';
+                        ontimeCell = `<span class="ontime-pill ${cls}">${pctOn.toFixed(0)}%</span>`;
+                    }
+                    const costs = list.filter(d => d.shippingCost > 0);
+                    const paid = list.filter(d => d.customerShippingPaid > 0);
+                    return {
+                        method, n: delivered.length, total: list.length,
+                        html: `<tr>
+                            <td>${method}</td>
+                            <td class="mono">${delivered.length.toLocaleString()}</td>
+                            <td class="mono">${medP90(delivered, 'orderedAt', 'submittedAt')}</td>
+                            <td class="mono">${medP90(delivered, 'submittedAt', 'shippedAt')}</td>
+                            <td class="mono">${medP90(delivered, 'shippedAt', 'deliveredAt')}</td>
+                            <td class="mono">${medP90(delivered, 'orderedAt', 'deliveredAt')}</td>
+                            <td class="mono">${transitBiz.length ? fmtD(median(transitBiz)) : '—'}</td>
+                            <td>${method === '(none)' ? '—' : `<input type="number" class="sla-input" step="0.5" min="0" value="${target ?? ''}" placeholder="—" onchange="saveSlaTarget(${JSON.stringify(method).replace(/"/g, '&quot;')}, parseFloat(this.value))">`}</td>
+                            <td>${ontimeCell}</td>
+                            <td class="mono">${costs.length ? '$' + (costs.reduce((s, d) => s + d.shippingCost, 0) / costs.length).toFixed(2) : '—'}</td>
+                            <td class="mono">${paid.length ? '$' + (paid.reduce((s, d) => s + d.customerShippingPaid, 0) / paid.length).toFixed(2) : '—'}</td>
+                        </tr>`
+                    };
+                })
+                .sort((a, b) => b.n - a.n || b.total - a.total)
+                .map(r => r.html).join('');
+            document.getElementById('phMethodTableBody').innerHTML = html || '<tr><td colspan="11">No data in this filter</td></tr>';
+        }
+
+        function renderAging(filtered) {
+            const inflight = filtered.filter(d => !PHASE_EXCLUDED(d) && d.orderStatus !== 'Delivered');
+            const now = Date.now();
+            const ageDays = d => (now - parseUTC(d.orderedAt).getTime()) / 86400000;
+            const staleShipped = inflight.filter(d => d.shippedAt && !d.deliveredAt && (now - parseUTC(d.shippedAt).getTime()) / 86400000 > 10);
+            document.getElementById('phAgingFlag').innerHTML = staleShipped.length
+                ? `<div class="phase-flag">⚠ ${staleShipped.length} order${staleShipped.length === 1 ? '' : 's'} shipped more than 10 days ago and not marked delivered</div>`
+                : '';
+            const byStatus = {};
+            inflight.forEach(d => { (byStatus[d.orderStatus] = byStatus[d.orderStatus] || []).push(ageDays(d)); });
+            document.getElementById('phAgingTableBody').innerHTML = Object.entries(byStatus)
+                .map(([status, ages]) => ({ status, n: ages.length, med: median(ages), max: Math.max(...ages) }))
+                .sort((a, b) => b.n - a.n)
+                .map(r => `<tr><td>${r.status}</td><td class="mono">${r.n.toLocaleString()}</td><td class="mono">${fmtD(r.med)}</td><td class="mono">${fmtD(r.max)}</td></tr>`)
+                .join('') || '<tr><td colspan="4">Nothing in flight 🎉</td></tr>';
+        }
+
+        async function clearPhaseData() {
+            if (!confirm('Clear ALL shipping-phase data? This affects all users and cannot be undone. (API-synced order data is not touched.)')) return;
+            await fetch(`${API_URL}/phases`, { method: 'DELETE' });
+            phaseData = [];
+            lastImportMsg = '';
+            updateShippingPhases();
+        }
+
+        async function initShippingPhases() {
+            if (phasesInitialized) { updateShippingPhases(); return; }
+            phasesInitialized = true;
+            document.getElementById('phasesDbStatus').textContent = 'Loading…';
+            try {
+                await Promise.all([loadPhaseData(), loadSlaTargets()]);
+            } catch (e) {
+                console.error('Error loading phase data:', e);
+                document.getElementById('phasesDbStatus').textContent = 'Error loading phase data: ' + e.message;
+                phasesInitialized = false;
+                return;
+            }
+            updateShippingPhases();
+        }
+
+        document.getElementById('phasesClearBtn').addEventListener('click', clearPhaseData);
+        ['phDateFrom', 'phDateTo', 'phMethod', 'phWarehouse', 'phStore', 'phDest'].forEach(id =>
+            document.getElementById(id).addEventListener('change', updateShippingPhases));
 
         // Load data on start
         loadData();
