@@ -3744,6 +3744,30 @@ async function cxEscalate(ticketId, ticketData, intent, reason, db, env, tracer,
   await db.prepare(`UPDATE agent_tickets SET status = 'escalated', final_action = 'escalated', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
 }
 
+// v5.1: strip customer-identifying detail from text that leaves this system. Export files get
+// pasted into third-party tools, so they must carry the SHAPE of a request, never an identity.
+// Order matters: order numbers before the generic 5-digit (zip) rule, or they get half-eaten.
+function cxScrubPII(s) {
+  let t = String(s || '');
+  t = t.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]');
+  t = t.replace(/\bE-\d{6,}\b/gi, '[order]');
+  t = t.replace(/#?\b\d{1,2}-\d{4,8}\b/g, '[order]');
+  // Phone: consume any wrapping parens so we don't leave an orphan bracket.
+  t = t.replace(/\(?\b(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b\)?/g, '[phone]');
+  // Addresses are the highest-risk field, so catch them three ways.
+  // 1) Context-led: everything after an address cue, up to sentence end. This is what catches
+  //    forms with no recognisable suffix (e.g. "6321 Via Venetia N, Delray Beach").
+  t = t.replace(/\b(address\s+is|address\s*:|ship(?:ping)?\s+(?:to|address)|send\s+(?:it\s+)?to|mail\s+(?:it\s+)?to|deliver(?:ed)?\s+to)\s*:?\s*[^.!?\n]{5,140}/gi, '$1 [address]');
+  // 2) Street-suffix led.
+  t = t.replace(/\b\d{1,6}\s+[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,4}\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|way|ct|court|pl|place|cir|circle|ter|terrace|trl|trail|loop|path|row|walk|sq|square|plaza|pkwy|parkway|hwy|highway|via|crossing|bend|run|pass|point|ridge|alley|park)\b\.?/gi, '[address]');
+  // 3) Secondary address lines.
+  t = t.replace(/\b(?:apt|apartment|unit|suite|ste|#)\s*\.?\s*[\w-]{1,8}\b/gi, '[unit]');
+  t = t.replace(/\b\d{5}(?:-\d{4})?\b/g, '[postcode]');
+  // Keep our own links (genuinely useful to Fin), drop everything else.
+  t = t.replace(/https?:\/\/\S+/g, (m) => /(?:a)?nurseinthemaking\.com|youtube\.com\/@NurseInTheMaking/i.test(m) ? m : '[link]');
+  return t.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // v4.13: Messaging channels (Instagram DM, FB Messenger, web chat) don't put the message in
 // the ticket description — that's just "Conversation with <name>". Each real message arrives
 // as its own comment with via.channel === 'chat_transcript' and author_id -1, shaped like:
@@ -5368,6 +5392,329 @@ async function handleCxAgentAPI(request, env, path) {
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: cors });
       }
+    }
+
+    // ==========================================================================
+    // v5.1: INTERCOM / FIN EXPORT
+    // Generates paste-ready files for Intercom. Our assets map to THREE different
+    // Fin systems, so the export deliberately keeps them separate:
+    //   Fin Attributes  <- intent taxonomy + topics (classification / routing)
+    //   Fin Knowledge   <- factual rows (policy, product) + product coverage maps
+    //   Fin Guidance    <- behavioural rows (process, tone) + escalation policy
+    // Everything customer-derived is PII-scrubbed: these files get pasted into a
+    // third-party tool, so they must carry the shape of a request, not an identity.
+    // ==========================================================================
+    if (path.startsWith('/cx-agent/api/intercom-export')) {
+      const url = new URL(request.url);
+      const what = path.replace('/cx-agent/api/intercom-export', '').replace(/^\//, '') || 'index';
+      const dl = (body, filename, type = 'text/markdown') => new Response(body, {
+        headers: { ...cors, 'Content-Type': `${type}; charset=utf-8`, 'Content-Disposition': `attachment; filename="${filename}"` },
+      });
+
+      if (what === 'index') {
+        return new Response(JSON.stringify({
+          note: 'Paste-ready exports for Intercom / Fin. Generated live, so re-download any time knowledge grows.',
+          files: {
+            'attributes.csv': '/cx-agent/api/intercom-export/attributes?format=csv',
+            'attributes.md': '/cx-agent/api/intercom-export/attributes',
+            'knowledge.md': '/cx-agent/api/intercom-export/knowledge',
+            'products.md': '/cx-agent/api/intercom-export/products  (add ?index=N for one product)',
+            'voice.md': '/cx-agent/api/intercom-export/voice',
+          },
+          mapping: {
+            'attributes.*': 'Fin > Train > Attributes',
+            'knowledge.md FACTS section': 'Fin Knowledge (Snippets or Articles)',
+            'knowledge.md RULES section': 'Fin Guidance',
+            'products.md': 'Fin Knowledge — one Article per product',
+            'voice.md': 'Fin tone of voice / Guidance',
+          },
+        }, null, 2), { headers: cors });
+      }
+
+      // ---- ATTRIBUTES ------------------------------------------------------
+      if (what === 'attributes') {
+        const volumes = {};
+        for (const r of (await db.prepare(
+          "SELECT classified_intent AS i, COUNT(*) AS n FROM agent_tickets WHERE classified_intent IS NOT NULL GROUP BY classified_intent"
+        ).all()).results || []) volumes[r.i] = r.n;
+
+        // Real customer phrasing per intent — the thing Fin's docs ask for and that
+        // is otherwise very hard to write from scratch.
+        const examplesFor = async (intent) => {
+          const rows = (await db.prepare(`
+            SELECT COALESCE(r.customer_message, t.first_customer_message) AS msg
+            FROM agent_tickets t
+            LEFT JOIN agent_responses r ON r.ticket_id = t.id
+            WHERE t.classified_intent = ?
+              AND COALESCE(r.customer_message, t.first_customer_message) IS NOT NULL
+              AND length(trim(COALESCE(r.customer_message, t.first_customer_message))) BETWEEN 25 AND 400
+              AND COALESCE(r.customer_message, t.first_customer_message) NOT LIKE 'Conversation with %'
+            ORDER BY t.id DESC LIMIT 60
+          `).bind(intent).all()).results || [];
+          const seen = new Set(), out = [];
+          for (const r of rows) {
+            const clean = cxScrubPII(cxCleanReplyText(r.msg)).slice(0, 160);
+            const key = clean.toLowerCase().slice(0, 60);
+            if (clean.length < 20 || seen.has(key)) continue;
+            seen.add(key); out.push(clean);
+            if (out.length >= 4) break;
+          }
+          return out;
+        };
+
+        const ISSUE_VALUES = [
+          ['digital_access', 'Ebook or digital access: missing access codes, how to redeem a code, a code that will not work, or asking when a purchased ebook will arrive.'],
+          ['shipping_delivery', 'Shipping and delivery: tracking, where is my order, delivery delays, international shipping availability, wrong or undeliverable address.'],
+          ['product_info', 'Pre-purchase product questions: what a product or bundle includes, page counts, whether a topic is covered, comparisons, availability.'],
+          ['returns_damaged', 'Returns and problems with what arrived: damaged, defective, missing pages, wrong item, or an item missing from the order.'],
+          ['refund_cancel', 'Requests to cancel an order or get money back.'],
+          ['billing_payment', 'Billing and payment: duplicate or unexpected charges, payment failures, discount codes not applying, gift cards.'],
+          ['order_general', 'Other order questions that are not shipping, refund or returns — order status, or changing something on an order.'],
+          ['education_content', 'Questions about the study content itself — exam or clinical subject matter rather than a purchase or order.'],
+          ['account', 'Account access: login, password, or profile problems.'],
+          ['educator_institutional', 'Educators and institutions: faculty or school adoption, using materials with a class, desk/review/sample copies, bulk or class-set orders, purchase orders, invoicing, W-9 or tax-exempt paperwork. ALWAYS needs a human.'],
+          ['partnership', 'Ambassador, collaboration, influencer, sponsorship or partnership enquiries. ALWAYS needs a human.'],
+          ['social_engagement', 'Kind messages, praise, thanks, emoji reactions and story replies that are not asking for help. Warrants a short warm acknowledgement, not a support answer.'],
+          ['unsubscribe', 'Requests to unsubscribe or stop receiving email.'],
+          ['noise', 'Not a real customer request: automated notifications, system alerts, vendor or platform mail, copyright/IP notices, spam.'],
+          ['other', 'A genuine customer message that does not fit any other value.'],
+        ];
+
+        const attrs = [];
+        const issueVals = [];
+        for (const [val, desc] of ISSUE_VALUES) {
+          const ex = await examplesFor(val);
+          const vol = volumes[val] || 0;
+          issueVals.push({ value: val, description: desc, volume: vol, examples: ex });
+        }
+        attrs.push({
+          name: 'Issue type',
+          description: 'What the customer is contacting us about. Pick the single closest value based on the whole conversation.',
+          values: issueVals,
+        });
+        attrs.push({
+          name: 'Needs human',
+          description: 'Whether this conversation must be handled by a person rather than answered by Fin.',
+          values: [
+            { value: 'yes', description: 'Educator/institutional enquiries, partnership or collaboration enquiries, clinical or medical advice questions, refunds over $50, anything legal or press related, or a customer explicitly asking for a person.' },
+            { value: 'no', description: 'A normal support question Fin can answer from the knowledge base.' },
+          ],
+        });
+        attrs.push({
+          name: 'Urgency',
+          description: 'How time-critical the request is.',
+          values: [
+            { value: 'urgent', description: 'The customer states they need help urgently, references an exam or deadline that is imminent, or the order is about to ship and they need it stopped or changed.' },
+            { value: 'normal', description: 'No stated time pressure.' },
+          ],
+        });
+        attrs.push({
+          name: 'Customer sentiment',
+          description: 'The customer’s emotional tone, for routing and reporting.',
+          values: [
+            { value: 'frustrated', description: 'Annoyed, upset or complaining — including repeat contacts about the same unresolved issue.' },
+            { value: 'neutral', description: 'Matter-of-fact request.' },
+            { value: 'positive', description: 'Thankful, complimentary or enthusiastic.' },
+          ],
+        });
+        attrs.push({
+          name: 'Clinical question',
+          description: 'Whether the customer is asking for clinical or medical/nursing knowledge rather than help with a purchase. These must never be answered automatically.',
+          values: [
+            { value: 'yes', description: 'Asks for clinical guidance, medical advice, drug or dosage information, or an answer to exam/practice content.' },
+            { value: 'no', description: 'Not a clinical question.' },
+          ],
+        });
+        attrs.push({
+          name: 'High-value refund',
+          description: 'Whether the money at stake is large enough to need a person.',
+          values: [
+            { value: 'yes', description: 'A refund, chargeback or cancellation explicitly involving more than $50.' },
+            { value: 'no', description: 'No refund requested, or under $50.' },
+          ],
+        });
+
+        if (url.searchParams.get('format') === 'csv') {
+          const esc = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+          const lines = ['attribute,attribute_description,value,value_description'];
+          for (const a of attrs) for (const v of a.values) {
+            let d = v.description;
+            if (v.examples && v.examples.length) d += ' Examples of real messages: ' + v.examples.map(e => '"' + e + '"').join('; ');
+            lines.push([a.name, a.description, v.value, d].map(esc).join(','));
+          }
+          return dl(lines.join('\n'), 'fin-attributes.csv', 'text/csv');
+        }
+
+        const md = [];
+        md.push('# Fin Attributes — generated from the Ops Hub CX agent');
+        md.push('');
+        md.push('Create these under **Fin > Train > Attributes**. Value descriptions include real');
+        md.push('customer phrasing mined from past tickets (PII removed). Use Fin’s preview tool on a');
+        md.push('few real conversations before enabling.');
+        md.push('');
+        md.push('> Volume figures are from ' + Object.values(volumes).reduce((a, b) => a + b, 0).toLocaleString() + ' classified tickets.');
+        md.push('> **Ignore the `noise` volume** — it is inflated by a since-fixed bug where Instagram/Facebook');
+        md.push('> messages were only ever seen as "Conversation with <name>". Real noise is far lower.');
+        md.push('');
+        for (const a of attrs) {
+          md.push('---');
+          md.push('');
+          md.push('## Attribute: ' + a.name);
+          md.push('');
+          md.push('**Description:** ' + a.description);
+          md.push('');
+          for (const v of a.values) {
+            md.push('### `' + v.value + '`' + (v.volume != null ? ` — ${v.volume.toLocaleString()} past tickets` : ''));
+            md.push('');
+            md.push(v.description);
+            if (v.examples && v.examples.length) {
+              md.push('');
+              md.push('Real examples:');
+              for (const e of v.examples) md.push('- "' + e + '"');
+            }
+            md.push('');
+          }
+        }
+        md.push('---');
+        md.push('');
+        md.push('## Suggested escalation rules');
+        md.push('');
+        md.push('- `Needs human = yes` → hand off to a teammate, do not let Fin answer.');
+        md.push('- `Issue type = educator_institutional` or `partnership` → hand off (these are commercial conversations).');
+        md.push('- `Clinical question = yes` → hand off. Never auto-answer clinical content.');
+        md.push('- `High-value refund = yes` → hand off.');
+        md.push('- `Issue type = noise` → close without reply.');
+        md.push('- `Customer sentiment = frustrated` + repeat contact → prioritise for a person.');
+        return dl(md.join('\n'), 'fin-attributes.md');
+      }
+
+      // ---- KNOWLEDGE (facts vs rules) --------------------------------------
+      if (what === 'knowledge') {
+        const rows = (await db.prepare(
+          "SELECT category, content, source FROM agent_knowledge WHERE status = 'approved' ORDER BY category, updated_at DESC"
+        ).all()).results || [];
+        const facts = rows.filter(r => ['policy', 'product'].includes(r.category));
+        const rules = rows.filter(r => !['policy', 'product'].includes(r.category));
+        const md = [];
+        md.push('# CX knowledge — generated from the Ops Hub CX agent');
+        md.push('');
+        md.push(`${rows.length} team-approved entries. These were built by reviewing real replies, so treat them as authoritative.`);
+        md.push('');
+        md.push('**These go to two different places in Fin:**');
+        md.push('');
+        md.push('| Section | Where it belongs | Why |');
+        md.push('|---|---|---|');
+        md.push('| FACTS | Fin Knowledge (Snippets or Articles) | things that are true, used to ground answers |');
+        md.push('| RULES | Fin Guidance | how to behave, not what is true |');
+        md.push('');
+        md.push('---');
+        md.push('');
+        md.push(`## FACTS → Fin Knowledge (${facts.length})`);
+        md.push('');
+        md.push('Add as Snippets (Knowledge Hub) or group into Articles by theme.');
+        md.push('');
+        for (const r of facts) md.push(`- **[${r.category}]** ${String(r.content).trim()}`);
+        md.push('');
+        md.push('---');
+        md.push('');
+        md.push(`## RULES → Fin Guidance (${rules.length})`);
+        md.push('');
+        md.push('These are behavioural instructions. In Fin they belong in Guidance, not Knowledge.');
+        md.push('');
+        for (const r of rules) md.push(`- **[${r.category}]** ${String(r.content).trim()}`);
+        return dl(md.join('\n'), 'fin-knowledge.md');
+      }
+
+      // ---- PRODUCT COVERAGE MAPS ------------------------------------------
+      if (what === 'products') {
+        const rows = (await db.prepare(
+          'SELECT name, coverage_outline, topics FROM agent_products WHERE is_active = 1 ORDER BY name'
+        ).all()).results || [];
+        const idx = url.searchParams.get('index');
+        const pick = idx != null ? [rows[parseInt(idx)]].filter(Boolean) : rows;
+        const md = [];
+        if (idx == null) {
+          md.push('# Product coverage maps — generated from the Ops Hub CX agent');
+          md.push('');
+          md.push(`${rows.length} products. Each section below is intended to become **one Intercom Article**`);
+          md.push('(use `?index=N` on this endpoint to pull them one at a time).');
+          md.push('');
+          md.push('These are deliberately **IP-safe**: they describe what topics a product covers so Fin can');
+          md.push('answer "do your guides cover X?" without ever reproducing the study material itself.');
+          md.push('Keep that constraint when you paste them in.');
+          md.push('');
+        }
+        for (const p of pick) {
+          let topics = []; try { topics = JSON.parse(p.topics || '[]'); } catch {}
+          md.push('---');
+          md.push('');
+          md.push('# ' + p.name);
+          md.push('');
+          if (topics.length) { md.push('**Search keywords:** ' + topics.join(', ')); md.push(''); }
+          md.push(String(p.coverage_outline || '').trim());
+          md.push('');
+        }
+        return dl(md.join('\n'), idx != null ? `fin-product-${idx}.md` : 'fin-products.md');
+      }
+
+      // ---- VOICE / TONE ----------------------------------------------------
+      if (what === 'voice') {
+        const rows = (await db.prepare(`
+          SELECT hr.body AS reply, t.classified_intent AS intent, hr.rating
+          FROM agent_human_replies hr JOIN agent_tickets t ON t.id = hr.ticket_id
+          WHERE hr.rating IN ('good','minor') AND hr.body IS NOT NULL
+            AND length(trim(hr.body)) BETWEEN 120 AND 1200
+          ORDER BY CASE hr.rating WHEN 'good' THEN 0 ELSE 1 END, hr.rated_at DESC
+          LIMIT 60
+        `).all()).results || [];
+        const seen = new Set(), picked = [];
+        for (const r of rows) {
+          const clean = cxScrubPII(cxCleanReplyText(r.reply));
+          const key = (r.intent || '') + '|' + clean.toLowerCase().slice(0, 40);
+          if (seen.has(key) || clean.length < 100) continue;
+          seen.add(key); picked.push({ ...r, clean });
+          if (picked.length >= 25) break;
+        }
+        const md = [];
+        md.push('# Tone of voice — Nurse In The Making');
+        md.push('');
+        md.push('Distilled from the CX agent’s style rules plus real replies the team rated as good.');
+        md.push('Use in Fin’s tone-of-voice settings and Guidance.');
+        md.push('');
+        md.push('## Voice rules');
+        md.push('');
+        md.push('- Write as Kristine, founder of Nurse In The Making. Warm, encouraging, supportive — you care about future nurses succeeding.');
+        md.push('- Open with "Hi [FirstName]," on email; for Instagram/Facebook DMs "Hi [FirstName]!" reads more naturally.');
+        md.push('- Match empathy to the situation. If they are frustrated, acknowledge it without being sappy.');
+        md.push('- Match length to the channel: email can be structured; DMs should be SHORT and conversational, like texting a friend. No formal sign-off in a DM.');
+        md.push('- Email closes with "Happy studying, future nurse!" then "Kristine :)" on its own line. DMs use a brief "💛" or "xx Kristine", or nothing.');
+        md.push('- Use product names exactly: "The Complete Nursing School Bundle®", "NurseInTheMaking+", "VitalSource Bookshelf".');
+        md.push('- Be concise — answer the question, do not pad.');
+        md.push('');
+        md.push('## Accuracy rules (these matter more than tone)');
+        md.push('');
+        md.push('- Never state a promotion, price, policy, entitlement or product detail that is not in the knowledge base.');
+        md.push('- Never explain *why* something happened unless the data shows it. Do not theorise.');
+        md.push('- Avoid hedging language about our own business ("usually", "typically", "should be", "most likely"). Needing to hedge means you do not have the fact — hand off instead.');
+        md.push('- Never promise refunds, exceptions or account changes. Say you will check with the team.');
+        md.push('- A short reply that admits what needs checking is better than a confident wrong one.');
+        md.push('');
+        md.push(`## Real examples the team approved (${picked.length})`);
+        md.push('');
+        md.push('Customer details removed. These show voice, length and structure per request type.');
+        md.push('');
+        for (const p of picked) {
+          md.push(`### ${p.intent || 'general'} — rated ${p.rating}`);
+          md.push('');
+          md.push('```');
+          md.push(p.clean);
+          md.push('```');
+          md.push('');
+        }
+        return dl(md.join('\n'), 'fin-voice.md');
+      }
+
+      return new Response(JSON.stringify({ error: 'unknown export: ' + what }), { status: 404, headers: cors });
     }
 
     // GET /cx-agent/api/export?start=YYYY-MM-DD&end=YYYY-MM-DD&format=csv

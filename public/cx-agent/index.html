@@ -99,6 +99,8 @@
   .config-item .desc{font-size:12px;color:var(--text-muted);display:block;margin-top:2px;font-family:'DM Sans',sans-serif;font-weight:400;}
   .config-item .value-input{padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:'JetBrains Mono',monospace;width:100%;}
   .config-item .value-input:focus{outline:none;border-color:var(--accent);}
+.xbtn{display:inline-block;padding:8px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);text-decoration:none;font-weight:500}
+.xbtn:hover{border-color:var(--accent);color:var(--accent)}
   .config-item .save-btn{padding:7px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;}
   .config-item .save-btn:hover{background:#2563eb;}
   .config-item .save-btn:disabled{background:var(--text-dim);cursor:default;}
@@ -309,6 +311,28 @@
       <button id="learn-btn" class="save-btn" style="padding:8px 16px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500" onclick="learnNow()" title="Read newly-rated replies and derive lessons now (also runs nightly)">✨ Learn now</button>
     </div>
     <div id="k-status" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:4px">📤 Export for Intercom / Fin</div>
+    <div style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+      Everything this agent has learned, formatted to paste into Fin. Generated fresh each time you
+      download, so it stays current as knowledge grows. <b>Fin keeps these in three different
+      places</b> — the file names say where each one goes.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <a class="xbtn" href="/cx-agent/api/intercom-export/attributes?format=csv">Attributes (CSV)</a>
+      <a class="xbtn" href="/cx-agent/api/intercom-export/attributes">Attributes (guide)</a>
+      <a class="xbtn" href="/cx-agent/api/intercom-export/knowledge">Knowledge + Guidance</a>
+      <a class="xbtn" href="/cx-agent/api/intercom-export/products">Product coverage maps</a>
+      <a class="xbtn" href="/cx-agent/api/intercom-export/voice">Tone of voice</a>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:10px;line-height:1.6">
+      <b>Attributes</b> → Fin &gt; Train &gt; Attributes (the CSV bulk-uploads the values).<br>
+      <b>Knowledge + Guidance</b> → the file is split in two: FACTS go to Fin Knowledge, RULES go to Fin Guidance.<br>
+      <b>Product coverage maps</b> → one Intercom Article per product. IP-safe: topics covered, never the study material.<br>
+      <b>Tone of voice</b> → Fin's tone settings, plus real replies your team rated as good.<br>
+      Customer names, emails, phone numbers, addresses and order numbers are stripped before anything leaves here.
+    </div>
   </div>
   <div id="knowledge-list">
     <div class="loading">Loading knowledge...</div>
