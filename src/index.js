@@ -3757,14 +3757,19 @@ function cxScrubPII(s) {
   // Addresses are the highest-risk field, so catch them three ways.
   // 1) Context-led: everything after an address cue, up to sentence end. This is what catches
   //    forms with no recognisable suffix (e.g. "6321 Via Venetia N, Delray Beach").
-  t = t.replace(/\b(address\s+is|address\s*:|ship(?:ping)?\s+(?:to|address)|send\s+(?:it\s+)?to|mail\s+(?:it\s+)?to|deliver(?:ed)?\s+to)\s*:?\s*[^.!?\n]{5,140}/gi, '$1 [address]');
+  t = t.replace(
+    /\b(address\s+is|address\s*:|ship(?:ping)?\s+(?:to|address)|send\s+(?:it\s+)?to|mail\s+(?:it\s+)?to|deliver(?:ed)?\s+to)\s*:?\s*([^.!?\n]{5,140})/gi,
+    (m, cue, tail) => (/\d/.test(tail) && !/https?:\/\//i.test(tail)) ? `${cue} [address]` : m);
   // 2) Street-suffix led.
   t = t.replace(/\b\d{1,6}\s+[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,4}\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|way|ct|court|pl|place|cir|circle|ter|terrace|trl|trail|loop|path|row|walk|sq|square|plaza|pkwy|parkway|hwy|highway|via|crossing|bend|run|pass|point|ridge|alley|park)\b\.?/gi, '[address]');
   // 3) Secondary address lines.
-  t = t.replace(/\b(?:apt|apartment|unit|suite|ste|#)\s*\.?\s*[\w-]{1,8}\b/gi, '[unit]');
+  t = t.replace(/\b(?:apt|apartment|unit|suite|ste)\b\.?\s*#?\s*(?=[\w-]{0,7}\d)[\w-]{1,8}\b/gi, '[unit]');
   t = t.replace(/\b\d{5}(?:-\d{4})?\b/g, '[postcode]');
-  // Keep our own links (genuinely useful to Fin), drop everything else.
-  t = t.replace(/https?:\/\/\S+/g, (m) => /(?:a)?nurseinthemaking\.com|youtube\.com\/@NurseInTheMaking/i.test(m) ? m : '[link]');
+  // Keep our own links and the tool consoles our process rules point at — blanking those
+  // turns a usable rule ("check ShipMonk under Customer Information") into noise, and none of
+  // them are secrets. Anything else a customer pasted gets dropped.
+  const KEEP_LINK = /(?:a)?nurseinthemaking\.com|youtube\.com\/@NurseInTheMaking|(?:app\.)?shipmonk\.com|myshopify\.com|admin\.shopify\.com|vitalsource\.com|zendesk\.com|intercom\.com/i;
+  t = t.replace(/https?:\/\/\S+/g, (m) => KEEP_LINK.test(m) ? m : '[link]');
   return t.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 }
 

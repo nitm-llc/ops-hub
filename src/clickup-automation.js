@@ -1277,8 +1277,8 @@ async function processTask(env, taskId, { rawBody = null, trigger = "webhook", f
     };
   } catch (err) {
     const code = err?.code || "unknown";
-    // We own retries now, because we never 5xx and so ClickUp never retries us.
-    const nextAttempt = isRecoverable(code) ? "datetime('now', '+5 minutes')" : null;
+    // We own retries now: we never 5xx, so ClickUp never retries us.
+    const retryable = isRecoverable(code);
     await finishRun(env, taskId, {
       status: "error",
       automationId: automation.id,
@@ -1289,7 +1289,7 @@ async function processTask(env, taskId, { rawBody = null, trigger = "webhook", f
       error: err?.message || String(err),
       nextAttemptAt: null,
     });
-    if (nextAttempt) {
+    if (retryable) {
       await env.DB.prepare(
         `UPDATE clickup_automation_runs
             SET next_attempt_at = datetime('now', '+5 minutes')
