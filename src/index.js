@@ -5651,7 +5651,10 @@ async function handleCxAgentAPI(request, env, path) {
           md.push('# ' + p.name);
           md.push('');
           if (topics.length) { md.push('**Search keywords:** ' + topics.join(', ')); md.push(''); }
-          md.push(cxScrubPII(p.coverage_outline));
+          // Coverage maps carry their own H1s (often just repeating the product name), which
+          // collides with the heading above and makes each Article look like two documents.
+          // Demote every heading one level so the product name is the only H1 in its section.
+          md.push(cxScrubPII(p.coverage_outline).replace(/^(#{1,5}) /gm, '#$1 '));
           md.push('');
         }
         return dl(md.join('\n'), idx != null ? `fin-product-${idx}.md` : 'fin-products.md');
