@@ -15,7 +15,14 @@
     // in D1 and wins over this, so day-to-day switching needs no deploy.
     // Google retires Gemini models — and cuts them off for existing keys ahead
     // of the published date — so treat this as a starting point, not a constant.
-    "GEMINI_MODEL": "gemini-3.6-flash"
+    "GEMINI_MODEL": "gemini-3.6-flash",
+    // ClickUp Automation module. A workspace id is in every ClickUp URL, so it
+    // is config, not a secret. The webhook SIGNING secret is not here at all —
+    // ClickUp returns it once at registration and it is stored in D1.
+    "CLICKUP_TEAM_ID": "9017029478",
+    // The Cloudflare Access hostname. The admin API refuses any request that
+    // arrived on a different host, because *.workers.dev skips the Access gate.
+    "APP_HOSTNAME": "ops.anurseinthemaking.com"
   },
   "d1_databases": [
     {

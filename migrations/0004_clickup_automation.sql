@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS clickup_automations (
   drive_id              TEXT,                 -- shared drive id, informational
   drive_name            TEXT,
   drive_parent_id       TEXT,
+  drive_parent_name     TEXT,                 -- the folder's own name, e.g. "Google"
   drive_parent_path     TEXT,                 -- human breadcrumb, e.g. "Ads > Google"
   folder_name_template  TEXT    NOT NULL DEFAULT '{code} - {name}',
   -- JSON array of subfolder names, no cap. Names may contain {code} / {name}.

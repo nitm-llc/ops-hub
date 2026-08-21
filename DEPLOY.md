@@ -182,3 +182,146 @@ npx wrangler secret put SHIPFUSION_PASSWORD
 ```bash
 npx wrangler secret put CLICKUP_TOKEN
 ```
+
+---
+
+## ClickUp Automation — one-time setup
+
+Replaces the Zapier Zap. New task in a configured ClickUp list → sequential code,
+task renamed `2026.NNNN - Task Name`, Drive folder of that name inside a per-list
+parent, subfolders, links written back to ClickUp custom fields. Everything is
+configured from `/clickup-automation/` — no code edits to add a list.
+
+### Step 1 — Apply the schema
+
+```bash
+npx wrangler d1 migrations apply content-calendar --remote
+```
+
+### Step 2 — Set the secrets
+
+```bash
+# The Google service account that owns the Drive folders.
+npx wrangler secret put GOOGLE_CLIENT_EMAIL
+npx wrangler secret put GOOGLE_PRIVATE_KEY
+
+# Gates the dangerous, once-ever endpoints (webhook register/delete, hard delete).
+# Generate something long and random; it is never shown in the UI.
+npx wrangler secret put CLICKUP_AUTOMATION_ADMIN_SECRET
+```
+
+`CLICKUP_TOKEN` is already set (shared with the Content Calendar and Stage
+Timing). `CLICKUP_TEAM_ID` and `APP_HOSTNAME` live in `wrangler.jsonc` — a
+workspace id appears in every ClickUp URL, so it is config, not a secret.
+
+There is deliberately **no** `CLICKUP_WEBHOOK_SECRET` to set by hand: ClickUp
+returns the signing secret once, when the webhook is created, and step 4 writes
+it straight into D1 so it never passes through a person or a config file.
+
+`GOOGLE_PRIVATE_KEY` can be pasted either with real newlines or with the
+literal `\n` escapes that appear in the service-account JSON — the PEM parser
+handles both.
+
+### Step 3 — ⚠️ Cloudflare Access: exclude exactly ONE path
+
+ClickUp cannot log in, so the webhook must bypass the Access gate. In the
+Cloudflare Zero Trust dashboard, add a **Bypass** policy for exactly:
+
+```
+ops.anurseinthemaking.com/clickup-automation/webhook
+```
+
+**Not** `/clickup-automation/*`. That wildcard would put the entire admin API —
+create, edit and delete automations, browse your Drive, register webhooks — on
+the open internet. The HMAC signature is the only thing guarding the webhook
+path, which is why it is mandatory and fails closed.
+
+Verify after deploying, from a browser with no Access session (or `curl`):
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://ops.anurseinthemaking.com/clickup-automation/webhook
+```
+
+That must return `401` (our signature check ran). Then:
+
+```bash
+curl -s https://ops.anurseinthemaking.com/clickup-automation/api/automations
+```
+
+That must return an Access login redirect, **not** JSON. If it returns JSON, the
+bypass rule is too broad — fix it before going live.
+
+The `*.workers.dev` hostname skips Access entirely, so the admin API refuses any
+request that did not arrive on `APP_HOSTNAME`. Setting `"workers_dev": false` in
+`wrangler.jsonc` closes that door for every module and is worth doing.
+
+Optional defence in depth — if you set both of these, the Worker verifies the
+Access JWT itself rather than trusting the hostname:
+
+```bash
+# e.g. nitm.cloudflareaccess.com, and the application's AUD tag from the
+# Zero Trust dashboard (Access > Applications > your app > Overview).
+npx wrangler secret put ACCESS_TEAM_DOMAIN
+npx wrangler secret put ACCESS_AUD
+```
+
+### Step 4 — Register the ClickUp webhook
+
+One workspace-level webhook covers every automation; filtering happens in code
+by list id. This stores the signing secret in D1 for you.
+
+```bash
+curl -X POST https://ops.anurseinthemaking.com/clickup-automation/api/webhook/register \
+  -H "X-Ops-Admin-Secret: <CLICKUP_AUTOMATION_ADMIN_SECRET>" \
+  -H "Content-Type: application/json" -d '{}'
+```
+
+If a webhook already points at that endpoint it returns `409` rather than
+creating a second one — two webhooks would both fire on every task. To inspect
+or remove:
+
+```bash
+curl https://ops.anurseinthemaking.com/clickup-automation/api/webhook/list \
+  -H "X-Ops-Admin-Secret: <secret>"
+
+curl -X POST https://ops.anurseinthemaking.com/clickup-automation/api/webhook/delete \
+  -H "X-Ops-Admin-Secret: <secret>" \
+  -H "Content-Type: application/json" -d '{"webhook_id":"<id>"}'
+```
+
+### Step 5 — Give the service account access to the Drive folders
+
+This cannot be done from code. A member of the shared drive must share it with
+the service-account address (shown under "Connection details" on the page) as
+**Content Manager**. Until then, the preflight check on each automation says so
+in plain language and refuses to let it go live.
+
+Keep this narrow: grant the account membership of the specific shared drive it
+needs, and leave **domain-wide delegation off** — that would let the key
+impersonate any user in the Google workspace.
+
+### Step 6 — Set up a list
+
+Go to `/clickup-automation/` and use "Set up a list". Nothing fires until an
+automation is switched from **draft** to **live**, and it cannot go live while
+any preflight check is red.
+
+### Troubleshooting
+
+**Nothing happens when a task is created.** Check the Activity tab. "No
+automation set up for that list" means the list id doesn't match any row.
+"That list's automation is still a draft" means it was never turned on. No row
+at all means ClickUp isn't delivering — check the connection banner, then that
+the Access bypass from step 3 still exists.
+
+**"The automation's Google account doesn't have permission."** Step 5. The fix
+button on the failing check copies the exact address to share with.
+
+**A failure that should have worked.** Every error row has a Retry button. Rate
+limits and transient Google/ClickUp errors are also retried automatically by the
+2-minute cron, up to 5 attempts. Because the webhook always answers `200` —
+repeated `5xx` would make ClickUp disable it and silently kill every automation
+at once — ClickUp never retries, so these are the only retries there are.
+
+**Codes have gaps.** Codes are allocated when a run starts, so a failed run
+consumes one. Previews and preflight never do.

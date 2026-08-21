@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ClickUp Automation — NITM Ops</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* nav.js owns the neutral palette (--bg/--panel/--surface/--border/--text/...).
+     Only accent + semantic colours belong here. */
+  :root {
+    --accent: #2563eb; --accent-text: #ffffff;
+    --red: #dc2626; --red-bg: #fee2e2; --amber: #b45309; --amber-bg: #fef3c7;
+    --green: #15803d; --green-bg: #dcfce7; --blue: #1d4ed8; --blue-bg: #dbeafe;
+  }
+  :root[data-theme="dark"] {
+    --accent: #60a5fa; --accent-text: #0b1a33;
+    --red: #f87171; --red-bg: #431a1a; --amber: #fbbf24; --amber-bg: #422f06;
+    --green: #4ade80; --green-bg: #10331c; --blue: #93c5fd; --blue-bg: #16264a;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 80px; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 26px 20px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.3px; }
+  h2 { font-size: 18px; font-weight: 700; }
+  .sub { font-size: 14px; color: var(--muted); margin-top: 5px; }
+  .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  a { color: var(--accent); }
+
+  button, .btn {
+    padding: 10px 16px; border-radius: 9px; border: 0; background: var(--accent); color: var(--accent-text);
+    font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+  button.danger { background: transparent; color: var(--red); border: 1px solid var(--border2); }
+  .sm-btn { padding: 6px 11px; font-size: 12.5px; border-radius: 8px; }
+
+  .tabs { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 4px; margin: 20px 0 14px; }
+  .tabs button { flex: 1; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px;
+                 font-weight: 600; padding: 9px 4px; border-radius: 9px; cursor: pointer; min-height: 40px; }
+  .tabs button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .tabs button .cnt { font-size: 11px; color: var(--faint); font-weight: 500; }
+  .tabs button .cnt.bad { color: var(--red); font-weight: 700; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+  .panel + .panel { margin-top: 12px; }
+  .muted { color: var(--muted); }
+  .tiny { font-size: 12.5px; }
+  .empty { text-align: center; color: var(--muted); padding: 44px 12px; }
+  .hide { display: none !important; }
+
+  /* ---- banners ---- */
+  .banner { border-radius: 12px; padding: 13px 15px; font-size: 14px; margin-bottom: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .banner.bad { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+  .banner.warn { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
+  .banner .grow { flex: 1; min-width: 220px; }
+
+  /* ---- automation rows ---- */
+  .row { display: flex; gap: 14px; align-items: center; background: var(--panel); border: 1px solid var(--border);
+         border-left: 4px solid var(--border2); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; flex-wrap: wrap; }
+  .row.live { border-left-color: var(--green); }
+  .row.draft { border-left-color: var(--amber); }
+  .row.archived { border-left-color: var(--faint); opacity: .7; }
+  .rmain { flex: 1; min-width: 220px; }
+  .rname { font-size: 15.5px; font-weight: 600; }
+  .rmeta { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .racts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; }
+  .pill.green { background: var(--green-bg); color: var(--green); }
+  .pill.amber { background: var(--amber-bg); color: var(--amber); }
+  .pill.red { background: var(--red-bg); color: var(--red); }
+  .pill.blue { background: var(--blue-bg); color: var(--blue); }
+  .pill.grey { background: var(--surface); color: var(--muted); }
+
+  /* ---- wizard ---- */
+  .steps { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 4px; margin-bottom: 16px; overflow-x: auto; }
+  .steps button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px;
+                  font-weight: 600; padding: 8px 10px; border-radius: 9px; cursor: pointer; white-space: nowrap; }
+  .steps button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .steps button:disabled { opacity: .4; cursor: default; }
+  .frow { margin-bottom: 14px; }
+  .frow label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  .frow .help { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
+  input[type=text], input[type=search], select, textarea {
+    width: 100%; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--border2);
+    background: var(--panel); color: var(--text); font-size: 14px; font-family: inherit;
+  }
+  .picker { max-height: 330px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; margin-top: 8px; }
+  .pick { display: flex; align-items: center; gap: 10px; padding: 10px 13px; cursor: pointer; border-bottom: 1px solid var(--border); }
+  .pick:last-child { border-bottom: 0; }
+  .pick:hover { background: var(--surface); }
+  .pick.off { opacity: .55; cursor: default; }
+  .pick.off:hover { background: transparent; }
+  .pick .pname { font-size: 14.5px; font-weight: 600; }
+  .pick .pcrumb { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin: 8px 0; }
+
+  /* subfolder editor */
+  .sfrow { display: flex; gap: 8px; align-items: center; margin-bottom: 7px; }
+  .sfrow input { flex: 1; }
+  .sfrow button { padding: 8px 11px; background: transparent; color: var(--muted); border: 1px solid var(--border2); }
+  .sfrow button:hover { color: var(--red); border-color: var(--red); }
+  .tok { padding: 4px 9px; font-size: 11.5px; border-radius: 7px; background: var(--surface); color: var(--text2); border: 1px solid var(--border2); font-weight: 600; }
+
+  /* live preview */
+  .tree { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; font-size: 14px; line-height: 1.75; }
+  .tree .t1 { font-weight: 600; }
+  .tree .t2 { padding-left: 22px; color: var(--text2); }
+  .tree .where { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+
+  /* preflight */
+  .check { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .check:last-child { border-bottom: 0; }
+  .check .ico { width: 18px; flex: none; font-weight: 700; }
+  .check.ok .ico { color: var(--green); }
+  .check.fail .ico { color: var(--red); }
+  .check.warn .ico { color: var(--amber); }
+  .check.skip .ico { color: var(--faint); }
+  .check.skip { opacity: .7; }
+  .check .cdetail { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .check .cfix { margin-top: 7px; display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+  /* activity */
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--faint);
+       padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  td { padding: 11px 10px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: top; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 8px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { padding: 6px 12px; border-radius: 99px; border: 1px solid var(--border2); background: var(--panel);
+          color: var(--text2); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  details.tech { margin-top: 6px; }
+  details.tech summary { font-size: 12.5px; color: var(--muted); cursor: pointer; }
+  details.tech pre { background: var(--surface); border-radius: 8px; padding: 10px; margin-top: 6px;
+                     font-size: 11.5px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+
+  .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: #111827; color: #fff;
+           padding: 11px 18px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none;
+           transition: opacity .18s; z-index: 1200; max-width: 90vw; }
+  .toast.show { opacity: .96; }
+
+  .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 1100; }
+  .sheet-bg.show { opacity: 1; pointer-events: auto; }
+  .sheet { position: fixed; left: 50%; bottom: 0; transform: translate(-50%, 100%); width: min(620px, 100%);
+           background: var(--panel); border-radius: 16px 16px 0 0; padding: 20px 20px calc(24px + env(safe-area-inset-bottom));
+           transition: transform .22s; z-index: 1101; max-height: 88vh; overflow: auto; }
+  .sheet.show { transform: translate(-50%, 0); }
+  .sheet h2 { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div>
+      <h1>ClickUp Automation</h1>
+      <div class="sub">New task in a set-up list &rarr; code, Drive folder, subfolders, link on the task.</div>
+    </div>
+    <button id="btn-new">+ Set up a list</button>
+  </div>
+
+  <div id="banner-conn" class="banner bad hide"></div>
+  <div id="banner-draft" class="banner warn hide"></div>
+
+  <div class="tabs" id="tabs">
+    <button data-tab="auto" class="on">Automations <span class="cnt" id="cnt-auto"></span></button>
+    <button data-tab="activity">Activity <span class="cnt" id="cnt-act"></span></button>
+  </div>
+
+  <!-- ============ AUTOMATIONS ============ -->
+  <div id="tab-auto">
+    <div id="auto-list"><div class="empty">Loading…</div></div>
+    <div id="archived-wrap" class="hide" style="margin-top:12px">
+      <button class="ghost sm-btn" id="btn-archived">Show archived</button>
+    </div>
+  </div>
+
+  <!-- ============ ACTIVITY ============ -->
+  <div id="tab-activity" class="hide">
+    <div id="act-summary"></div>
+    <div class="chips" id="act-filters"></div>
+    <div class="panel" style="padding:6px 4px">
+      <table>
+        <thead><tr><th>When</th><th>Task</th><th>Automation</th><th>What happened</th><th></th></tr></thead>
+        <tbody id="act-rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div style="margin-top:12px;text-align:center"><button class="ghost sm-btn hide" id="btn-more">Load more</button></div>
+  </div>
+
+  <!-- ============ WIZARD ============ -->
+  <div id="wizard" class="hide">
+    <div style="margin-bottom:12px"><a href="#" id="wiz-back">&larr; Back to automations</a></div>
+    <div id="wiz-note"></div>
+    <div class="steps" id="wiz-steps"></div>
+    <div class="panel" id="wiz-body"></div>
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="ghost" id="wiz-prev">Back</button>
+      <button id="wiz-next">Next</button>
+      <span style="flex:1"></span>
+      <button class="ghost" id="wiz-save">Save as draft</button>
+    </div>
+  </div>
+
+  <div style="margin-top:26px;text-align:center">
+    <a href="#" id="link-conn" class="tiny muted">Connection details</a>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="sheet-bg" id="sheet-bg"></div>
+<div class="sheet" id="sheet"></div>
+
+<script defer src="/shared/nav.js"></script>
+<script>
+const API = '/clickup-automation/api';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+// two-tap confirm: first tap arms, second within 2.5s runs. No native confirm().
+function armConfirm(btn, fn, label = 'Tap again') {
+  if (btn.dataset.armed) { delete btn.dataset.armed; fn(); return; }
+  btn.dataset.armed = '1';
+  const old = btn.textContent;
+  btn.textContent = label;
+  setTimeout(() => { if (btn.isConnected && btn.dataset.armed) { delete btn.dataset.armed; btn.textContent = old; } }, 2500);
+}
+
+// Focus the newly added row. NOT querySelector('input:last-of-type') — each
+// input sits in its own .sfrow, so that selector matches the FIRST one.
+function focusLast(containerId) {
+  const inputs = document.getElementById(containerId).querySelectorAll('input');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+}
+
+async function api(path, opts = {}) {
+  if (opts.body && typeof opts.body !== 'string') {
+    opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API + path, { credentials: 'same-origin', ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const e = new Error(data.error || `HTTP ${res.status}`); e.data = data; throw e; }
+  return data;
+}
+
+function relTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z');
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + ' min ago';
+  if (mins < 60 * 24) return Math.round(mins / 60) + ' h ago';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+let AUTOS = [], TREE = null, HEALTH = null, SA_EMAIL = null;
+
+// ===========================================================================
+// Tabs
+// ===========================================================================
+$('tabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-tab]');
+  if (!b) return;
+  [...$('tabs').querySelectorAll('button')].forEach((x) => x.classList.toggle('on', x === b));
+  showTab(b.dataset.tab);
+});
+
+function showTab(tab) {
+  $('wizard').classList.add('hide');
+  $('tab-auto').classList.toggle('hide', tab !== 'auto');
+  $('tab-activity').classList.toggle('hide', tab !== 'activity');
+  $('tabs').classList.remove('hide');
+  if (tab === 'activity') loadRuns(true); else stopPolling();
+}
+
+// ===========================================================================
+// Health banner
+// ===========================================================================
+async function loadHealth() {
+  try {
+    HEALTH = await api('/health');
+  } catch (e) {
+    $('banner-conn').classList.remove('hide');
+    $('banner-conn').innerHTML = `<div class="grow">Couldn't reach the automation service: ${esc(e.message)}</div>`;
+    return;
+  }
+  SA_EMAIL = HEALTH.google?.service_account_email || null;
+
+  const problems = [];
+  if (!HEALTH.webhook?.registered) problems.push("ClickUp isn't sending us new tasks, so nothing will run.");
+  if (HEALTH.clickup && !HEALTH.clickup.ok) problems.push('We can’t talk to ClickUp right now.');
+  if (HEALTH.google && !HEALTH.google.ok) problems.push('The Google Drive connection is broken.');
+
+  const b = $('banner-conn');
+  if (problems.length) {
+    b.classList.remove('hide');
+    b.innerHTML = `<div class="grow">⚠ ${esc(problems.join(' '))}</div>
+      <button class="ghost sm-btn" id="btn-conn-detail">What do I do?</button>`;
+    $('btn-conn-detail').onclick = openConnSheet;
+  } else {
+    b.classList.add('hide');
+  }
+}
+
+function openConnSheet() {
+  const h = HEALTH || {};
+  const yn = (v) => v ? '<span class="pill green">OK</span>' : '<span class="pill red">Problem</span>';
+  $('sheet').innerHTML = `
+    <h2>Connection details</h2>
+    <div class="frow"><label>ClickUp is sending us new tasks</label>
+      ${yn(h.webhook?.registered)}
+      <div class="help">${h.webhook?.registered
+        ? 'Webhook ' + esc(h.webhook.id) + ' &rarr; ' + esc(h.webhook.endpoint || '')
+        : 'No webhook is registered. This one is set up from the command line — ask Mark to run the register step.'}</div>
+    </div>
+    <div class="frow"><label>ClickUp connection</label>${yn(h.clickup?.ok)}
+      <div class="help">${esc(h.clickup?.ok ? (h.clickup.team_name || '') : (h.clickup?.error || ''))}</div></div>
+    <div class="frow"><label>Google Drive connection</label>${yn(h.google?.ok)}
+      <div class="help">${esc(h.google?.ok ? '' : (h.google?.error || ''))}</div></div>
+    <div class="frow"><label>The automation's Google account</label>
+      <div class="mono">${esc(SA_EMAIL || 'not configured')}</div>
+      <div class="help">Any Drive folder it should write into must be shared with this address as
+        <strong>Content Manager</strong>.</div>
+      ${SA_EMAIL ? '<button class="ghost sm-btn" style="margin-top:7px" id="btn-copy-sa">Copy the email</button>' : ''}
+    </div>
+    <div class="frow"><label>Next code</label><div class="mono">${esc(h.code_sequence?.next || '—')}</div></div>
+    <div style="text-align:right"><button class="ghost" onclick="closeSheet()">Close</button></div>`;
+  if (SA_EMAIL) $('btn-copy-sa').onclick = () => copyText(SA_EMAIL);
+  openSheet();
+}
+$('link-conn').onclick = (e) => { e.preventDefault(); openConnSheet(); };
+
+function copyText(t) {
+  navigator.clipboard?.writeText(t).then(() => toast('Copied'), () => toast('Copy failed — select it by hand'));
+}
+
+function openSheet() { $('sheet-bg').classList.add('show'); $('sheet').classList.add('show'); }
+function closeSheet() { $('sheet-bg').classList.remove('show'); $('sheet').classList.remove('show'); }
+$('sheet-bg').onclick = closeSheet;
+
+// ===========================================================================
+// Automations list
+// ===========================================================================
+let showArchived = false;
+
+async function loadAutomations() {
+  try {
+    const data = await api('/automations' + (showArchived ? '?archived=1' : ''));
+    AUTOS = data.automations || [];
+    $('cnt-auto').textContent = AUTOS.filter((a) => a.status !== 'archived').length || '';
+    renderAutomations(data.counts || {});
+  } catch (e) {
+    $('auto-list').innerHTML = `<div class="empty">Couldn't load: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderAutomations(counts) {
+  const live = AUTOS.filter((a) => a.status === 'live');
+  const drafts = AUTOS.filter((a) => a.status === 'draft');
+
+  // The direct answer to "why did nothing happen?"
+  const db = $('banner-draft');
+  if (!live.length && drafts.length) {
+    db.classList.remove('hide');
+    db.innerHTML = `<div class="grow">Nothing is running yet. ${drafts.length}
+      ${drafts.length === 1 ? 'automation is saved as a draft' : 'automations are saved as drafts'} —
+      a draft doesn't do anything until you turn it on.</div>`;
+  } else { db.classList.add('hide'); }
+
+  if (!AUTOS.length) { $('auto-list').innerHTML = emptyState(); $('archived-wrap').classList.add('hide'); return; }
+  $('archived-wrap').classList.remove('hide');
+  $('btn-archived').textContent = showArchived ? 'Hide archived' : 'Show archived';
+
+  $('auto-list').innerHTML = AUTOS.map(rowHtml).join('');
+  $('auto-list').querySelectorAll('[data-act]').forEach((b) => {
+    b.onclick = () => rowAction(b.dataset.act, Number(b.dataset.id), b);
+  });
+}
+
+function rowHtml(a) {
+  const statusPill = a.status === 'live' ? '<span class="pill green">Live</span>'
+    : a.status === 'draft' ? '<span class="pill amber">Draft — not running yet</span>'
+    : '<span class="pill grey">Archived</span>';
+  const check = a.last_check_ok === false ? ' <span class="pill red">Needs attention</span>' : '';
+  const crumb = [a.clickup_space_name, a.clickup_folder_name, a.clickup_list_name].filter(Boolean).join(' › ');
+  const subs = (a.subfolders || []).length;
+  return `<div class="row ${a.status}">
+    <div class="rmain">
+      <div class="rname">${esc(a.name)} ${statusPill}${check}</div>
+      <div class="rmeta">${esc(crumb || 'list ' + a.clickup_list_id)}
+        &nbsp;·&nbsp; ${esc(a.drive_parent_path || a.drive_parent_name || 'no folder chosen')}
+        &nbsp;·&nbsp; ${subs} subfolder${subs === 1 ? '' : 's'}
+        ${a.last_run_at ? '&nbsp;·&nbsp; last run ' + esc(relTime(a.last_run_at)) : ''}
+        ${a.runs_error_7d ? ' <span class="pill red">' + a.runs_error_7d + ' failed this week</span>' : ''}</div>
+    </div>
+    <div class="racts">
+      <button class="ghost sm-btn" data-act="edit" data-id="${a.id}">Edit</button>
+      <button class="ghost sm-btn" data-act="subs" data-id="${a.id}">Subfolders</button>
+      <button class="ghost sm-btn" data-act="dup" data-id="${a.id}">Duplicate</button>
+      ${a.status === 'live'
+        ? `<button class="danger sm-btn" data-act="off" data-id="${a.id}">Turn off</button>`
+        : a.status === 'draft'
+          ? `<button class="sm-btn" data-act="on" data-id="${a.id}">Turn on</button>`
+          : ''}
+      ${a.status !== 'archived' ? `<button class="danger sm-btn" data-act="arch" data-id="${a.id}">Archive</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function emptyState() {
+  return `<div class="panel">
+    <h2>Nothing is automated yet.</h2>
+    <p class="sub" style="margin-bottom:14px">Here's what setting up a list does:</p>
+    <ol style="padding-left:20px;font-size:14px;line-height:1.9;color:var(--text2)">
+      <li>Someone creates a task in a ClickUp list you've set up.</li>
+      <li>It gets the next code — <span class="mono">${esc(HEALTH?.code_sequence?.next || '2026.0001')}</span> —
+          and is renamed <span class="mono">${esc(HEALTH?.code_sequence?.next || '2026.0001')} - Spring Sale Video</span>.</li>
+      <li>A matching Drive folder appears with your subfolders inside, and the link lands on the task.</li>
+    </ol>
+    <div class="tree" style="margin:16px 0">
+      <div class="t1">📁 ${esc(HEALTH?.code_sequence?.next || '2026.0001')} - Spring Sale Video</div>
+      <div class="t2">📁 Creative</div><div class="t2">📁 Copy</div><div class="t2">📁 Reports</div>
+    </div>
+    <button onclick="startWizard()">Set up your first list</button>
+    <div class="help tiny muted" style="margin-top:10px">Takes about two minutes. You'll need to know
+      <strong>which ClickUp list</strong>, and <strong>which Drive folder</strong> the new folders should live in.</div>
+  </div>`;
+}
+
+$('btn-archived').onclick = () => { showArchived = !showArchived; loadAutomations(); };
+
+async function rowAction(act, id, btn) {
+  const a = AUTOS.find((x) => x.id === id);
+  if (!a) return;
+  if (act === 'edit') return startWizard(a);
+  if (act === 'dup') {
+    const copy = { ...a, id: null, name: a.name + ' (copy)', clickup_list_id: '', clickup_list_name: '',
+                   clickup_space_name: '', clickup_folder_name: '', status: 'draft' };
+    return startWizard(copy, { duplicatedFrom: a.name });
+  }
+  if (act === 'subs') return openSubfolderSheet(a);
+  if (act === 'on') return turnOn(a, btn);
+  if (act === 'off') return armConfirm(btn, async () => {
+    await api(`/automations/${id}/status`, { method: 'PATCH', body: { status: 'draft' } });
+    toast('Turned off'); loadAutomations();
+  }, 'Tap again to turn off');
+  if (act === 'arch') return armConfirm(btn, async () => {
+    await api(`/automations/${id}`, { method: 'DELETE' });
+    toast('Archived'); loadAutomations();
+  }, 'Tap again to archive');
+}
+
+async function turnOn(a, btn) {
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Checking…';
+  try {
+    await api(`/automations/${a.id}/status`, { method: 'PATCH', body: { status: 'live' } });
+    $('sheet').innerHTML = `<h2>${esc(a.name)} is live</h2>
+      <p style="font-size:14px;line-height:1.6">The next task created in
+        <strong>${esc(a.clickup_list_name || 'that list')}</strong> will get a code and a folder.
+        Try it — create a task, then look at the Activity tab.</p>
+      <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn" href="https://app.clickup.com/${esc(TREE?.team_id || '')}/v/li/${esc(a.clickup_list_id)}"
+           target="_blank" rel="noopener">Open the list in ClickUp ↗</a>
+        <button class="ghost" onclick="closeSheet()">Close</button>
+      </div>`;
+    openSheet();
+    loadAutomations();
+  } catch (e) {
+    if (e.data?.checks) {
+      showBlockedChecks(a, e.data.checks);
+    } else {
+      toast('Could not turn on: ' + e.message);
+    }
+  } finally { btn.disabled = false; btn.textContent = old; }
+}
+
+function showBlockedChecks(a, checks) {
+  $('sheet').innerHTML = `<h2>Not ready yet</h2>
+    <p class="sub" style="margin-bottom:12px">These need fixing before ${esc(a.name)} can go live.</p>
+    <div>${checks.map(checkHtml).join('')}</div>
+    <div style="margin-top:16px;display:flex;gap:8px">
+      <button onclick="closeSheet();startWizard(AUTOS.find(x=>x.id===${a.id}))">Edit the setup</button>
+      <button class="ghost" onclick="closeSheet()">Close</button>
+    </div>`;
+  wireFixButtons($('sheet'));
+  openSheet();
+}
+
+// ===========================================================================
+// Subfolder quick-edit — the most common change, so it gets a fast path that
+// doesn't make you walk the whole wizard.
+// ===========================================================================
+function openSubfolderSheet(a) {
+  const subs = [...(a.subfolders || [])];
+  $('sheet').innerHTML = `<h2>Subfolders for ${esc(a.name)}</h2>
+    <div class="help tiny muted" style="margin-bottom:12px">Changes apply to new tasks.
+      Folders already created in Drive stay as they are.</div>
+    <div id="sheet-subs"></div>
+    <button class="ghost sm-btn" id="sheet-add">+ Add subfolder</button>
+    <div class="help tiny muted" style="margin-top:10px">Order doesn't matter — Drive sorts folders by name.
+      To force an order, prefix them (<span class="mono">01 - </span>, <span class="mono">02 - </span>).</div>
+    <div style="margin-top:18px;display:flex;gap:8px">
+      <button id="sheet-save">Save</button><button class="ghost" onclick="closeSheet()">Cancel</button>
+    </div>`;
+  const draw = () => {
+    $('sheet-subs').innerHTML = subs.map((s, i) => `<div class="sfrow">
+      <input type="text" value="${esc(s)}" data-i="${i}">
+      <button type="button" data-del="${i}" title="Remove">✕</button></div>`).join('')
+      || '<div class="help tiny muted" style="margin-bottom:8px">No subfolders — only the main folder gets created.</div>';
+    $('sheet-subs').querySelectorAll('input').forEach((inp) => {
+      inp.oninput = () => { subs[Number(inp.dataset.i)] = inp.value; };
+    });
+    $('sheet-subs').querySelectorAll('[data-del]').forEach((b) => {
+      b.onclick = () => { subs.splice(Number(b.dataset.del), 1); draw(); };
+    });
+  };
+  draw();
+  $('sheet-add').onclick = () => { subs.push(''); draw(); focusLast('sheet-subs'); };
+  $('sheet-save').onclick = async () => {
+    try {
+      await api(`/automations/${a.id}`, { method: 'PUT',
+        body: { subfolders: subs.map((s) => s.trim()).filter(Boolean) } });
+      toast('Saved'); closeSheet(); loadAutomations();
+    } catch (e) { toast('Failed: ' + e.message); }
+  };
+  openSheet();
+}
+
+// ===========================================================================
+// Wizard
+// ===========================================================================
+const STEP_TITLES = ['1 The list', '2 Where folders go', '3 What gets made', '4 Where links go', '5 Check & turn on'];
+let D = null, step = 0, editing = null, unlockAll = false;
+
+function blankDraft() {
+  return { name: '', clickup_list_id: '', clickup_list_name: '', clickup_space_name: '', clickup_folder_name: '',
+           drive_parent_id: '', drive_parent_name: '', drive_parent_path: '', drive_id: '',
+           folder_name_template: '{code} - {name}', subfolders: ['Creative', 'Copy', 'Reports'],
+           act_rename: true, act_create_folder: true, act_create_subfolders: true, act_copy_template: false,
+           act_write_back: true, template_file_id: '', canva_link: '', share_domain: 'anurseinthemaking.com',
+           field_drive_id: '', field_drive: '', field_doc_id: '', field_doc: '', field_canva_id: '', field_canva: '' };
+}
+
+function startWizard(existing, opts = {}) {
+  D = existing ? { ...blankDraft(), ...existing } : blankDraft();
+  if (!Array.isArray(D.subfolders)) D.subfolders = [];
+  editing = existing && existing.id ? existing.id : null;
+  unlockAll = Boolean(editing) || Boolean(opts.duplicatedFrom);
+  step = 0;
+  $('tab-auto').classList.add('hide');
+  $('tab-activity').classList.add('hide');
+  $('tabs').classList.add('hide');
+  $('wizard').classList.remove('hide');
+  $('wiz-note').innerHTML = opts.duplicatedFrom
+    ? `<div class="banner warn"><div class="grow">Copying the setup from <strong>${esc(opts.duplicatedFrom)}</strong>.
+       Pick the list this new one is for.</div></div>` : '';
+  drawWizard();
+}
+window.startWizard = startWizard;
+
+$('btn-new').onclick = () => startWizard();
+$('wiz-back').onclick = (e) => { e.preventDefault(); leaveWizard(); };
+function leaveWizard() {
+  $('wizard').classList.add('hide');
+  [...$('tabs').querySelectorAll('button')].forEach((x, i) => x.classList.toggle('on', i === 0));
+  showTab('auto');
+  loadAutomations();
+}
+
+$('wiz-prev').onclick = () => { if (step > 0) { step--; drawWizard(); } };
+$('wiz-next').onclick = () => { if (step < 4) { step++; drawWizard(); } };
+$('wiz-save').onclick = () => saveDraft(false);
+
+function drawWizard() {
+  $('wiz-steps').innerHTML = STEP_TITLES.map((t, i) =>
+    `<button data-s="${i}" class="${i === step ? 'on' : ''}" ${(!unlockAll && i > furthestStep()) ? 'disabled' : ''}>${esc(t)}</button>`
+  ).join('');
+  $('wiz-steps').querySelectorAll('button').forEach((b) => {
+    b.onclick = () => { step = Number(b.dataset.s); drawWizard(); };
+  });
+  $('wiz-prev').disabled = step === 0;
+  $('wiz-next').classList.toggle('hide', step === 4);
+  [drawStepList, drawStepDrive, drawStepMake, drawStepFields, drawStepCheck][step]();
+}
+
+// How far you're allowed to skip ahead when creating something new.
+function furthestStep() {
+  if (!D.clickup_list_id) return 0;
+  if (!D.drive_parent_id) return 1;
+  return 4;
+}
+
+// ---- step 1: the list -----------------------------------------------------
+async function drawStepList() {
+  $('wiz-body').innerHTML = `<div class="frow">
+      <label>Which ClickUp list should this watch?</label>
+      <input type="search" id="list-q" placeholder="Type part of the list name — e.g. Google, Meta, Ads" autocomplete="off">
+      <div class="help">New tasks created in this list get a code and a Drive folder.</div>
+    </div>
+    <div id="list-results" class="picker"><div class="empty">Loading lists…</div></div>
+    <div style="margin-top:8px"><a href="#" id="tree-refresh" class="tiny">Just created the list in ClickUp? Refresh</a></div>`;
+
+  const draw = () => {
+    const q = ($('list-q').value || '').trim().toLowerCase();
+    const rows = [];
+    for (const sp of TREE?.spaces || []) {
+      const push = (l, folder) => {
+        const hay = `${l.name} ${folder || ''} ${sp.name}`.toLowerCase();
+        if (q && !hay.includes(q)) return;
+        rows.push({ id: l.id, name: l.name, space: sp.name, folder });
+      };
+      (sp.lists || []).forEach((l) => push(l, null));
+      (sp.folders || []).forEach((fo) => (fo.lists || []).forEach((l) => push(l, fo.name)));
+    }
+    const taken = TREE?.taken || {};
+    $('list-results').innerHTML = rows.length ? rows.slice(0, 200).map((r) => {
+      const t = taken[String(r.id)];
+      const mine = editing && String(D.clickup_list_id) === String(r.id);
+      const blocked = t && !mine;
+      return `<div class="pick ${blocked ? 'off' : ''}" ${blocked ? '' : `data-pick="${esc(r.id)}"`}>
+        <div style="flex:1">
+          <div class="pname">${esc(r.name)}</div>
+          <div class="pcrumb">${esc([r.space, r.folder].filter(Boolean).join(' › '))}</div>
+        </div>
+        ${blocked ? `<span class="pill grey">already set up</span>` : (mine ? '<span class="pill blue">current</span>' : '')}
+      </div>`;
+    }).join('') : '<div class="empty">No list matches that.</div>';
+
+    $('list-results').querySelectorAll('[data-pick]').forEach((el) => {
+      el.onclick = () => {
+        const r = rows.find((x) => String(x.id) === el.dataset.pick);
+        D.clickup_list_id = String(r.id);
+        D.clickup_list_name = r.name;
+        D.clickup_space_name = r.space;
+        D.clickup_folder_name = r.folder || '';
+        if (!D.name || !editing) D.name = r.name;
+        D.field_drive_id = ''; D.field_drive = '';   // fields belong to a list
+        step = 1; drawWizard();
+      };
+    });
+  };
+
+  if (!TREE) { try { TREE = await api('/clickup/tree'); } catch (e) {
+    $('list-results').innerHTML = `<div class="empty">Couldn't load lists: ${esc(e.message)}</div>`; return; } }
+  draw();
+  $('list-q').oninput = draw;
+  $('list-q').focus();
+  $('tree-refresh').onclick = async (e) => {
+    e.preventDefault(); $('list-results').innerHTML = '<div class="empty">Refreshing…</div>';
+    TREE = await api('/clickup/tree?refresh=1'); draw();
+  };
+}
+
+// ---- step 2: the Drive parent -------------------------------------------
+function drawStepDrive() {
+  $('wiz-body').innerHTML = `
+    <div class="frow">
+      <label>Paste the link to the Drive folder the new folders should go inside</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="drive-q" placeholder="https://drive.google.com/drive/folders/…"
+               value="${esc(D.drive_parent_id ? 'https://drive.google.com/drive/folders/' + D.drive_parent_id : '')}">
+        <button id="drive-check">Check</button>
+      </div>
+      <div class="help">Open the folder in Google Drive and copy the address bar. That's the quickest way.</div>
+    </div>
+    <div id="drive-result"></div>
+    <div style="margin-top:10px"><a href="#" id="drive-browse" class="tiny">…or browse the shared drives instead</a></div>
+    <div id="drive-browser"></div>`;
+
+  $('drive-check').onclick = resolveDrive;
+  $('drive-q').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); resolveDrive(); } };
+  $('drive-browse').onclick = (e) => { e.preventDefault(); browseRoots(); };
+  if (D.drive_parent_id && D.drive_parent_path) showDriveResult({
+    id: D.drive_parent_id, name: D.drive_parent_name, path: D.drive_parent_path, can_add_children: true });
+}
+
+async function resolveDrive() {
+  const q = $('drive-q').value.trim();
+  if (!q) return;
+  $('drive-result').innerHTML = '<div class="help">Checking…</div>';
+  try {
+    const r = await api('/drive/resolve?q=' + encodeURIComponent(q));
+    D.drive_parent_id = r.id; D.drive_parent_name = r.name;
+    D.drive_parent_path = r.path || r.name; D.drive_id = r.drive_id || '';
+    showDriveResult(r);
+  } catch (e) {
+    $('drive-result').innerHTML = `<div class="banner bad"><div class="grow">${esc(e.message)}</div></div>`;
+  }
+}
+
+// Echoing the resolved name + breadcrumb is what makes accepting a pasted link safe.
+function showDriveResult(r) {
+  const writable = r.can_add_children !== false;
+  $('drive-result').innerHTML = `
+    <div class="panel" style="margin-top:10px">
+      <div style="font-weight:600">${esc(r.name)}</div>
+      <div class="crumb">${esc(r.path || '')}</div>
+      ${writable
+        ? '<div class="pill green">The automation can create folders here</div>'
+        : `<div class="pill red">The automation can't create folders here</div>
+           <div class="help">Ask someone who owns this folder in Drive to share it with
+             <span class="mono">${esc(SA_EMAIL || 'the automation account')}</span> as
+             <strong>Content Manager</strong>.
+             ${SA_EMAIL ? '<button class="ghost sm-btn" style="margin-top:7px" onclick="copyText(\'' + esc(SA_EMAIL) + '\')">Copy the email</button>' : ''}</div>`}
+    </div>`;
+}
+window.copyText = copyText;
+
+async function browseRoots() {
+  $('drive-browser').innerHTML = '<div class="help">Loading shared drives…</div>';
+  try {
+    const r = await api('/drive/roots');
+    if (!r.drives.length) {
+      $('drive-browser').innerHTML = `<div class="banner warn"><div class="grow">${esc(r.note ||
+        "The automation's Google account isn't a member of any shared drive yet.")}</div></div>`;
+      return;
+    }
+    $('drive-browser').innerHTML = `<div class="picker">${r.drives.map((d) =>
+      `<div class="pick" data-open="${esc(d.id)}"><div style="flex:1"><div class="pname">${esc(d.name)}</div>
+       <div class="pcrumb">shared drive</div></div></div>`).join('')}</div>`;
+    $('drive-browser').querySelectorAll('[data-open]').forEach((el) => {
+      el.onclick = () => browseFolder(el.dataset.open);
+    });
+  } catch (e) {
+    $('drive-browser').innerHTML = `<div class="banner bad"><div class="grow">${esc(e.message)}</div></div>`;
+  }
+}
+
+async function browseFolder(id) {
+  $('drive-browser').innerHTML = '<div class="help">Loading…</div>';
+  try {
+    const r = await api('/drive/folders?parent=' + encodeURIComponent(id));
+    $('drive-browser').innerHTML = `
+      <div class="crumb">${esc(r.parent?.path || '')}</div>
+      <div class="picker">${(r.folders || []).map((f) =>
+        `<div class="pick"><div style="flex:1" data-open="${esc(f.id)}"><div class="pname">📁 ${esc(f.name)}</div></div>
+         <button class="ghost sm-btn" data-use="${esc(f.id)}" data-name="${esc(f.name)}">Use this</button></div>`).join('')
+        || '<div class="empty">No subfolders here.</div>'}</div>
+      <div style="margin-top:10px">
+        <button class="ghost sm-btn" data-use="${esc(id)}" data-name="${esc(r.parent?.name || '')}">
+          Use “${esc(r.parent?.name || 'this folder')}” itself</button>
+        <button class="ghost sm-btn" id="browse-roots">Back to drives</button>
+      </div>`;
+    $('drive-browser').querySelectorAll('[data-open]').forEach((el) => { el.onclick = () => browseFolder(el.dataset.open); });
+    $('drive-browser').querySelectorAll('[data-use]').forEach((el) => {
+      el.onclick = async () => {
+        $('drive-q').value = 'https://drive.google.com/drive/folders/' + el.dataset.use;
+        await resolveDrive();
+        $('drive-browser').innerHTML = '';
+      };
+    });
+    $('browse-roots').onclick = browseRoots;
+  } catch (e) {
+    $('drive-browser').innerHTML = `<div class="banner bad"><div class="grow">${esc(e.message)}</div></div>`;
+  }
+}
+
+// ---- step 3: what gets created ------------------------------------------
+function drawStepMake() {
+  $('wiz-body').innerHTML = `
+    <div class="frow">
+      <label>What should this automation be called?</label>
+      <input type="text" id="f-name" value="${esc(D.name)}">
+      <div class="help">Just for this screen. Doesn't affect ClickUp or Drive.</div>
+    </div>
+    <div class="frow">
+      <label>Folder name</label>
+      <input type="text" id="f-tmpl" value="${esc(D.folder_name_template)}">
+      <div style="margin-top:6px;display:flex;gap:6px">
+        <button type="button" class="tok" data-tok="{code}" data-for="f-tmpl" title="the code we generate, e.g. 2026.0043">+ code</button>
+        <button type="button" class="tok" data-tok="{name}" data-for="f-tmpl" title="the task name, without any code">+ name</button>
+      </div>
+    </div>
+    <div class="frow">
+      <label><input type="checkbox" id="f-rename" ${D.act_rename ? 'checked' : ''}> Rename the ClickUp task to match</label>
+      <div class="help">A task that already starts with a code keeps the code it has and is never renamed.</div>
+    </div>
+    <div class="frow">
+      <label>Subfolders created inside it</label>
+      <div id="sf-list"></div>
+      <button type="button" class="ghost sm-btn" id="sf-add">+ Add subfolder</button>
+      <div class="help">Changes apply to new tasks. Folders already created in Drive stay as they are.<br>
+        Order doesn't matter — Drive sorts folders by name. To force an order, prefix them
+        (<span class="mono">01 - </span>, <span class="mono">02 - </span>). <span class="mono">{code}</span> and
+        <span class="mono">{name}</span> work here too.</div>
+    </div>
+    <div class="frow">
+      <label>Preview</label>
+      <div class="tree" id="sf-preview"></div>
+    </div>`;
+
+  $('f-name').oninput = (e) => { D.name = e.target.value; };
+  $('f-tmpl').oninput = (e) => { D.folder_name_template = e.target.value; preview(); };
+  $('f-rename').onchange = (e) => { D.act_rename = e.target.checked; };
+  $('wiz-body').querySelectorAll('[data-tok]').forEach((b) => {
+    b.onclick = () => {
+      const inp = $(b.dataset.for);
+      const at = inp.selectionStart ?? inp.value.length;
+      inp.value = inp.value.slice(0, at) + b.dataset.tok + inp.value.slice(inp.selectionEnd ?? at);
+      inp.focus(); D.folder_name_template = inp.value; preview();
+    };
+  });
+  $('sf-add').onclick = () => { D.subfolders.push(''); drawSubs(); focusLast('sf-list'); };
+  drawSubs();
+}
+
+function drawSubs() {
+  $('sf-list').innerHTML = D.subfolders.map((s, i) => `<div class="sfrow">
+      <input type="text" value="${esc(s)}" data-i="${i}" placeholder="Subfolder name">
+      <button type="button" data-del="${i}" title="Remove">✕</button></div>`).join('')
+    || '<div class="help tiny muted" style="margin-bottom:8px">No subfolders — only the main folder gets created.</div>';
+  $('sf-list').querySelectorAll('input').forEach((inp) => {
+    inp.oninput = () => { D.subfolders[Number(inp.dataset.i)] = inp.value; preview(); };
+  });
+  $('sf-list').querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = () => { D.subfolders.splice(Number(b.dataset.del), 1); drawSubs(); };
+  });
+  preview();
+}
+
+function render(t, vars) { return String(t || '').replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m)); }
+
+function preview() {
+  const code = HEALTH?.code_sequence?.next || '2026.0001';
+  const vars = { code, name: 'Spring Sale Video' };
+  const main = render(D.folder_name_template, vars) || '(no name)';
+  const subs = D.subfolders.map((s) => render(s, vars).trim()).filter(Boolean);
+  const el = $('sf-preview');
+  if (!el) return;
+  el.innerHTML = `<div class="t1">📁 ${esc(main)}</div>
+    ${subs.map((s) => `<div class="t2">📁 ${esc(s)}</div>`).join('')}
+    <div class="where">A task called “Spring Sale Video” in
+      ${esc(D.clickup_list_name || 'that list')} would produce this inside
+      ${esc(D.drive_parent_path || 'the chosen folder')}.</div>`;
+}
+
+// ---- step 4: where the links go -----------------------------------------
+let LIST_FIELDS = null;
+
+async function drawStepFields() {
+  $('wiz-body').innerHTML = '<div class="help">Loading the fields on that list…</div>';
+  try {
+    const r = await api(`/clickup/lists/${encodeURIComponent(D.clickup_list_id)}/fields`);
+    LIST_FIELDS = r.fields || [];
+  } catch (e) {
+    $('wiz-body').innerHTML = `<div class="banner bad"><div class="grow">Couldn't read that list's fields: ${esc(e.message)}</div></div>`;
+    return;
+  }
+
+  // Guess once, on load, and say so. The RUNTIME match is exact — the fuzziness
+  // lives only here, where a human confirms it.
+  let guessNote = '';
+  if (!D.field_drive_id && !D.field_drive) {
+    const g = LIST_FIELDS.find((f) => /drive/i.test(f.name) && /url|short_text|text/.test(f.type))
+           || LIST_FIELDS.find((f) => /drive/i.test(f.name));
+    if (g) { D.field_drive_id = g.id; D.field_drive = g.name; guessNote = g.name; }
+  }
+
+  $('wiz-body').innerHTML = `
+    ${fieldRow('drive', 'Drive folder link', 'This is the one that matters.')}
+    ${guessNote ? `<div class="help tiny muted" style="margin-top:-8px;margin-bottom:14px">
+      Matched the field named “${esc(guessNote)}”. Change it if that's wrong.</div>` : ''}
+    <details style="margin-top:8px"><summary style="cursor:pointer;font-size:13.5px;font-weight:600">
+      Also write a Doc or Canva link?</summary>
+      <div style="margin-top:14px">
+        ${fieldRow('doc', 'Doc link', 'Only if this list copies a template doc.')}
+        ${fieldRow('canva', 'Canva link', 'A fixed link written onto every task.')}
+        <div class="frow"><label>Canva link to write</label>
+          <input type="text" id="f-canva-link" value="${esc(D.canva_link || '')}" placeholder="https://www.canva.com/design/…"></div>
+        <div class="frow"><label>Template doc to copy (Google Doc id or link)</label>
+          <input type="text" id="f-template" value="${esc(D.template_file_id || '')}" placeholder="leave empty for none"></div>
+      </div>
+    </details>`;
+
+  ['drive', 'doc', 'canva'].forEach((kind) => {
+    const sel = $('sel-' + kind);
+    if (!sel) return;
+    sel.onchange = () => {
+      const f = LIST_FIELDS.find((x) => x.id === sel.value);
+      D['field_' + kind + '_id'] = f ? f.id : '';
+      D['field_' + kind] = f ? f.name : '';
+      checkDupes();
+    };
+  });
+  $('f-canva-link').oninput = (e) => { D.canva_link = e.target.value.trim(); };
+  $('f-template').oninput = (e) => {
+    const v = e.target.value.trim();
+    const m = v.match(/\/d\/([A-Za-z0-9_-]{8,})/) || v.match(/[?&]id=([A-Za-z0-9_-]{8,})/);
+    D.template_file_id = m ? m[1] : v;
+    D.act_copy_template = Boolean(D.template_file_id);
+  };
+  checkDupes();
+}
+
+function fieldRow(kind, label, help) {
+  const urls = LIST_FIELDS.filter((f) => f.type === 'url');
+  const texts = LIST_FIELDS.filter((f) => f.type === 'short_text' || f.type === 'text');
+  if (!urls.length && !texts.length) {
+    return `<div class="frow"><label>${esc(label)}</label>
+      <div class="help">This list has no URL or text field, so nothing can be written.
+        Add a URL custom field in ClickUp, then <a href="#" onclick="drawStepFields();return false">refresh the fields</a>.</div></div>`;
+  }
+  const chosen = D['field_' + kind + '_id'] || '';
+  const opt = (f) => `<option value="${esc(f.id)}" ${f.id === chosen ? 'selected' : ''}>${esc(f.name)}</option>`;
+  return `<div class="frow">
+    <label>${esc(label)}</label>
+    <select id="sel-${kind}">
+      <option value="">Don't write this anywhere</option>
+      ${urls.length ? `<optgroup label="URL fields">${urls.map(opt).join('')}</optgroup>` : ''}
+      ${texts.length ? `<optgroup label="Text fields">${texts.map(opt).join('')}</optgroup>` : ''}
+    </select>
+    <div class="help">${esc(help)}</div>
+    <div class="help" id="warn-${kind}"></div>
+  </div>`;
+}
+
+// Two links into one field is last-write-wins, which gets reported as a bug.
+function checkDupes() {
+  const used = {};
+  let clash = false;
+  ['drive', 'doc', 'canva'].forEach((k) => {
+    const id = D['field_' + k + '_id'];
+    if (!id) return;
+    if (used[id]) clash = true;
+    used[id] = (used[id] || 0) + 1;
+  });
+  ['drive', 'doc', 'canva'].forEach((k) => {
+    const el = $('warn-' + k);
+    if (!el) return;
+    const id = D['field_' + k + '_id'];
+    const dupe = id && used[id] > 1;
+    const f = LIST_FIELDS.find((x) => x.id === id);
+    el.innerHTML = dupe
+      ? '<span style="color:var(--red)">Two links can’t go into the same field — only the last one would stick.</span>'
+      : (f && f.type !== 'url'
+          ? '<span style="color:var(--amber)">That’s a text field, so the link is stored as plain text.</span>' : '');
+  });
+  return !clash;
+}
+
+// ---- step 5: preflight ---------------------------------------------------
+async function drawStepCheck() {
+  $('wiz-body').innerHTML = '<div class="help">Running checks…</div>';
+  let pf;
+  try {
+    pf = editing
+      ? await api(`/automations/${editing}/preflight`, { method: 'POST', body: { deep: false } })
+      : await api('/preflight', { method: 'POST', body: payload() });
+  } catch (e) {
+    $('wiz-body').innerHTML = `<div class="banner bad"><div class="grow">Couldn't run the checks: ${esc(e.message)}</div></div>`;
+    return;
+  }
+  SA_EMAIL = pf.service_account_email || SA_EMAIL;
+
+  $('wiz-body').innerHTML = `
+    <h2>Will this work?</h2>
+    <div style="margin:12px 0">${pf.checks.map(checkHtml).join('')}</div>
+    <div class="frow"><label>What a new task would produce</label>
+      <div class="tree">
+        <div class="t1">📁 ${esc(pf.preview.folder_name)}</div>
+        ${pf.preview.subfolder_names.map((s) => `<div class="t2">📁 ${esc(s)}</div>`).join('')}
+        <div class="where">inside ${esc(pf.preview.parent_path || 'the chosen folder')}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+      <button id="wiz-live" ${pf.hard_fail ? 'disabled' : ''}>${editing ? 'Save and turn on' : 'Save and turn on'}</button>
+      <button class="ghost" id="wiz-draft">Save as draft</button>
+    </div>
+    ${pf.hard_fail ? '<div class="help" style="margin-top:8px">Fix the red items above to turn this on. You can still save it as a draft.</div>' : ''}`;
+
+  wireFixButtons($('wiz-body'));
+  $('wiz-live').onclick = () => saveDraft(true);
+  $('wiz-draft').onclick = () => saveDraft(false);
+}
+
+function checkHtml(c) {
+  const ico = c.status === 'ok' ? '✓' : c.status === 'warn' ? '!' : c.status === 'skip' ? '–' : '✕';
+  return `<div class="check ${c.status}">
+    <div class="ico">${ico}</div>
+    <div style="flex:1">
+      <div>${esc(c.label)}</div>
+      ${c.detail ? `<div class="cdetail">${esc(c.detail)}</div>` : ''}
+      ${c.status === 'fail' || c.status === 'warn' ? fixHtml(c) : ''}
+    </div></div>`;
+}
+
+// Every failure gets one plain sentence and one action.
+function fixHtml(c) {
+  const email = c.meta?.service_account_email || SA_EMAIL;
+  const map = {
+    share_folder_with_service_account: {
+      text: `Ask someone who owns this folder in Drive to share it with <span class="mono">${esc(email || '')}</span> and give it <strong>Content Manager</strong>.`,
+      btn: email ? `<button class="ghost sm-btn" data-copy="${esc(email)}">Copy the email</button>` : '',
+    },
+    remap_field: { text: 'Pick the right field on step 4.', btn: '<button class="ghost sm-btn" data-goto="3">Go to step 4</button>' },
+    pick_new_parent: { text: 'Choose a different Drive folder.', btn: '<button class="ghost sm-btn" data-goto="1">Choose a folder</button>' },
+    pick_new_list: { text: 'Choose a different ClickUp list.', btn: '<button class="ghost sm-btn" data-goto="0">Choose a list</button>' },
+    reconnect_webhook: { text: 'Nothing will run until ClickUp is reconnected. This is a one-off setup step — ask Mark.', btn: '' },
+    open_existing_automation: { text: 'That list is already set up.', btn: '<button class="ghost sm-btn" data-open-autom="' + (c.meta?.automation_id || '') + '">Open it</button>' },
+    contact_owner: { text: 'Send these details to Mark.', btn: `<button class="ghost sm-btn" data-copy="${esc(c.detail || c.label)}">Copy details</button>` },
+  };
+  const f = map[c.fix_code];
+  if (!f) return '';
+  return `<div class="cfix"><span class="tiny">${f.text}</span>${f.btn}</div>`;
+}
+
+function wireFixButtons(root) {
+  root.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = () => copyText(b.dataset.copy); });
+  root.querySelectorAll('[data-goto]').forEach((b) => {
+    b.onclick = () => { closeSheet(); unlockAll = true; step = Number(b.dataset.goto); drawWizard(); };
+  });
+  root.querySelectorAll('[data-open-autom]').forEach((b) => {
+    b.onclick = () => { closeSheet(); const a = AUTOS.find((x) => x.id === Number(b.dataset.openAutom)); if (a) startWizard(a); };
+  });
+}
+
+// ---- saving --------------------------------------------------------------
+function payload() {
+  return {
+    name: D.name || D.clickup_list_name || 'Untitled',
+    clickup_list_id: D.clickup_list_id, clickup_list_name: D.clickup_list_name,
+    clickup_space_name: D.clickup_space_name, clickup_folder_name: D.clickup_folder_name,
+    drive_parent_id: D.drive_parent_id, drive_parent_name: D.drive_parent_name,
+    drive_parent_path: D.drive_parent_path, drive_id: D.drive_id,
+    folder_name_template: D.folder_name_template || '{code} - {name}',
+    subfolders: D.subfolders.map((s) => String(s).trim()).filter(Boolean),
+    act_rename: D.act_rename, act_create_folder: true,
+    act_create_subfolders: D.subfolders.filter(Boolean).length > 0,
+    act_copy_template: Boolean(D.template_file_id), act_write_back: true,
+    template_file_id: D.template_file_id || null, canva_link: D.canva_link || null,
+    share_domain: D.share_domain || null,
+    field_drive_id: D.field_drive_id || null, field_drive: D.field_drive || null,
+    field_doc_id: D.field_doc_id || null, field_doc: D.field_doc || null,
+    field_canva_id: D.field_canva_id || null, field_canva: D.field_canva || null,
+  };
+}
+
+async function saveDraft(thenLive) {
+  if (!D.clickup_list_id) { toast('Pick a ClickUp list first'); step = 0; drawWizard(); return; }
+  if (LIST_FIELDS && !checkDupes()) { toast('Two links point at the same field'); step = 3; drawWizard(); return; }
+  try {
+    let id = editing;
+    if (id) {
+      await api(`/automations/${id}`, { method: 'PUT', body: payload() });
+    } else {
+      const r = await api('/automations', { method: 'POST', body: payload() });
+      id = r.automation.id;
+      editing = id;
+    }
+    if (!thenLive) { toast('Saved as a draft'); await loadAutomations(); leaveWizard(); return; }
+
+    await api(`/automations/${id}/status`, { method: 'PATCH', body: { status: 'live' } });
+    toast('Live');
+    await loadAutomations();
+    leaveWizard();
+    const a = AUTOS.find((x) => x.id === id);
+    if (a) {
+      $('sheet').innerHTML = `<h2>${esc(a.name)} is live</h2>
+        <p style="font-size:14px;line-height:1.6">The next task created in
+        <strong>${esc(a.clickup_list_name)}</strong> will get a code and a folder.
+        Try it — create a task, then look at the Activity tab.</p>
+        <div style="margin-top:16px"><button class="ghost" onclick="closeSheet()">Close</button></div>`;
+      openSheet();
+    }
+  } catch (e) {
+    if (e.data?.checks) { toast('Saved, but not turned on — some checks failed'); await loadAutomations(); step = 4; drawWizard(); }
+    else toast('Failed: ' + e.message);
+  }
+}
+
+// ===========================================================================
+// Activity
+// ===========================================================================
+let actFilter = { status: '', automation_id: '' }, actCursor = null, pollTimer = null;
+
+const REASON_TEXT = {
+  no_automation: '— No automation set up for that list',
+  automation_draft: "— That list's automation is still a draft, so nothing was done",
+  automation_archived: "— That list's automation is archived",
+  already_done: '— Already done earlier',
+  no_list: '— That task has no list',
+  task_unreadable: "— Couldn't read that task from ClickUp",
+};
+const ERROR_TEXT = {
+  drive_permission: "✕ Couldn't create the folder — the automation's Google account doesn't have permission",
+  drive_parent_missing: '✕ The Drive folder it should write into is gone',
+  clickup_field_missing: '✕ The custom field it should write to no longer exists',
+  clickup_auth: "✕ Couldn't sign in to ClickUp",
+  clickup_rate_limit: '✕ ClickUp asked us to slow down — will retry',
+  drive_rate_limit: '✕ Google asked us to slow down — will retry',
+  code_sequence: "✕ Couldn't allocate a code",
+  google_auth: "✕ Couldn't sign in to Google — will retry",
+};
+
+function runSentence(r) {
+  if (r.status === 'running') return '⏳ Working on it…';
+  if (r.status === 'ok') {
+    const wrote = (r.fields_written || []).filter(Boolean).length;
+    return wrote ? '✓ Created the folder and wrote the link' : '✓ Created the folder';
+  }
+  if (r.status === 'skipped') return REASON_TEXT[r.reason_code] || '— Nothing to do';
+  return ERROR_TEXT[r.error_code] || ('✕ ' + (r.error_code || 'Something went wrong'));
+}
+
+function runPill(r) {
+  const cls = r.status === 'ok' ? 'green' : r.status === 'error' ? 'red' : r.status === 'running' ? 'blue' : 'grey';
+  return `<span class="pill ${cls}">${esc(r.status)}</span>`;
+}
+
+async function loadRuns(reset) {
+  if (reset) { actCursor = null; $('act-rows').innerHTML = '<tr><td colspan="5" class="empty">Loading…</td></tr>'; }
+  const qs = new URLSearchParams({ limit: '50' });
+  if (actCursor) qs.set('cursor', actCursor);
+  if (actFilter.status) qs.set('status', actFilter.status);
+  if (actFilter.automation_id) qs.set('automation_id', actFilter.automation_id);
+
+  let data;
+  try { data = await api('/runs?' + qs); }
+  catch (e) { $('act-rows').innerHTML = `<tr><td colspan="5" class="empty">Couldn't load: ${esc(e.message)}</td></tr>`; return; }
+
+  const rows = data.runs || [];
+  const html = rows.map((r) => `<tr>
+      <td class="muted tiny">${esc(relTime(r.created_at))}</td>
+      <td><a href="${esc(r.task_url)}" target="_blank" rel="noopener">${esc(r.task_name || r.clickup_task_id)}</a></td>
+      <td class="muted tiny">${esc(r.automation_name || '—')}</td>
+      <td>${runPill(r)} ${esc(runSentence(r))}
+        ${r.error ? `<details class="tech"><summary>Show the technical details</summary>
+          <pre>${esc(r.error)}\n\ntask ${esc(r.clickup_task_id)}\ncode ${esc(r.error_code || '')}\nattempts ${esc(r.attempts)}</pre>
+          </details>` : ''}</td>
+      <td style="white-space:nowrap">
+        ${r.folder_url ? `<a class="tiny" href="${esc(r.folder_url)}" target="_blank" rel="noopener">Open folder ↗</a><br>` : ''}
+        ${r.status === 'error' ? `<button class="ghost sm-btn" data-retry="${r.id}">Retry</button>` : ''}
+      </td></tr>`).join('');
+
+  if (reset || !actCursor) $('act-rows').innerHTML = html || '<tr><td colspan="5" class="empty">Nothing has run yet. Activity shows up here the moment someone creates a task in an automated list.</td></tr>';
+  else $('act-rows').insertAdjacentHTML('beforeend', html);
+
+  actCursor = data.next_cursor;
+  $('btn-more').classList.toggle('hide', !actCursor);
+  $('act-rows').querySelectorAll('[data-retry]').forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = 'Retrying…';
+      try { await api(`/runs/${b.dataset.retry}/retry`, { method: 'POST' }); toast('Retried'); loadRuns(true); }
+      catch (e) { toast('Failed: ' + e.message); b.disabled = false; b.textContent = 'Retry'; }
+    };
+  });
+
+  $('cnt-act').innerHTML = data.problems_24h ? `<span class="cnt bad">${data.problems_24h} problem${data.problems_24h === 1 ? '' : 's'}</span>` : '';
+  $('act-summary').innerHTML = data.problems_24h
+    ? `<div class="banner bad"><div class="grow">${data.problems_24h} problem${data.problems_24h === 1 ? '' : 's'} in the last 24 hours.</div>
+       <button class="ghost sm-btn" id="btn-only-problems">Show only problems</button></div>` : '';
+  if (data.problems_24h) $('btn-only-problems').onclick = () => { actFilter.status = 'problems'; drawFilters(); loadRuns(true); };
+
+  drawFilters();
+  // Poll only while something is actually in flight.
+  stopPolling();
+  if (data.in_flight > 0) pollTimer = setTimeout(() => loadRuns(true), 5000);
+}
+
+function drawFilters() {
+  const chips = [{ k: '', label: 'All' }, { k: 'problems', label: 'Problems only' }, { k: 'ok', label: 'Worked' }, { k: 'skipped', label: 'Skipped' }];
+  $('act-filters').innerHTML = chips.map((c) =>
+    `<button class="chip ${actFilter.status === c.k ? 'on' : ''}" data-f="${c.k}">${esc(c.label)}</button>`).join('')
+    + AUTOS.filter((a) => a.status !== 'archived').map((a) =>
+    `<button class="chip ${String(actFilter.automation_id) === String(a.id) ? 'on' : ''}" data-a="${a.id}">${esc(a.name)}</button>`).join('');
+  $('act-filters').querySelectorAll('[data-f]').forEach((b) => {
+    b.onclick = () => { actFilter.status = b.dataset.f; actFilter.automation_id = ''; loadRuns(true); };
+  });
+  $('act-filters').querySelectorAll('[data-a]').forEach((b) => {
+    b.onclick = () => {
+      actFilter.automation_id = String(actFilter.automation_id) === b.dataset.a ? '' : b.dataset.a;
+      loadRuns(true);
+    };
+  });
+}
+
+function stopPolling() { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopPolling(); });
+$('btn-more').onclick = () => loadRuns(false);
+
+// ===========================================================================
+(async function init() {
+  await loadHealth();
+  await loadAutomations();
+})();
+</script>
+</body>
+</html>

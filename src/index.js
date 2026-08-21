@@ -1,5 +1,6 @@
 import { handleStageRoutes } from "./stage-tracker.js";
 import { handleVideoReviewAPI } from "./video-review.js";
+import { handleClickUpAutomationRoutes, clickUpAutomationCron } from "./clickup-automation.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCO2_B3HitEVQIJE71RL357tdUPErxkhG4AdwXapyhOWtry_-czGMVg_HpZ0paQQ/pub";
@@ -7941,6 +7942,12 @@ export default {
     const stageResp = await handleStageRoutes(request, env, ctx, path);
     if (stageResp) return stageResp;
 
+    // ===== CLICKUP AUTOMATION (handles /clickup-automation/* ; returns null otherwise) =====
+    // Mounted here, above the global OPTIONS handler below, because this module
+    // answers its own preflight with same-origin CORS rather than the wildcard.
+    const cuaResp = await handleClickUpAutomationRoutes(request, env, ctx, path);
+    if (cuaResp) return cuaResp;
+
     // Helper: add noindex header to any response
     function addNoIndex(response) {
       const newResp = new Response(response.body, response);
@@ -8133,6 +8140,7 @@ export default {
     if (path === "/growth") return Response.redirect(url.origin + "/growth/", 301);
     if (path === "/med-supplies") return Response.redirect(url.origin + "/med-supplies/", 301);
     if (path === "/video-review") return Response.redirect(url.origin + "/video-review/", 301);
+    if (path === "/clickup-automation") return Response.redirect(url.origin + "/clickup-automation/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }
     // ===== AMBASSADOR API =====
@@ -8150,6 +8158,9 @@ export default {
   },
   async scheduled(event, env, ctx) {
     ctx.waitUntil(fullSync(env));
+    // Retry ClickUp Automation runs that failed for a recoverable reason. We
+    // never 5xx at ClickUp, so it never retries us — this is the only retry.
+    ctx.waitUntil((async () => { try { await clickUpAutomationCron(env); } catch (e) { /* non-fatal */ } })());
     // Advance background product-extraction jobs (a few chunks per tick).
     ctx.waitUntil((async () => { try { await processProductJobs(env); } catch (e) { /* non-fatal */ } })());
     // Catch customer follow-ups even if the Zendesk reply trigger doesn't fire.
@@ -8234,6 +8245,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,-app
       <a href="/video-review/" class="app-card"><div class="app-icon">\u{1F3A5}</div><div class="app-text"><div class="app-name">Video Review</div><div class="app-desc">AI clinical QA before you publish</div></div></a>
       <a href="/social/" class="app-card"><div class="app-icon">\u{1F4F1}</div><div class="app-text"><div class="app-name">Social Attribution</div><div class="app-desc">Tie revenue back to social posts</div></div></a>
       <a href="/stage/" class="app-card"><div class="app-icon">\u{23F1}</div><div class="app-text"><div class="app-name">Stage Timing</div><div class="app-desc">How long tasks sit in each stage</div></div></a>
+      <a href="/clickup-automation/" class="app-card"><div class="app-icon">\u{1F4C2}</div><div class="app-text"><div class="app-name">ClickUp Automation</div><div class="app-desc">Auto-code tasks &amp; build Drive folders</div></div></a>
     </div>
   </div>
 

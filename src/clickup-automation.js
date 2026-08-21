@@ -94,6 +94,7 @@ async function ensureClickUpAutomationTables(env) {
       drive_id              TEXT,
       drive_name            TEXT,
       drive_parent_id       TEXT,
+      drive_parent_name     TEXT,
       drive_parent_path     TEXT,
       folder_name_template  TEXT    NOT NULL DEFAULT '{code} - {name}',
       subfolders            TEXT    NOT NULL DEFAULT '[]',
@@ -904,7 +905,12 @@ function renderTemplate(template, vars) {
 }
 
 function subfolderNames(automation, vars) {
-  const raw = safeParse(automation.subfolders, []);
+  // Callers hand us either a raw D1 row (subfolders is a JSON string) or a
+  // shaped one (already an array). Accept both — re-parsing an array silently
+  // yields [], which made previews claim no subfolders would be created.
+  const raw = Array.isArray(automation.subfolders)
+    ? automation.subfolders
+    : safeParse(automation.subfolders, []);
   if (!Array.isArray(raw)) return [];
   return raw
     .map((n) => sanitizeName(renderTemplate(n, vars)))
@@ -1327,16 +1333,24 @@ async function preflight(env, cfg, { deep = false } = {}) {
   }
 
   // --- ClickUp reachable --------------------------------------------------
+  // Same reasoning as the Google check below: if the connection is down, say so
+  // once and skip the downstream checks rather than blaming the list or the
+  // field, which would send someone off reconfiguring something that is fine.
   let fields = [];
+  let clickupOk = true;
   try {
     await cuFetch(env, `/team/${teamId(env)}`);
     add("clickup_auth", "We can talk to ClickUp", "ok");
   } catch (e) {
+    clickupOk = false;
     add("clickup_auth", "We can talk to ClickUp", "fail", e.message, "contact_owner");
   }
 
   // --- the list -----------------------------------------------------------
-  if (!cfg.clickup_list_id) {
+  if (!clickupOk) {
+    add("list_exists", "The chosen ClickUp list still exists", "skip",
+      "Can't check this until the ClickUp connection is fixed.");
+  } else if (!cfg.clickup_list_id) {
     add("list_exists", "A ClickUp list is chosen", "fail", "No list chosen yet.", "remap_field");
   } else {
     try {
@@ -1375,7 +1389,10 @@ async function preflight(env, cfg, { deep = false } = {}) {
   }
 
   // --- the custom fields --------------------------------------------------
-  if (cfg.act_write_back) {
+  if (cfg.act_write_back && !clickupOk) {
+    add("fields_exist", "The chosen custom fields exist on this list", "skip",
+      "Can't check this until the ClickUp connection is fixed.");
+  } else if (cfg.act_write_back) {
     const mapped = [
       ["Drive folder link", cfg.field_drive_id, cfg.field_drive],
       ["Doc link", cfg.field_doc_id, cfg.field_doc],
@@ -1410,9 +1427,34 @@ async function preflight(env, cfg, { deep = false } = {}) {
     }
   }
 
-  // --- the Drive parent ---------------------------------------------------
+  // --- Google reachable ---------------------------------------------------
+  // Checked separately so a broken credential doesn't get misreported as a
+  // problem with the folder. Telling someone to pick a different folder when
+  // the real fault is a missing key sends them down the wrong path entirely.
   const saEmail = env.GOOGLE_CLIENT_EMAIL || null;
-  if (!cfg.drive_parent_id) {
+  let googleOk = true;
+  try {
+    await googleAccessToken(env);
+    add("google_auth", "We can talk to Google Drive", "ok");
+  } catch (e) {
+    googleOk = false;
+    add(
+      "google_auth",
+      "We can talk to Google Drive",
+      "fail",
+      "The automation's Google connection isn't working, so nothing can be created in Drive.",
+      "contact_owner",
+      { error: e.message }
+    );
+  }
+
+  // --- the Drive parent ---------------------------------------------------
+  if (!googleOk) {
+    add("drive_parent_exists", "We can see the chosen Drive folder", "skip",
+      "Can't check this until the Google connection is fixed.");
+    add("drive_writable", "We can create folders in it", "skip",
+      "Can't check this until the Google connection is fixed.");
+  } else if (!cfg.drive_parent_id) {
     add("drive_parent_exists", "A Drive folder is chosen", "fail", "No parent folder chosen yet.", "pick_new_parent");
   } else {
     let parent = null;
@@ -1536,6 +1578,7 @@ const AUTOMATION_FIELDS = [
   "drive_id",
   "drive_name",
   "drive_parent_id",
+  "drive_parent_name",
   "drive_parent_path",
   "folder_name_template",
   "template_file_id",
