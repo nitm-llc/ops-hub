@@ -5453,7 +5453,7 @@ async function handleCxAgentAPI(request, env, path) {
           `).bind(intent).all()).results || [];
           const seen = new Set(), out = [];
           for (const r of rows) {
-            const clean = cxScrubPII(cxCleanReplyText(r.msg)).slice(0, 160);
+            const clean = cxScrubPII(cxCleanReplyText(r.msg)).replace(/\s+/g, ' ').slice(0, 160);
             const key = clean.toLowerCase().slice(0, 60);
             if (clean.length < 20 || seen.has(key)) continue;
             seen.add(key); out.push(clean);
@@ -5613,7 +5613,7 @@ async function handleCxAgentAPI(request, env, path) {
         md.push('');
         md.push('Add as Snippets (Knowledge Hub) or group into Articles by theme.');
         md.push('');
-        for (const r of facts) md.push(`- **[${r.category}]** ${String(r.content).trim()}`);
+        for (const r of facts) md.push(`- **[${r.category}]** ${cxScrubPII(r.content)}`);
         md.push('');
         md.push('---');
         md.push('');
@@ -5621,7 +5621,7 @@ async function handleCxAgentAPI(request, env, path) {
         md.push('');
         md.push('These are behavioural instructions. In Fin they belong in Guidance, not Knowledge.');
         md.push('');
-        for (const r of rules) md.push(`- **[${r.category}]** ${String(r.content).trim()}`);
+        for (const r of rules) md.push(`- **[${r.category}]** ${cxScrubPII(r.content)}`);
         return dl(md.join('\n'), 'fin-knowledge.md');
       }
 
@@ -5651,7 +5651,7 @@ async function handleCxAgentAPI(request, env, path) {
           md.push('# ' + p.name);
           md.push('');
           if (topics.length) { md.push('**Search keywords:** ' + topics.join(', ')); md.push(''); }
-          md.push(String(p.coverage_outline || '').trim());
+          md.push(cxScrubPII(p.coverage_outline));
           md.push('');
         }
         return dl(md.join('\n'), idx != null ? `fin-product-${idx}.md` : 'fin-products.md');
