@@ -1204,15 +1204,24 @@ async function handleWebhook(request, env, ctx) {
   const taskId = payload.task_id;
   if (!taskId) return reply({ ok: true, skipped: "no task id" });
 
-  try {
-    const result = await processTask(env, taskId, { rawBody, trigger: "webhook" });
-    return reply({ ok: true, ...result });
-  } catch (err) {
-    // Should be unreachable — processTask logs its own failures — but a 200 here
-    // is still the right answer for ClickUp.
-    console.error("clickup-automation webhook:", err);
-    return reply({ ok: false, error: String(err?.message || err) });
-  }
+  // Acknowledge first, then work.
+  //
+  // Building a folder tree takes several Drive round-trips — longer than
+  // ClickUp is willing to wait. When ClickUp gave up it disconnected, and
+  // Cloudflare cancelled the Worker mid-flight: outcome "canceled", no
+  // exception, and a run row frozen at 'running' forever. ClickUp then retried,
+  // saw the frozen row, and skipped. Both sides looked fine. Nothing ran.
+  //
+  // waitUntil keeps the work alive after the response has gone, which is the
+  // only way to be both fast enough for the caller and slow enough for Drive.
+  ctx.waitUntil(
+    processTask(env, taskId, { rawBody, trigger: "webhook" }).catch((err) => {
+      // processTask records its own failures; this is the backstop for one that
+      // fails before it can.
+      console.error("clickup-automation processTask:", taskId, err);
+    })
+  );
+  return reply({ ok: true, queued: taskId });
 }
 
 // Shared by the webhook, the retry button and the cron.
@@ -2149,6 +2158,30 @@ export async function clickUpAutomationCron(env) {
   if (!env.DB) return;
   try {
     await ensureClickUpAutomationTables(env);
+
+    // A run stuck at 'running' is one that died mid-flight: a cancelled Worker,
+    // an eviction, a deploy landing between two awaits. It records no error
+    // because nothing survived to write one, and claimRun will not re-enter it
+    // until it goes stale — so without this sweep the work is simply abandoned,
+    // silently, with the UI showing a task that is forever "running".
+    //
+    // Marking it failed is what makes it visible AND retryable: the query below
+    // then picks it up like any other failure.
+    await env.DB.prepare(
+      `UPDATE clickup_automation_runs
+          SET status = 'error',
+              error = COALESCE(NULLIF(error, ''),
+                'Stopped part-way through and never reported why — usually the Worker '
+                || 'was cancelled mid-run. Picked up automatically and retried.'),
+              error_code = COALESCE(error_code, 'abandoned'),
+              next_attempt_at = datetime('now'),
+              updated_at = datetime('now')
+        WHERE status = 'running'
+          AND started_at < datetime('now', ?)`
+    )
+      .bind(`-${STALE_RUN_MINUTES} minutes`)
+      .run();
+
     const { results } = await env.DB.prepare(
       `SELECT clickup_task_id FROM clickup_automation_runs
         WHERE status = 'error' AND next_attempt_at IS NOT NULL
