@@ -270,11 +270,20 @@ npx wrangler secret put ACCESS_AUD
 One workspace-level webhook covers every automation; filtering happens in code
 by list id. This stores the signing secret in D1 for you.
 
-```bash
-curl -X POST https://ops.anurseinthemaking.com/clickup-automation/api/webhook/register \
-  -H "X-Ops-Admin-Secret: <CLICKUP_AUTOMATION_ADMIN_SECRET>" \
-  -H "Content-Type: application/json" -d '{}'
-```
+Open `/clickup-automation/`, click **Connection details**, and press
+**Connect ClickUp**. That is the whole step.
+
+> The curl that used to be documented here **could never have worked.**
+> `/clickup-automation/api/*` is behind Cloudflare Access, so an unauthenticated
+> request is redirected to the login page and the Worker never sees the
+> `X-Ops-Admin-Secret` header at all. It returns `302`, not `401`. Found the hard
+> way on 2026-09-21.
+>
+> Registering is now allowed for any human Cloudflare Access has already
+> authenticated, which is what the button relies on. Destructive operations —
+> force-replacing a webhook, deleting one — still require the admin secret, and
+> for those you need a `curl` carrying an Access **service token**, not a bare
+> header.
 
 If a webhook already points at that endpoint it returns `409` rather than
 creating a second one — two webhooks would both fire on every task. To inspect

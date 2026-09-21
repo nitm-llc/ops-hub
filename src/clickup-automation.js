@@ -368,6 +368,25 @@ function actor(request) {
   return request.headers.get("Cf-Access-Authenticated-User-Email") || null;
 }
 
+// Registering the webhook is a setup step, not a destructive one: it refuses to
+// create a second webhook for an endpoint that already has one, and it writes a
+// signing secret nobody ever sees. So a human Cloudflare Access has already
+// authenticated is enough.
+//
+// Demanding the shared secret as well meant the only way to finish setup was a
+// terminal plus a secret only one person held — which is precisely the problem
+// this module exists to remove. DEPLOY.md documented a curl for it that could
+// never have worked: Access rejects an unauthenticated request before the Worker
+// sees the header at all.
+//
+// Anything destructive — force-replacing a webhook, deleting one, hard-deleting
+// an automation — still demands the secret. Being logged in is authentication,
+// not a licence to do the irreversible thing by accident.
+function guardSetup(request, env) {
+  if (actor(request)) return null;
+  return guardDangerous(request, env);
+}
+
 // Every id is checked before it can reach a URL or a Drive `q=` search string.
 // The starter code interpolated a caller-supplied parent id straight into a
 // Drive query, which is a query-injection hole.
@@ -2028,7 +2047,8 @@ async function handleApi(request, env, ctx, url, sub) {
   }
 
   if (sub === "webhook/register" && method === "POST") {
-    const gate = guardDangerous(request, env);
+    // force replaces an existing webhook, so that path keeps the stricter guard.
+    const gate = body.force ? guardDangerous(request, env) : guardSetup(request, env);
     if (gate) return gate;
 
     const endpoint = `https://${env.APP_HOSTNAME || DEFAULT_APP_HOSTNAME}/clickup-automation/webhook`;

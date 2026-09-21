@@ -321,7 +321,8 @@ function openConnSheet() {
       ${yn(h.webhook?.registered)}
       <div class="help">${h.webhook?.registered
         ? 'Webhook ' + esc(h.webhook.id) + ' &rarr; ' + esc(h.webhook.endpoint || '')
-        : 'No webhook is registered. This one is set up from the command line — ask Mark to run the register step.'}</div>
+        : 'No webhook is registered, so ClickUp never tells us a task was created and nothing can run. Connecting is safe to repeat \u2014 if one already exists it is left alone.'}</div>
+      ${h.webhook?.registered ? '' : '<button class="sm-btn" style="margin-top:7px" id="btn-register-hook">Connect ClickUp</button>'}
     </div>
     <div class="frow"><label>ClickUp connection</label>${yn(h.clickup?.ok)}
       <div class="help">${esc(h.clickup?.ok ? (h.clickup.team_name || '') : (h.clickup?.error || ''))}</div></div>
@@ -336,6 +337,21 @@ function openConnSheet() {
     <div class="frow"><label>Next code</label><div class="mono">${esc(h.code_sequence?.next || '—')}</div></div>
     <div style="text-align:right"><button class="ghost" onclick="closeSheet()">Close</button></div>`;
   if (SA_EMAIL) $('btn-copy-sa').onclick = () => copyText(SA_EMAIL);
+  const bReg = $('btn-register-hook');
+  if (bReg) bReg.onclick = async () => {
+    bReg.disabled = true;
+    bReg.textContent = 'Connecting\u2026';
+    try {
+      await api('/webhook/register', { method: 'POST', body: {} });
+      toast('Connected \u2014 ClickUp will now send us new tasks');
+      await loadHealth();
+      openConnSheet();
+    } catch (e) {
+      toast(e.message || 'Could not connect');
+      bReg.disabled = false;
+      bReg.textContent = 'Connect ClickUp';
+    }
+  };
   openSheet();
 }
 $('link-conn').onclick = (e) => { e.preventDefault(); openConnSheet(); };
