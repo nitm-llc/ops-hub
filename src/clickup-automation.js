@@ -919,6 +919,37 @@ function sanitizeName(s) {
   return t;
 }
 
+// Everything a name template may refer to, in one place. ClickUp's own task id
+// is offered so a folder can be named after the task instead of a code we mint:
+// it is stable, never has gaps, and survives a retry unchanged, which a
+// counter does not.
+//
+// `custom_id` is ClickUp's human-readable id (e.g. GOOG-123) and is null unless
+// the Custom Task IDs ClickApp is switched on for the workspace.
+function buildVars({ code = null, name = "", task = null } = {}) {
+  return {
+    code: code ?? "",
+    name,
+    task_id: task?.id ? String(task.id) : "",
+    custom_id: task?.custom_id ? String(task.custom_id) : "",
+    url: task?.url ? String(task.url) : "",
+    year: String(currentYear()),
+  };
+}
+
+// Does anything in play actually ask for a minted code? Allocation is a write to
+// a counter, so doing it when no template mentions {code} burns a number for
+// nothing — which is how the sequence developed gaps.
+function templatesWantCode(automation) {
+  const raw = Array.isArray(automation.subfolders)
+    ? automation.subfolders
+    : safeParse(automation.subfolders, []);
+  const all = [automation.folder_name_template || "{code} - {name}"]
+    .concat(Array.isArray(raw) ? raw : [])
+    .join(" ");
+  return /\{code\}/.test(all);
+}
+
 function renderTemplate(template, vars) {
   return String(template || "").replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
 }
@@ -939,7 +970,7 @@ function subfolderNames(automation, vars) {
 
 function folderNameFor(automation, vars) {
   const name = sanitizeName(renderTemplate(automation.folder_name_template || "{code} - {name}", vars));
-  return name || vars.code || "Untitled";
+  return name || vars.code || vars.task_id || "Untitled";
 }
 
 // ---------------------------------------------------------------------------
@@ -1082,10 +1113,12 @@ function isRecoverable(code) {
 // ---------------------------------------------------------------------------
 async function runAutomation(env, automation, task, steps = {}) {
   const parsed = parseTaskName(task.name);
-  const code = steps.code || (parsed.hadCode ? parsed.code : await nextCode(env));
+  const code =
+    steps.code ||
+    (parsed.hadCode ? parsed.code : templatesWantCode(automation) ? await nextCode(env) : null);
   steps.code = code;
 
-  const vars = { code, name: sanitizeName(parsed.clean) };
+  const vars = buildVars({ code, name: sanitizeName(parsed.clean), task });
   const folderName = folderNameFor(automation, vars);
 
   // --- main folder ---------------------------------------------------------
@@ -1128,7 +1161,7 @@ async function runAutomation(env, automation, task, steps = {}) {
   }
 
   // --- rename the task ----------------------------------------------------
-  if (automation.act_rename && !parsed.hadCode && !steps.renamed) {
+  if (automation.act_rename && !parsed.hadCode && !steps.renamed && task.name !== folderName) {
     await cuRenameTask(env, task.id, folderName);
     steps.renamed = true;
   }
@@ -1572,7 +1605,7 @@ async function preflight(env, cfg, { deep = false } = {}) {
 
   const hardFail = checks.some((c) => c.status === "fail");
   const cleanName = sanitizeName("Spring Sale Video");
-  const vars = { code: next, name: cleanName };
+  const vars = buildVars({ code: next, name: cleanName, task: { id: "86abc1def", custom_id: null, url: "https://app.clickup.com/t/86abc1def" } });
 
   return {
     ok: !hardFail,
@@ -1827,7 +1860,7 @@ async function handleApi(request, env, ctx, url, sub) {
       const cfg = shapeAutomation(row);
       const next = await peekCode(env);
       const example = sanitizeName(body.task_name || "Spring Sale Video");
-      const vars = { code: next, name: example };
+      const vars = buildVars({ code: next, name: example, task: { id: "86abc1def", custom_id: null, url: "https://app.clickup.com/t/86abc1def" } });
       const fields = await cuListFields(env, cfg.clickup_list_id).catch(() => []);
       const writes = [
         ["Drive folder link", cfg.field_drive_id, cfg.field_drive, "the new folder's URL"],

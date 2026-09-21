@@ -798,9 +798,17 @@ function drawStepMake() {
       <label>Folder name</label>
       <input type="text" id="f-tmpl" value="${esc(D.folder_name_template)}">
       <div style="margin-top:6px;display:flex;gap:6px">
-        <button type="button" class="tok" data-tok="{code}" data-for="f-tmpl" title="the code we generate, e.g. 2026.0043">+ code</button>
+        <button type="button" class="tok" data-tok="{code}" data-for="f-tmpl" title="a number we generate, e.g. 2026.0043">+ code</button>
         <button type="button" class="tok" data-tok="{name}" data-for="f-tmpl" title="the task name, without any code">+ name</button>
+        <button type="button" class="tok" data-tok="{task_id}" data-for="f-tmpl" title="ClickUp's own id for the task, e.g. 86e3c18qj \u2014 always unique, never has gaps">+ task id</button>
+        <button type="button" class="tok" data-tok="{custom_id}" data-for="f-tmpl" title="ClickUp's readable id, e.g. GOOG-123 \u2014 only if Custom Task IDs is switched on in ClickUp">+ custom id</button>
       </div>
+      <div class="help">Use <span class="mono">{task_id}</span> to name folders after ClickUp's own id
+        instead of a number we mint. It is stable, always unique, and never develops gaps \u2014 a
+        generated code is consumed even by a run that fails. <span class="mono">{custom_id}</span> is
+        the readable version (<span class="mono">GOOG-123</span>) and is blank unless Custom Task IDs
+        is enabled in ClickUp.<br>
+        A generated code is only allocated when a template actually uses <span class="mono">{code}</span>.</div>
     </div>
     <div class="frow">
       <label><input type="checkbox" id="f-rename" ${D.act_rename ? 'checked' : ''}> Rename the ClickUp task to match</label>
@@ -812,8 +820,9 @@ function drawStepMake() {
       <button type="button" class="ghost sm-btn" id="sf-add">+ Add subfolder</button>
       <div class="help">Changes apply to new tasks. Folders already created in Drive stay as they are.<br>
         Order doesn't matter — Drive sorts folders by name. To force an order, prefix them
-        (<span class="mono">01 - </span>, <span class="mono">02 - </span>). <span class="mono">{code}</span> and
-        <span class="mono">{name}</span> work here too.</div>
+        (<span class="mono">01 - </span>, <span class="mono">02 - </span>). <span class="mono">{code}</span>,
+        <span class="mono">{name}</span>, <span class="mono">{task_id}</span> and
+        <span class="mono">{custom_id}</span> work here too.</div>
     </div>
     <div class="frow">
       <label>Preview</label>
