@@ -2,6 +2,13 @@
   "name": "ops-hub",
   "main": "src/index.js",
   "compatibility_date": "2026-03-16",
+  // The *.workers.dev and preview hostnames are NOT behind Cloudflare Access, and
+  // src/index.js does not check which host it was called on — so leaving them on
+  // serves the entire app, and every D1 table behind it, to anyone with the URL.
+  // Found live on 2026-09-21 and disabled. These MUST stay in config: turning them
+  // off in the dashboard alone is silently reverted by the next `wrangler deploy`.
+  "workers_dev": false,
+  "preview_urls": false,
   "assets": {
   "directory": "./public",
   "binding": "ASSETS",
