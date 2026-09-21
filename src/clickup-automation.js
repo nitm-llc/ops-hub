@@ -2093,9 +2093,24 @@ async function handleApi(request, env, ctx, url, sub) {
       method: "POST",
       body: JSON.stringify({ endpoint, events: ["taskCreated"] }),
     });
+    // ClickUp nests the created webhook under `webhook` and puts the signing
+    // secret inside it. Older responses put the secret at the top level, so take
+    // whichever is present rather than betting on one shape.
     const hook = created.webhook || created;
-    if (!hook?.id || !created.secret) {
-      return json(request, { error: "ClickUp did not return a webhook id and secret.", raw: created }, 502);
+    const secret = created.secret || hook?.secret || null;
+    if (!hook?.id || !secret) {
+      // Never echo `created` itself: on the shapes that do work it contains the
+      // signing secret, and this response is read by a browser and a log.
+      return json(
+        request,
+        {
+          error:
+            "ClickUp did not return a webhook id and secret. It replied with: " +
+            (Object.keys(created || {}).join(", ") || "nothing") +
+            (created?.webhook ? " (webhook: " + Object.keys(created.webhook).join(", ") + ")" : ""),
+        },
+        502
+      );
     }
 
     // The secret goes straight from ClickUp into D1 — it never passes through a
@@ -2105,7 +2120,7 @@ async function handleApi(request, env, ctx, url, sub) {
        VALUES (?, ?, ?, ?, 1, ?)
        ON CONFLICT(webhook_id) DO UPDATE SET secret = excluded.secret, active = 1`
     )
-      .bind(String(hook.id), created.secret, endpoint, JSON.stringify(["taskCreated"]), actor(request))
+      .bind(String(hook.id), secret, endpoint, JSON.stringify(["taskCreated"]), actor(request))
       .run();
 
     return json(request, { webhook: { id: hook.id, endpoint, events: ["taskCreated"] }, replaced });
