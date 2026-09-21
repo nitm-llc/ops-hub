@@ -622,6 +622,17 @@ async function driveCopyFile(env, fileId, name, parentId) {
   );
 }
 
+// Trashing is what a Content Manager is allowed to do. Permanently deleting a
+// file in a shared drive requires Manager, which is more than this automation
+// should ever be granted — so the cleanup path has to trash, not delete.
+async function driveTrash(env, fileId) {
+  assertId(fileId, "Drive file id");
+  await driveFetch(env, `/files/${fileId}?supportsAllDrives=true`, {
+    method: "PATCH",
+    body: JSON.stringify({ trashed: true }),
+  });
+}
+
 async function driveDelete(env, fileId) {
   assertId(fileId, "Drive file id");
   await driveFetch(env, `/files/${fileId}?supportsAllDrives=true`, { method: "DELETE" });
@@ -1587,11 +1598,38 @@ async function preflight(env, cfg, { deep = false } = {}) {
           );
         } finally {
           // Always clean up, so a failure part-way doesn't litter the drive.
+          //
+          // This used to call driveDelete and swallow whatever came back. A
+          // permanent delete in a shared drive needs Manager; the automation is
+          // deliberately only a Content Manager, so every cleanup returned 403
+          // and every preflight left a .opshub-preflight-* folder behind, in
+          // silence, for as long as the feature has existed. Trashing is within
+          // a Content Manager's rights.
           if (probeId) {
+            let cleaned = false;
             try {
-              await driveDelete(env, probeId);
+              await driveTrash(env, probeId);
+              cleaned = true;
             } catch {
-              /* nothing more we can do; it is named so it's obvious what it was */
+              try {
+                await driveDelete(env, probeId);
+                cleaned = true;
+              } catch {
+                cleaned = false;
+              }
+            }
+            // And if it still could not be removed, say so rather than leaving
+            // the user to find the debris themselves.
+            if (!cleaned) {
+              add(
+                "drive_probe_cleanup",
+                "Tidied up after the write test",
+                "warn",
+                "A test folder was created to check permissions but could not be " +
+                  "removed afterwards. It is safe to delete by hand.",
+                null,
+                { probe_folder_id: probeId }
+              );
             }
           }
         }
