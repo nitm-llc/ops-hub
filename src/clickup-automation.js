@@ -2056,16 +2056,37 @@ async function handleApi(request, env, ctx, url, sub) {
     // Re-registering blindly leaves duplicates that each fire, so look first.
     const existing = await cuFetch(env, `/team/${teamId(env)}/webhook`).catch(() => ({ webhooks: [] }));
     const dupe = (existing.webhooks || []).find((w) => w.endpoint === endpoint);
+    let replaced = null;
+
     if (dupe && !body.force) {
-      return json(
-        request,
-        {
-          error:
-            "A webhook already points at this endpoint. Delete it first, or pass force:true to add another (they will BOTH fire).",
-          existing: { id: dupe.id, endpoint: dupe.endpoint, health: dupe.health },
-        },
-        409
-      );
+      // A webhook we hold no signing secret for is dead weight, however healthy
+      // ClickUp believes it to be: every delivery fails the signature check and
+      // is rejected. ClickUp keeps sending, we keep refusing, and nothing says
+      // so — which is precisely the state a registration that half-completed
+      // leaves behind. ClickUp reveals a secret only at creation, so the only
+      // way to hold one is to create the webhook ourselves.
+      const held = await env.DB.prepare(
+        `SELECT 1 AS ok FROM clickup_automation_webhooks
+          WHERE webhook_id = ? AND active = 1 AND secret IS NOT NULL AND secret != ''`
+      )
+        .bind(String(dupe.id))
+        .first();
+
+      if (held) {
+        // Genuinely set up already. Saying so beats an error the reader has to
+        // interpret, and re-registering would only double-fire every task.
+        return json(request, {
+          webhook: { id: dupe.id, endpoint, events: ["taskCreated"] },
+          already: true,
+        });
+      }
+
+      // Orphaned. Replace it — adding a second would make both fire on every task.
+      await cuFetch(env, `/webhook/${encodeURIComponent(dupe.id)}`, { method: "DELETE" }).catch(() => null);
+      await env.DB.prepare("UPDATE clickup_automation_webhooks SET active = 0 WHERE webhook_id = ?")
+        .bind(String(dupe.id))
+        .run();
+      replaced = String(dupe.id);
     }
 
     const created = await cuFetch(env, `/team/${teamId(env)}/webhook`, {
@@ -2087,7 +2108,7 @@ async function handleApi(request, env, ctx, url, sub) {
       .bind(String(hook.id), created.secret, endpoint, JSON.stringify(["taskCreated"]), actor(request))
       .run();
 
-    return json(request, { webhook: { id: hook.id, endpoint, events: ["taskCreated"] } });
+    return json(request, { webhook: { id: hook.id, endpoint, events: ["taskCreated"] }, replaced });
   }
 
   if (sub === "webhook/delete" && method === "POST") {

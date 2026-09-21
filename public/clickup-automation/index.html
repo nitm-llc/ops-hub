@@ -342,8 +342,12 @@ function openConnSheet() {
     bReg.disabled = true;
     bReg.textContent = 'Connecting\u2026';
     try {
-      await api('/webhook/register', { method: 'POST', body: {} });
-      toast('Connected \u2014 ClickUp will now send us new tasks');
+      const r = await api('/webhook/register', { method: 'POST', body: {} });
+      toast(r.already
+        ? 'Already connected \u2014 nothing needed changing'
+        : r.replaced
+          ? 'Reconnected. The previous registration had no signing key, so every delivery was being rejected.'
+          : 'Connected \u2014 ClickUp will now send us new tasks');
       await loadHealth();
       openConnSheet();
     } catch (e) {
