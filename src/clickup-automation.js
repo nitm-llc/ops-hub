@@ -51,11 +51,14 @@
 //   * No wildcard CORS here, unlike the rest of this repo. Same-origin only.
 // ============================================================================
 
+import { DEFAULT_APP_HOSTNAME, isTrustedHost, verifyAccessJwt } from "./access.js";
+
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
-const DEFAULT_APP_HOSTNAME = "ops.anurseinthemaking.com";
+// isTrustedHost / verifyAccessJwt / DEFAULT_APP_HOSTNAME live in ./access.js,
+// shared with the Strategy module.
 const ADMIN_HEADER = "X-Ops-Admin-Secret";
 
 // A task already carrying a code keeps it and is not renamed.
@@ -247,78 +250,6 @@ async function verifyClickUpSignature(env, rawBody, signature) {
   return false;
 }
 
-// The *.workers.dev hostname skips Cloudflare Access completely, so anything
-// arriving on another hostname has not been authenticated by anybody.
-function isTrustedHost(env, url) {
-  const expected = (env.APP_HOSTNAME || DEFAULT_APP_HOSTNAME).toLowerCase();
-  const host = url.hostname.toLowerCase();
-  // localhost keeps `wrangler dev` usable.
-  return host === expected || host === "localhost" || host === "127.0.0.1";
-}
-
-function b64urlToBytes(s) {
-  const pad = s.replace(/-/g, "+").replace(/_/g, "/");
-  const bin = atob(pad + "=".repeat((4 - (pad.length % 4)) % 4));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-function b64urlToString(s) {
-  return new TextDecoder().decode(b64urlToBytes(s));
-}
-
-// Verify the Cloudflare Access JWT properly, when configured. This is the only
-// real defence against a request that reached the Worker without passing the
-// Access gate. Optional because it needs the team domain + application AUD.
-async function verifyAccessJwt(env, token) {
-  const team = env.ACCESS_TEAM_DOMAIN;
-  const aud = env.ACCESS_AUD;
-  if (!team || !aud) return { ok: false, reason: "not_configured" };
-  if (!token) return { ok: false, reason: "missing" };
-
-  const parts = token.split(".");
-  if (parts.length !== 3) return { ok: false, reason: "malformed" };
-  const [h, p, s] = parts;
-
-  let header, payload;
-  try {
-    header = JSON.parse(b64urlToString(h));
-    payload = JSON.parse(b64urlToString(p));
-  } catch {
-    return { ok: false, reason: "malformed" };
-  }
-  if (header.alg !== "RS256") return { ok: false, reason: "bad_alg" };
-
-  const certs = await fetchJson(`https://${team}/cdn-cgi/access/certs`);
-  const jwk = (certs.keys || []).find((k) => k.kid === header.kid);
-  if (!jwk) return { ok: false, reason: "unknown_kid" };
-
-  const key = await crypto.subtle.importKey(
-    "jwk",
-    { kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", ext: true },
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["verify"]
-  );
-  const valid = await crypto.subtle.verify(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    b64urlToBytes(s),
-    new TextEncoder().encode(`${h}.${p}`)
-  );
-  if (!valid) return { ok: false, reason: "bad_signature" };
-
-  const now = Math.floor(Date.now() / 1000);
-  if (payload.exp && payload.exp < now) return { ok: false, reason: "expired" };
-  if (payload.nbf && payload.nbf > now + 60) return { ok: false, reason: "not_yet_valid" };
-  if (payload.iss !== `https://${team}`) return { ok: false, reason: "iss_mismatch" };
-  const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (!auds.includes(aud)) return { ok: false, reason: "aud_mismatch" };
-
-  return { ok: true, email: payload.email || null };
-}
-
 // Gate for every /api/ route. Layered:
 //   1. must have arrived on the Access-protected hostname
 //   2. if Access JWT verification is configured, it must pass
@@ -336,7 +267,7 @@ async function guardAdminApi(request, env, url) {
     );
   }
   if (env.ACCESS_TEAM_DOMAIN && env.ACCESS_AUD) {
-    const v = await verifyAccessJwt(env, request.headers.get("Cf-Access-Jwt-Assertion"));
+    const v = await verifyAccessJwt(env, request.headers.get("Cf-Access-Jwt-Assertion"), env.ACCESS_AUD);
     if (!v.ok) return json(request, { error: `Cloudflare Access check failed: ${v.reason}` }, 401);
   }
   return null;

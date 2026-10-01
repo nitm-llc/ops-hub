@@ -1,6 +1,7 @@
 import { handleStageRoutes } from "./stage-tracker.js";
 import { handleVideoReviewAPI } from "./video-review.js";
 import { handleClickUpAutomationRoutes, clickUpAutomationCron } from "./clickup-automation.js";
+import { handleStrategyRoutes } from "./strategy.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCO2_B3HitEVQIJE71RL357tdUPErxkhG4AdwXapyhOWtry_-czGMVg_HpZ0paQQ/pub";
@@ -7947,6 +7948,11 @@ export default {
     // answers its own preflight with same-origin CORS rather than the wildcard.
     const cuaResp = await handleClickUpAutomationRoutes(request, env, ctx, path);
     if (cuaResp) return cuaResp;
+
+    // ===== STRATEGY (handles /strategy and /strategy/api/* ; returns null otherwise) =====
+    // Above the global OPTIONS handler: same-origin only, no wildcard CORS.
+    const stratResp = await handleStrategyRoutes(request, env, ctx, path);
+    if (stratResp) return stratResp;
 
     // Helper: add noindex header to any response
     function addNoIndex(response) {
