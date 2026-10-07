@@ -841,6 +841,34 @@ async function peekCode(env) {
 // ---------------------------------------------------------------------------
 // Naming
 // ---------------------------------------------------------------------------
+// What the person actually titled the task, minus only what this automation
+// itself added on an earlier run.
+//
+// Under {code} naming a leading "2026.0012 - " IS ours: it is how a redelivery
+// or a retry recognises a task it has already numbered, so it is stripped and
+// the task is left alone. Under task-id naming it is NOT ours. The team reposts
+// stories titled "2025.753 - Preeclampsia repeat", carrying the original post's
+// code as part of the name — and treating that as our prefix stripped the
+// reference from the folder and skipped the rename. 28 Daily IG Story tasks
+// went that way before anyone noticed. The only prefix provably ours is the
+// task's own id, so that is the only thing removed.
+export function splitTaskName(name, { wantsCode = true, task = null } = {}) {
+  const raw = String(name || "").trim();
+  if (wantsCode) return parseTaskName(raw);
+  for (const id of [task?.id, task?.custom_id]) {
+    if (!id) continue;
+    const own = new RegExp(
+      "^" + escapeRegExp(String(id)) + "(?![A-Za-z0-9])[\\s\\-\u2013\u2014:_]*"
+    );
+    if (own.test(raw)) return { code: null, clean: raw.replace(own, "").trim(), hadCode: false };
+  }
+  return { code: null, clean: raw, hadCode: false };
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function parseTaskName(name) {
   const raw = String(name || "").trim();
   const m = raw.match(CODE_RE);
@@ -868,7 +896,7 @@ function sanitizeName(s) {
 //
 // `custom_id` is ClickUp's human-readable id (e.g. GOOG-123) and is null unless
 // the Custom Task IDs ClickApp is switched on for the workspace.
-function buildVars({ code = null, name = "", task = null } = {}) {
+export function buildVars({ code = null, name = "", task = null } = {}) {
   return {
     code: code ?? "",
     name,
@@ -882,7 +910,7 @@ function buildVars({ code = null, name = "", task = null } = {}) {
 // Does anything in play actually ask for a minted code? Allocation is a write to
 // a counter, so doing it when no template mentions {code} burns a number for
 // nothing — which is how the sequence developed gaps.
-function templatesWantCode(automation) {
+export function templatesWantCode(automation) {
   const raw = Array.isArray(automation.subfolders)
     ? automation.subfolders
     : safeParse(automation.subfolders, []);
@@ -910,7 +938,7 @@ function subfolderNames(automation, vars) {
     .slice(0, MAX_SUBFOLDERS);
 }
 
-function folderNameFor(automation, vars) {
+export function folderNameFor(automation, vars) {
   const name = sanitizeName(renderTemplate(automation.folder_name_template || "{code} - {name}", vars));
   return name || vars.code || vars.task_id || "Untitled";
 }
@@ -1054,10 +1082,9 @@ function isRecoverable(code) {
 // instead of creating a second folder.
 // ---------------------------------------------------------------------------
 async function runAutomation(env, automation, task, steps = {}) {
-  const parsed = parseTaskName(task.name);
-  const code =
-    steps.code ||
-    (parsed.hadCode ? parsed.code : templatesWantCode(automation) ? await nextCode(env) : null);
+  const wantsCode = templatesWantCode(automation);
+  const parsed = splitTaskName(task.name, { wantsCode, task });
+  const code = steps.code || (parsed.hadCode ? parsed.code : wantsCode ? await nextCode(env) : null);
   steps.code = code;
 
   const vars = buildVars({ code, name: sanitizeName(parsed.clean), task });
