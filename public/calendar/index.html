@@ -499,7 +499,8 @@ async function loadAllTasks(retries = 3) {
       const res = await fetch("/calendar/api/tasks");
       if (!res.ok) throw new Error(`API returned ${res.status}`);
       const data = await res.json();
-      
+      const fieldDefs = data.fieldDefs || {};
+
       const newTasks = (data.tasks || []).map(t => ({
         id: t.id,
         name: t.name,
@@ -510,7 +511,7 @@ async function loadAllTasks(retries = 3) {
         brand: t.brand,
         platform: t.platform,
         color: t.color || "#666",
-        customFields: t.customFields || [],
+        customFields: (t.customFields || []).map(f => f.id in fieldDefs ? { ...f, type_config: fieldDefs[f.id] } : f),
         tags: t.tags || [],
         url: t.url
       }));

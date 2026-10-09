@@ -28,7 +28,22 @@ async function fetchSheet(gid) {
   const res = await fetch(`${SHEET_BASE}?gid=${gid}&single=true&output=csv`);
   return parseCSV(await res.text());
 }
-async function fetchListTasks(token, list) {
+// A field's type_config (dropdown options etc.) is identical on every task that has
+// the field, so it's stored once in config_cache "fieldDefs" keyed by field id and
+// the calendar page re-attaches it. Only the properties the page reads are kept.
+function slimCustomFields(fields, fieldDefs) {
+  return (fields || []).map(f => {
+    if (f.type_config !== undefined) fieldDefs[f.id] = f.type_config;
+    const slim = { id: f.id, name: f.name, type: f.type };
+    if (f.value !== undefined) slim.value = f.value;
+    return slim;
+  });
+}
+async function sha1Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+async function fetchListTasks(token, list, fieldDefs) {
   const tasks = []; let page = 0;
   while (page < 10) {
     try {
@@ -38,7 +53,7 @@ async function fetchListTasks(token, list) {
       pageTasks.forEach(t => {
         const cf = t.custom_fields?.find(f => f.name === "Post Date"); let postDate = null;
         if (cf?.value) { const utc = new Date(parseInt(cf.value)); postDate = `${utc.getUTCFullYear()}-${String(utc.getUTCMonth()+1).padStart(2,'0')}-${String(utc.getUTCDate()).padStart(2,'0')}`; }
-        tasks.push({ id: t.id, name: t.name, status: t.status?.status || "", post_date: postDate, list_id: list["List ID"], list_name: list["List Name"], brand: list.Brand, platform: list.Platform, color: list["Platform Color (Hex)"] || "#666", url: t.url || "", custom_fields: JSON.stringify(t.custom_fields || []), tags: JSON.stringify((t.tags || []).map(tag => tag.name || tag)) });
+        tasks.push({ id: t.id, name: t.name, status: t.status?.status || "", post_date: postDate, list_id: list["List ID"], list_name: list["List Name"], brand: list.Brand, platform: list.Platform, color: list["Platform Color (Hex)"] || "#666", url: t.url || "", custom_fields: JSON.stringify(slimCustomFields(t.custom_fields, fieldDefs)), tags: JSON.stringify((t.tags || []).map(tag => tag.name || tag)) });
       });
       if (pageTasks.length < 100) break; page++;
     } catch { break; }
@@ -59,16 +74,27 @@ async function fullSync(env) {
     env.DB.prepare("INSERT OR REPLACE INTO config_cache (key, value, updated_at) VALUES (?, ?, datetime('now'))").bind("brandColors", JSON.stringify(brandColors)),
   ]);
   const activeLists = lists.filter(l => (l["Active (TRUE/FALSE)"] || "").toUpperCase() === "TRUE");
+  const prevDefs = await env.DB.prepare("SELECT value FROM config_cache WHERE key = 'fieldDefs'").first();
+  let fieldDefs = {};
+  try { fieldDefs = JSON.parse(prevDefs?.value || "{}"); } catch { /* rebuilt below */ }
   const allTasks = [];
   for (let i = 0; i < activeLists.length; i += 4) {
     const batch = activeLists.slice(i, i + 4);
-    const results = await Promise.all(batch.map(list => fetchListTasks(env.CLICKUP_TOKEN, list)));
+    const results = await Promise.all(batch.map(list => fetchListTasks(env.CLICKUP_TOKEN, list, fieldDefs)));
     results.forEach(t => allTasks.push(...t));
   }
+  await env.DB.prepare("INSERT OR REPLACE INTO config_cache (key, value, updated_at) VALUES ('fieldDefs', ?, datetime('now'))").bind(JSON.stringify(fieldDefs)).run();
+  const { results: stored } = await env.DB.prepare("SELECT id, content_hash FROM tasks").all();
+  const storedHash = new Map(stored.map(r => [r.id, r.content_hash]));
+  const changed = [];
+  for (const t of allTasks) {
+    t.content_hash = await sha1Hex(JSON.stringify([t.name, t.status, t.post_date, t.list_id, t.list_name, t.brand, t.platform, t.color, t.url, t.custom_fields, t.tags]));
+    if (storedHash.get(t.id) !== t.content_hash) changed.push(t);
+  }
   const batchSize = 50;
-  for (let i = 0; i < allTasks.length; i += batchSize) {
-    const batch = allTasks.slice(i, i + batchSize);
-    const stmts = batch.map(t => env.DB.prepare(`INSERT OR REPLACE INTO tasks (id, name, status, post_date, list_id, list_name, brand, platform, color, url, custom_fields, tags, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`).bind(t.id, t.name, t.status, t.post_date, t.list_id, t.list_name, t.brand, t.platform, t.color, t.url, t.custom_fields, t.tags));
+  for (let i = 0; i < changed.length; i += batchSize) {
+    const batch = changed.slice(i, i + batchSize);
+    const stmts = batch.map(t => env.DB.prepare(`INSERT OR REPLACE INTO tasks (id, name, status, post_date, list_id, list_name, brand, platform, color, url, custom_fields, tags, content_hash, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`).bind(t.id, t.name, t.status, t.post_date, t.list_id, t.list_name, t.brand, t.platform, t.color, t.url, t.custom_fields, t.tags, t.content_hash));
     await env.DB.batch(stmts);
   }
   const currentTaskIds = new Set(allTasks.map(t => t.id));
@@ -8131,8 +8157,20 @@ export default {
     if (path === "/inventory/api/shipfusion") { return handleShipFusionAPI(request, env); }
     if (path === "/inventory/api/amazon-fba") { return handleAmazonFbaAPI(request, env); }
     // ===== CALENDAR =====
-    if (path === "/calendar/api/config") { try { const { results } = await env.DB.prepare("SELECT key, value FROM config_cache").all(); const config = {}; results.forEach(r => { try { config[r.key] = JSON.parse(r.value); } catch { config[r.key] = r.value; } }); return new Response(JSON.stringify(config), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); } }
-    if (path === "/calendar/api/tasks") { try { const { results } = await env.DB.prepare("SELECT * FROM tasks WHERE post_date IS NOT NULL ORDER BY post_date DESC").all(); const tasks = results.map(t => ({ ...t, customFields: JSON.parse(t.custom_fields || "[]"), tags: JSON.parse(t.tags || "[]") })); return new Response(JSON.stringify({ tasks, synced_at: new Date().toISOString() }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); } }
+    if (path === "/calendar/api/config") { try { const { results } = await env.DB.prepare("SELECT key, value FROM config_cache WHERE key != 'fieldDefs'").all(); const config = {}; results.forEach(r => { try { config[r.key] = JSON.parse(r.value); } catch { config[r.key] = r.value; } }); return new Response(JSON.stringify(config), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); } }
+    if (path === "/calendar/api/tasks") {
+      try {
+        const [{ results }, defs] = await Promise.all([
+          env.DB.prepare("SELECT id, name, status, post_date, list_id, list_name, brand, platform, color, url, custom_fields, tags FROM tasks WHERE post_date IS NOT NULL ORDER BY post_date DESC").all(),
+          env.DB.prepare("SELECT value FROM config_cache WHERE key = 'fieldDefs'").first(),
+        ]);
+        // custom_fields/tags are already JSON text; splice them in as-is — parsing and
+        // re-stringifying every row is what pushed this route past the memory limit.
+        const rows = results.map(({ custom_fields, tags, ...t }) => JSON.stringify(t).slice(0, -1) + `,"customFields":${custom_fields || "[]"},"tags":${tags || "[]"}}`);
+        const body = `{"tasks":[${rows.join(",")}],"fieldDefs":${defs?.value || "{}"},"synced_at":${JSON.stringify(new Date().toISOString())}}`;
+        return new Response(body, { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+      } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); }
+    }
     if (path === "/calendar/api/sync") { try { const count = await fullSync(env); return new Response(JSON.stringify({ ok: true, tasks_synced: count }), { headers: { "Content-Type": "application/json" } }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 500 }); } }
     if (path.startsWith("/calendar/api/")) { const clickupPath = path.replace("/calendar/api/", ""); const clickupUrl = `${CLICKUP_API}/${clickupPath}${url.search}`; const headers = new Headers(request.headers); headers.set("Authorization", env.CLICKUP_TOKEN); headers.set("Content-Type", "application/json"); try { const resp = await fetch(clickupUrl, { method: request.method, headers, body: request.method !== "GET" ? await request.text() : undefined }); const respHeaders = new Headers(resp.headers); respHeaders.set("Access-Control-Allow-Origin", "*"); return new Response(resp.body, { status: resp.status, headers: respHeaders }); } catch (err) { return new Response(JSON.stringify({ error: err.message }), { status: 502 }); } }
     // ===== REDIRECTS =====
