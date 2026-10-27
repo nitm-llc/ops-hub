@@ -66,6 +66,15 @@
   .pill-warn{background:var(--amber-dim);color:var(--amber);}
   .pill-info{background:var(--accent-dim);color:var(--accent);}
   .pill-neutral{background:var(--surface2);color:var(--text-muted);}
+  .prod-label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin:12px 0 4px;}
+  .prod-field{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit;box-sizing:border-box;}
+  .prod-drop{border:1.5px dashed var(--border);border-radius:8px;padding:18px;text-align:center;font-size:13px;color:var(--text-muted);cursor:pointer;}
+  .prod-drop.over{border-color:var(--accent);color:var(--accent);}
+  .prod-seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+  .prod-seg button{background:transparent;border:none;padding:6px 14px;font-size:13px;color:var(--text-muted);cursor:pointer;font-family:inherit;}
+  .prod-seg button.on{background:var(--accent);color:#fff;}
+  .fin-md{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px 16px;font-size:13px;line-height:1.55;}
+  .fin-md h1{font-size:17px;margin:4px 0 8px;} .fin-md h2{font-size:14px;margin:14px 0 6px;} .fin-md ul{margin:4px 0;padding-left:20px;} .fin-md p{margin:6px 0;}
 
   .mono{font-family:'JetBrains Mono',monospace;}
 
@@ -260,17 +269,29 @@
 <div class="tab-panel" id="tab-products">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
     <div style="font-weight:600;font-size:15px;margin-bottom:4px">📚 Product Knowledge Base</div>
-    <div style="color:var(--text-muted);font-size:13px;margin-bottom:14px">Upload a product PDF — we extract an <b>IP-safe coverage map</b> (what topics it covers, not the actual content) the agent uses to answer "do your materials cover X?" questions.</div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <input type="text" id="prod-name" placeholder="Product name (e.g. Med-Surg Study Guide)" style="flex:1;min-width:240px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text);font-family:inherit">
-      <label class="save-btn" style="padding:8px 16px;background:var(--accent);color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">
-        Choose PDF & extract<input type="file" id="prod-pdf" accept="application/pdf" style="display:none" onchange="uploadProductPdf()">
-      </label>
+    <div style="color:var(--text-muted);font-size:13px;margin-bottom:14px">Upload a product's files — the AI reads every page, builds an <b>IP-safe coverage map</b> for the CX agent, and writes a <b>Fin profile</b>: the knowledge-base entry Fin uses to recommend the product. Topics only, never the study material itself.</div>
+    <label class="prod-label">Product name</label>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <input type="text" id="prod-name" placeholder="e.g. Clinical Badge Card Pack" style="flex:1;min-width:240px" class="prod-field">
+      <select id="prod-target" onchange="pickProductTarget()" class="prod-field" style="min-width:240px"><option value="">➕ New product</option></select>
     </div>
-    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);margin-top:10px;cursor:pointer">
-      <input type="checkbox" id="prod-force-vision"> Read with AI vision (for image-heavy / diagram-heavy products). Reads every page in the background — after upload you can close the tab. Auto-enabled if little text is found.
-    </label>
+    <label class="prod-label">Current description <span style="font-weight:400">(optional)</span></label>
+    <textarea id="prod-desc" rows="3" class="prod-field" style="width:100%;resize:vertical" placeholder="What it is, price, what's in a bundle, who it's best for. Treated as accurate."></textarea>
+    <label class="prod-label">Files</label>
+    <div id="prod-drop" class="prod-drop" onclick="document.getElementById('prod-files').click()">
+      Drop PDFs or images here (PNG, JPG, WebP), or click to choose. Several files are fine — they're read in the order added.
+      <input type="file" id="prod-files" multiple accept="application/pdf,image/png,image/jpeg,image/webp" style="display:none" onchange="addProductFiles(this.files); this.value=''">
+    </div>
+    <div id="prod-file-list" style="margin-top:6px"></div>
+    <label class="prod-label">Length</label>
+    <div class="prod-seg" id="prod-length">
+      <button data-len="short" onclick="setProdLength('short')">Short</button><button data-len="standard" onclick="setProdLength('standard')">Standard</button><button data-len="detailed" onclick="setProdLength('detailed')" class="on">Detailed</button>
+    </div>
+    <div style="margin-top:14px">
+      <button id="prod-write-btn" onclick="writeProductDescription()" class="save-btn" style="font-size:13px;padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">Write description</button>
+    </div>
     <div id="prod-upload-status" style="font-size:12px;color:var(--text-muted);margin-top:8px"></div>
+    <div id="prod-result" style="display:none;margin-top:14px"></div>
     <div id="prod-review" style="display:none;margin-top:14px"></div>
   </div>
   <div id="product-jobs"></div>
@@ -377,7 +398,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'templates') loadTemplates();
     if (tab.dataset.tab === 'tickets') { loadStats(); loadTickets(); }
     if (tab.dataset.tab === 'training') { loadTrainingInsights(); loadReadiness(); loadTraining(); }
-    if (tab.dataset.tab === 'products') { loadProducts(); loadProductJobs(); }
+    if (tab.dataset.tab === 'products') { loadProducts(); loadProductJobs(); resumeProductJob(); }
     if (tab.dataset.tab === 'knowledge') loadKnowledge();
     if (tab.dataset.tab === 'actions') loadActions();
   });
@@ -621,9 +642,17 @@ const CFG = {
       { value:'claude-haiku-4-5-20251001', label:'Haiku 4.5 — cheap & fast (recommended)', desc:'Sorting a ticket into an intent is easy work; this is ~15× cheaper than Opus.' },
       { value:'claude-opus-4-8', label:'Opus 4.8 — overkill', desc:'More accurate on odd edge cases, far more expensive per ticket.' },
     ] },
-  product_extract_model: { g:'models', type:'enum', label:'Product-reading model', options:[
-      { value:'claude-opus-4-8', label:'Opus 4.8 — best for PDFs (recommended)', desc:'Reads uploaded product PDFs, including image-heavy ones.' },
-      { value:'claude-sonnet-5', label:'Sonnet 5 — cheaper', desc:'Fine for clean text PDFs; weaker on scans and diagrams.' },
+  product_read_model: { g:'models', type:'enum', label:'Product page-reading model', options:[
+      { value:'claude-haiku-5-5', label:'Haiku 5.5 — cheap bulk reading (recommended)', desc:'Reads every page/image batch into topic notes. Batches stay under its 100k-token price tier.' },
+      { value:'claude-sonnet-5-5', label:'Sonnet 5.5 — stronger, ~20× the price', desc:'Use if Haiku misses topics on dense or hand-drawn pages.' },
+    ] },
+  product_merge_model: { g:'models', type:'enum', label:'Product writing model', options:[
+      { value:'claude-sonnet-5-5', label:'Sonnet 5.5 (recommended)', desc:'Merges the notes into the coverage map and writes the Fin profile.' },
+      { value:'claude-opus-5-5', label:'Opus 5.5 — best writing, 2× Sonnet', desc:'Slightly more polished profiles.' },
+    ] },
+  product_extract_model: { g:'models', type:'enum', label:'Product model (fallback)', options:[
+      { value:'claude-sonnet-5-5', label:'Sonnet 5.5', desc:'Used only if the reading or writing model above is blank, and for the old text-only extract.' },
+      { value:'claude-opus-4-8', label:'Opus 4.8', desc:'Older, pricier fallback.' },
     ] },
 
   shopify_store_domain: { g:'integr', type:'text', label:'Shopify store domain', help:'e.g. yourstore.myshopify.com' },
@@ -1015,6 +1044,8 @@ async function loadProducts() {
   el.innerHTML = '<div class="loading">Loading products...</div>';
   try {
     const products = (await api('/products')).products || [];
+    window._products = products;
+    fillProductPicker(products);
     if (!products.length) { el.innerHTML = '<div class="loading" style="padding:30px;text-align:center">No products yet. Upload a PDF above to build your first coverage map.</div>'; return; }
     el.innerHTML = products.map(renderProductCard).join('');
   } catch (e) { el.innerHTML = '<div class="loading">Could not load: ' + escape(e.message) + '</div>'; }
@@ -1027,9 +1058,10 @@ function renderProductCard(p) {
       <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
         <div>
           <div style="font-weight:600;font-size:14px">${escape(p.name)}${p.is_active ? '' : ' <span class="pill pill-neutral" style="font-size:10px">inactive</span>'}</div>
-          <div style="color:var(--text-muted);font-size:12px;margin-top:2px">${p.version ? 'v' + escape(p.version) + ' · ' : ''}${topics.length} topics · updated ${formatDate(p.updated_at)}</div>
+          <div style="color:var(--text-muted);font-size:12px;margin-top:2px">${p.version ? 'v' + escape(p.version) + ' · ' : ''}${topics.length} topics · ${p.fin_profile ? 'Fin profile ✓' : 'no Fin profile'} · updated ${formatDate(p.updated_at)}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
+          <button onclick="openProductInForm(${p.id})" style="font-size:12px;padding:5px 12px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">${p.fin_profile ? 'Fin profile' : 'Update'}</button>
           <button onclick="editProduct(${p.id})" style="font-size:12px;padding:5px 12px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">Edit</button>
           <button onclick="deleteProduct(${p.id}, ${JSON.stringify(p.name).replace(/"/g, '&quot;')})" style="font-size:12px;padding:5px 12px;background:transparent;border:1px solid var(--border);color:var(--red,#e5484d);border-radius:4px;cursor:pointer">Delete</button>
         </div>
@@ -1039,126 +1071,256 @@ function renderProductCard(p) {
     </div>`;
 }
 
-async function uploadProductPdf() {
-  const fileInput = document.getElementById('prod-pdf');
-  const file = fileInput.files[0];
-  if (!file) return;
-  const name = document.getElementById('prod-name').value.trim() || file.name.replace(/\.pdf$/i, '');
+// ---- Upload form: name (or pick a product to update), description, files, length.
+// Every file is read server-side in the background: PDFs are split into small slices and
+// images into small batches (sizes keep each read under Haiku 5.5's 100k-token tier), then
+// the cron reads them in order, merges the coverage map and writes the Fin profile.
+const PDF_PAGES_PER_CHUNK = 8, IMAGES_PER_BATCH = 10, IMAGE_MAX_EDGE = 2000;
+let prodFiles = [];
+let prodLength = 'detailed';
+let visionInProgress = false;
+// Warn before leaving only during the split+upload phase (after that it's server-side).
+window.addEventListener('beforeunload', (e) => { if (visionInProgress) { e.preventDefault(); e.returnValue = ''; } });
+
+(function wireProductDrop() {
+  const drop = document.getElementById('prod-drop');
+  if (!drop) return;
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => addProductFiles(e.dataTransfer.files));
+})();
+
+function addProductFiles(list) {
+  const ok = /^(application\/pdf|image\/(png|jpeg|webp))$/;
+  for (const f of list) {
+    if (ok.test(f.type)) prodFiles.push(f);
+    else toast('Skipped ' + f.name + ' — only PDF, PNG, JPG, WebP', 'error');
+  }
+  renderProductFiles();
+}
+function removeProductFile(i) { prodFiles.splice(i, 1); renderProductFiles(); }
+function renderProductFiles() {
+  document.getElementById('prod-file-list').innerHTML = prodFiles.map((f, i) =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 2px;border-bottom:1px solid var(--border)">
+      <span>${i + 1}. ${f.type === 'application/pdf' ? '📄' : '🖼️'} ${escape(f.name)} <span style="color:var(--text-muted)">· ${(f.size / 1048576).toFixed(1)} MB</span></span>
+      <button onclick="removeProductFile(${i})" style="font-size:11px;background:transparent;border:none;color:var(--text-muted);cursor:pointer">remove</button></div>`).join('');
+}
+function setProdLength(len) {
+  prodLength = len;
+  document.querySelectorAll('#prod-length button').forEach(b => b.classList.toggle('on', b.dataset.len === len));
+}
+function pickProductTarget() {
+  const id = parseInt(document.getElementById('prod-target').value) || null;
+  const p = (window._products || []).find(x => x.id === id);
+  if (p) {
+    document.getElementById('prod-name').value = p.name || '';
+    document.getElementById('prod-desc').value = p.description || '';
+    if (p.fin_profile) showFinProfile(p); else hideFinProfile();
+  } else {
+    document.getElementById('prod-desc').value = '';
+    hideFinProfile();
+  }
+}
+function fillProductPicker(products) {
+  const sel = document.getElementById('prod-target');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">➕ New product</option>' + products.map(p =>
+    `<option value="${p.id}">Update: ${escape(p.name)}</option>`).join('');
+  sel.value = products.some(p => String(p.id) === cur) ? cur : '';
+}
+
+// Resize/re-encode an image to JPEG, long edge ≤ IMAGE_MAX_EDGE (bounds tokens and bytes).
+async function productImageToJpeg(file) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, IMAGE_MAX_EDGE / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+}
+
+async function writeProductDescription() {
   const status = document.getElementById('prod-upload-status');
-  const forceVision = document.getElementById('prod-force-vision').checked;
-  if (!window.pdfjsLib) { status.textContent = 'PDF library failed to load — refresh and try again.'; return; }
+  const btn = document.getElementById('prod-write-btn');
+  const target = parseInt(document.getElementById('prod-target').value) || null;
+  const name = document.getElementById('prod-name').value.trim();
+  const description = document.getElementById('prod-desc').value.trim();
+  if (!name) { toast('Product name is required', 'error'); return; }
+  if (!prodFiles.length) {
+    // No new files on an existing product = rewrite from what's already stored.
+    if (target) return regenerateFinProfile(target);
+    toast('Add at least one PDF or image', 'error'); return;
+  }
+  if (!window.PDFLib && prodFiles.some(f => f.type === 'application/pdf')) { status.textContent = 'PDF splitter failed to load — refresh and try again.'; return; }
+  visionInProgress = true; btn.disabled = true;
   try {
-    status.textContent = 'Reading PDF…';
-    const buf = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-
-    let text = '';
-    if (!forceVision) {
-      for (let i = 1; i <= pdf.numPages; i++) {
-        status.textContent = `Reading PDF… page ${i}/${pdf.numPages}`;
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        text += content.items.map(it => it.str).join(' ') + '\n';
-        if (text.length > 700000) { text += '\n[truncated]'; break; }
+    // Plan chunks in file order. PDFs: slices of ≤8 pages (fewer if pages are huge, to stay
+    // well under the 32MB request cap). Images: runs of consecutive images, ≤10 per batch,
+    // numbered across all images in the upload.
+    status.innerHTML = '<b>Preparing…</b> keep this tab open until the upload finishes.';
+    const plan = [];
+    const totalImages = prodFiles.filter(f => f.type !== 'application/pdf').length;
+    let imgNo = 0, imgRun = [];
+    const flushImages = () => {
+      for (let k = 0; k < imgRun.length; k += IMAGES_PER_BATCH) {
+        const batch = imgRun.slice(k, k + IMAGES_PER_BATCH);
+        plan.push({ kind: 'images', files: batch.map(x => x.file), a: batch[0].n, b: batch[batch.length - 1].n, total: totalImages });
       }
+      imgRun = [];
+    };
+    let totalPages = 0;
+    for (const f of prodFiles) {
+      if (f.type !== 'application/pdf') { imgRun.push({ file: f, n: ++imgNo }); continue; }
+      flushImages();
+      const doc = await PDFLib.PDFDocument.load(new Uint8Array(await f.arrayBuffer()), { ignoreEncryption: true });
+      const pages = doc.getPageCount();
+      totalPages += pages;
+      const per = Math.max(2, Math.min(PDF_PAGES_PER_CHUNK, Math.round(7000000 / (f.size / Math.max(pages, 1)))));
+      for (let p = 0; p < pages; p += per) plan.push({ kind: 'pages', doc, from: p, to: Math.min(p + per, pages), total: pages });
     }
+    flushImages();
 
-    // Route to AI vision if forced, or if the text layer is sparse (image-heavy / scanned).
-    const charsPerPage = text.trim().length / Math.max(pdf.numPages, 1);
-    if (forceVision || charsPerPage < 200) {
-      await startVisionJob(file, name, status);
-      fileInput.value = '';
-      return;
-    }
+    const { job_id } = await api('/products/job/start', { method: 'POST', body: JSON.stringify({
+      name, description, profile_length: prodLength, product_id_target: target,
+      source_filename: prodFiles.map(f => f.name).join(', '), total_chunks: plan.length, total_pages: totalPages + totalImages,
+    }) });
 
-    status.textContent = 'Extracting coverage map with AI… (this can take ~10–20s)';
-    const result = await api('/products/extract', { method: 'POST', body: JSON.stringify({ name, text }) });
-    // Safety net: if the text path produced little (real content was likely in images),
-    // escalate to the AI vision job instead of saving a blank map.
-    if (!result.coverage_outline || result.coverage_outline.trim().length < 60) {
-      status.innerHTML = 'Text layer was too thin — switching to AI vision to read the pages as images…';
-      await startVisionJob(file, name, status);
-      fileInput.value = '';
-      return;
+    for (let c = 0; c < plan.length; c++) {
+      status.innerHTML = `<b style="color:var(--amber,#f5a623)">Uploading ${c + 1}/${plan.length}…</b> keep this tab open until it says you can close it.`;
+      const ch = plan[c];
+      let body, type, a, b;
+      if (ch.kind === 'pages') {
+        const out = await PDFLib.PDFDocument.create();
+        const idxs = []; for (let p = ch.from; p < ch.to; p++) idxs.push(p);
+        (await out.copyPages(ch.doc, idxs)).forEach(pg => out.addPage(pg));
+        body = await out.save(); type = 'application/pdf'; a = ch.from + 1; b = ch.to;
+        if (body.length > 30000000) throw new Error('a slice of this PDF is over 30MB — compress the PDF (downsampling images is fine) and try again');
+      } else {
+        const images = [];
+        for (const f of ch.files) images.push({ media_type: 'image/jpeg', data: await productImageToJpeg(f) });
+        body = JSON.stringify({ images }); type = 'application/json'; a = ch.a; b = ch.b;
+      }
+      const r = await fetch(`/cx-agent/api/products/job/${job_id}/chunk/${c}?a=${a}&b=${b}&total=${ch.total}`, {
+        method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': type }, body
+      });
+      if (!r.ok) { await api(`/products/job/${job_id}/cancel`, { method: 'POST' }).catch(() => {}); throw new Error('chunk upload failed (' + r.status + ')'); }
     }
-    status.textContent = '';
-    fileInput.value = '';
-    showProductEditor({ name, source_filename: file.name, coverage_outline: result.coverage_outline, topics: result.topics || [] });
+    await api(`/products/job/${job_id}/ready`, { method: 'POST' });
+    try { localStorage.setItem('cx_prod_job', String(job_id)); } catch {}
+    visionInProgress = false;
+    prodFiles = []; renderProductFiles();
+    status.innerHTML = `<b style="color:var(--green,#30a46c)">✅ Uploaded — you can close this tab now.</b> The AI reads everything in the background; the Fin profile appears here when it's done.`;
+    hideFinProfile();
+    loadProductJobs();
   } catch (e) {
-    status.textContent = 'Failed: ' + e.message;
+    status.textContent = 'Upload failed: ' + e.message;
+  } finally { visionInProgress = false; btn.disabled = false; }
+}
+
+// After a reload, pick the result of the last job started from this browser back up.
+async function resumeProductJob() {
+  let id = null; try { id = localStorage.getItem('cx_prod_job'); } catch {}
+  if (!id) return;
+  try {
+    const job = ((await api('/products/jobs')).jobs || []).find(j => String(j.id) === id);
+    if (!job) { try { localStorage.removeItem('cx_prod_job'); } catch {} return; }
+    trackProductJob(job);
+  } catch {}
+}
+async function trackProductJob(job) {
+  const status = document.getElementById('prod-upload-status');
+  if (job.status === 'done' && job.product_id) {
+    try { localStorage.removeItem('cx_prod_job'); } catch {}
+    const p = ((await api('/products')).products || []).find(x => x.id === job.product_id);
+    status.innerHTML = '';
+    if (p) { document.getElementById('prod-target').value = String(p.id); pickProductTarget(); }
+  } else if (job.status === 'error') {
+    try { localStorage.removeItem('cx_prod_job'); } catch {}
+    status.textContent = 'Failed: ' + (job.error || 'unknown error') + (job.product_id ? ' — the product was saved; pick it above and use Regenerate.' : '');
+  } else {
+    status.innerHTML = `<b>${escape(productJobStatusText(job))}</b> — you can close this tab and come back.`;
   }
 }
 
-// Render PDF pages to JPEG images and have Claude read them in batches (handles
-// image-heavy/scanned PDFs and any length). Renders per-batch to keep memory low.
-let visionInProgress = false;
-// Warn before leaving only during the brief split+upload phase (after that it's server-side).
-window.addEventListener('beforeunload', (e) => { if (visionInProgress) { e.preventDefault(); e.returnValue = ''; } });
-
-// Server-side extraction: split the PDF into chunk PDFs in the browser (fast — no rendering),
-// upload them, and hand off to the cron, which reads every page via Claude native PDF in the
-// background. Once uploaded, the tab can be closed.
-async function startVisionJob(file, name, status) {
-  if (!window.PDFLib) { status.textContent = 'PDF splitter failed to load — refresh and try again.'; return; }
-  visionInProgress = true;
-  try {
-    status.innerHTML = '<b>Preparing…</b> reading the PDF (keep this tab open until upload finishes).';
-    const src = await PDFLib.PDFDocument.load(new Uint8Array(await file.arrayBuffer()), { ignoreEncryption: true });
-    const totalPages = src.getPageCount();
-    // Adaptive chunk size: keep each chunk PDF well under Claude's 32MB limit. Image-heavy
-    // files (high bytes/page) get fewer pages per chunk so they don't blow the limit.
-    const avgBytesPerPage = file.size / Math.max(totalPages, 1);
-    const CHUNK_PAGES = Math.max(2, Math.min(20, Math.round(7000000 / avgBytesPerPage)));
-    const totalChunks = Math.ceil(totalPages / CHUNK_PAGES);
-    const { job_id } = await api('/products/job/start', { method: 'POST', body: JSON.stringify({ name, source_filename: file.name, total_chunks: totalChunks, total_pages: totalPages }) });
-
-    for (let c = 0; c < totalChunks; c++) {
-      status.innerHTML = `<b style="color:var(--amber,#f5a623)">Uploading ${c + 1}/${totalChunks}…</b> keep this tab open until it says you can close it.`;
-      const chunkDoc = await PDFLib.PDFDocument.create();
-      const idxs = [];
-      for (let p = c * CHUNK_PAGES; p < Math.min((c + 1) * CHUNK_PAGES, totalPages); p++) idxs.push(p);
-      const copied = await chunkDoc.copyPages(src, idxs);
-      copied.forEach(pg => chunkDoc.addPage(pg));
-      const chunkBytes = await chunkDoc.save();
-      if (chunkBytes.length > 30000000) {
-        await api(`/products/job/${job_id}/cancel`, { method: 'POST' });
-        visionInProgress = false;
-        status.innerHTML = `<b>This PDF is too image-heavy to read directly.</b> Even a small slice is over 30MB. Please run it through a "compress / reduce PDF size" tool (downsampling images is fine — we only read the topic structure) and re-upload.`;
-        return;
-      }
-      const r = await fetch(`/cx-agent/api/products/job/${job_id}/chunk/${c}`, {
-        method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/pdf' }, body: chunkBytes
-      });
-      if (!r.ok) throw new Error('chunk upload failed (' + r.status + ')');
-    }
-    await api(`/products/job/${job_id}/ready`, { method: 'POST' });
-    visionInProgress = false;
-    status.innerHTML = `<b style="color:var(--green,#30a46c)">✅ Uploaded — you can close this tab now.</b> The AI is reading all ${totalPages} pages in the background; the product appears below when done (roughly ${Math.max(2, Math.ceil(totalChunks / 3) * 2)}–${Math.ceil(totalChunks / 3) * 2 + 6} min).`;
-    document.getElementById('prod-name').value = '';
-    loadProductJobs();
-  } catch (e) {
-    visionInProgress = false;
-    status.textContent = 'Upload failed: ' + e.message;
+// ---- Fin profile result: rendered markdown with Edit / Copy / Regenerate.
+let finProduct = null;
+function renderFinMarkdown(md) {
+  const inline = t => escape(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  const out = []; let list = false;
+  for (const raw of (md || '').split('\n')) {
+    const line = raw.trimEnd();
+    const li = line.match(/^\s*[-*]\s+(.*)$/);
+    if (li) { if (!list) { out.push('<ul>'); list = true; } out.push('<li>' + inline(li[1]) + '</li>'); continue; }
+    if (list) { out.push('</ul>'); list = false; }
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h) out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+    else if (line.trim()) out.push('<p>' + inline(line) + '</p>');
   }
+  if (list) out.push('</ul>');
+  return out.join('');
+}
+function hideFinProfile() { finProduct = null; const el = document.getElementById('prod-result'); el.style.display = 'none'; el.innerHTML = ''; }
+function showFinProfile(p, editing = false) {
+  finProduct = p;
+  const el = document.getElementById('prod-result');
+  el.style.display = 'block';
+  const words = (p.fin_profile || '').split(/\s+/).filter(Boolean).length;
+  const btn = 'font-size:12px;padding:5px 12px;background:transparent;border:1px solid var(--border);color:var(--text);border-radius:4px;cursor:pointer';
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="font-weight:600;font-size:13px">Fin profile — ${escape(p.name)} <span style="color:var(--text-muted);font-weight:400">· ${words} words${p.page_notes ? '' : ' · from coverage map (re-upload files for a fuller one)'}</span></div>
+      <div style="display:flex;gap:6px">
+        ${editing ? `<button onclick="saveFinProfile()" style="${btn};background:var(--accent);color:#fff;border-color:var(--accent)">Save</button><button onclick="showFinProfile(finProduct)" style="${btn}">Cancel</button>`
+          : `<button onclick="showFinProfile(finProduct, true)" style="${btn}">Edit</button><button onclick="copyFinProfile()" style="${btn}">Copy</button><button id="fin-regen-btn" onclick="regenerateFinProfile(finProduct.id)" style="${btn}">Regenerate</button>`}
+      </div>
+    </div>
+    ${editing ? `<textarea id="fin-edit" rows="24" class="prod-field" style="width:100%;resize:vertical;font-family:'JetBrains Mono',monospace;font-size:12px">${escape(p.fin_profile || '')}</textarea>`
+      : `<div class="fin-md">${renderFinMarkdown(p.fin_profile)}</div>`}`;
+}
+async function saveFinProfile() {
+  const fin_profile = document.getElementById('fin-edit').value.trim();
+  if (!fin_profile) { toast('The profile is empty', 'error'); return; }
+  try {
+    await api('/products', { method: 'POST', body: JSON.stringify({ id: finProduct.id, fin_profile }) });
+    finProduct.fin_profile = fin_profile; toast('Fin profile saved', 'success');
+    showFinProfile(finProduct); loadProducts();
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+async function copyFinProfile() {
+  try { await navigator.clipboard.writeText(finProduct.fin_profile || ''); toast('Copied', 'success'); }
+  catch { toast('Copy failed — use Edit and copy from the box', 'error'); }
+}
+// Re-runs only the final step from the stored page notes, with the current length + description.
+async function regenerateFinProfile(id) {
+  const status = document.getElementById('prod-upload-status');
+  const b = document.getElementById('fin-regen-btn'); if (b) { b.disabled = true; b.textContent = 'Regenerating…'; }
+  status.innerHTML = `<b>Writing the Fin profile (${prodLength})…</b> about 30–60 seconds.`;
+  try {
+    const r = await api('/products/' + id + '/fin-profile', { method: 'POST', body: JSON.stringify({ length: prodLength, description: document.getElementById('prod-desc').value }) });
+    status.innerHTML = '';
+    await loadProducts();
+    const p = (window._products || []).find(x => x.id === id) || { ...finProduct, fin_profile: r.fin_profile };
+    document.getElementById('prod-target').value = String(id);
+    showFinProfile(p);
+  } catch (e) { status.textContent = 'Regenerate failed: ' + e.message; if (b) { b.disabled = false; b.textContent = 'Regenerate'; } }
 }
 
 async function loadProductJobs() {
   const el = document.getElementById('product-jobs');
   if (!el) return;
   try {
+    const all = (await api('/products/jobs')).jobs || [];
+    let mine = null; try { mine = localStorage.getItem('cx_prod_job'); } catch {}
+    const tracked = mine && all.find(j => String(j.id) === mine);
+    if (tracked) trackProductJob(tracked);
     // Show active jobs only; finished ones appear in the product list below.
-    const jobs = ((await api('/products/jobs')).jobs || []).filter(j => j.status !== 'done');
-    const active = jobs.filter(j => j.status === 'processing' || j.status === 'pending' || j.status === 'merging' || j.status === 'uploading');
+    const jobs = all.filter(j => j.status !== 'done');
+    const active = jobs.filter(j => ['processing', 'pending', 'merging', 'writing', 'uploading'].includes(j.status));
     if (!jobs.length) { el.innerHTML = ''; return; }
-    const statusText = (j) => {
-      if (j.status === 'uploading') return 'Uploading…';
-      if (j.status === 'pending') return 'Queued — starts within ~2 min';
-      if (j.status === 'processing') return `Reading pages… chunk ${j.done_chunks}/${j.total_chunks}`;
-      if (j.status === 'merging') return 'Merging coverage map…';
-      if (j.status === 'error') return 'Error: ' + (j.error || 'unknown');
-      if (j.status === 'done') return 'Done ✅';
-      return j.status;
-    };
+    const statusText = productJobStatusText;
     const statusCls = (j) => j.status === 'error' ? 'pill-error' : j.status === 'done' ? 'pill-success' : 'pill-info';
     el.innerHTML = jobs.map(j => {
       const pct = j.total_chunks ? Math.round((j.done_chunks / j.total_chunks) * 100) : 0;
@@ -1171,7 +1333,7 @@ async function loadProductJobs() {
               ${j.status !== 'done' ? `<button onclick="cancelJob(${j.id})" style="font-size:11px;padding:3px 10px;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;cursor:pointer">Cancel</button>` : ''}
             </div>
           </div>
-          ${j.status === 'processing' || j.status === 'merging' ? `<div style="height:6px;background:var(--surface2);border-radius:3px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:3px"></div></div>` : ''}
+          ${['processing', 'merging', 'writing'].includes(j.status) ? `<div style="height:6px;background:var(--surface2);border-radius:3px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:3px"></div></div>` : ''}
         </div>`;
     }).join('');
     // Keep polling while any job is still working (and refresh the product list when one finishes).
@@ -1180,6 +1342,17 @@ async function loadProductJobs() {
       window._jobPoll = setTimeout(() => { loadProductJobs(); loadProducts(); }, 12000);
     }
   } catch (e) { el.innerHTML = ''; }
+}
+
+function productJobStatusText(j) {
+  if (j.status === 'uploading') return 'Uploading…';
+  if (j.status === 'pending') return j.done_chunks ? `Reading pages… ${j.done_chunks}/${j.total_chunks} batches` : 'Queued — starts within ~2 min';
+  if (j.status === 'processing') return `Reading pages… ${j.done_chunks}/${j.total_chunks} batches`;
+  if (j.status === 'merging') return 'Building the coverage map…';
+  if (j.status === 'writing') return 'Writing the Fin profile…';
+  if (j.status === 'error') return 'Error: ' + (j.error || 'unknown');
+  if (j.status === 'done') return 'Done ✅';
+  return j.status;
 }
 
 async function cancelJob(id) {
@@ -1230,9 +1403,14 @@ async function saveProduct() {
     await api('/products', { method: 'POST', body: JSON.stringify(payload) });
     toast('Product saved', 'success');
     cancelProductEdit();
-    document.getElementById('prod-name').value = '';
     loadProducts();
   } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+function openProductInForm(id) {
+  document.getElementById('prod-target').value = String(id);
+  pickProductTarget();
+  document.getElementById('tab-products').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function editProduct(id) {

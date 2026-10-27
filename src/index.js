@@ -2,6 +2,7 @@ import { handleStageRoutes } from "./stage-tracker.js";
 import { handleVideoReviewAPI } from "./video-review.js";
 import { handleClickUpAutomationRoutes, clickUpAutomationCron } from "./clickup-automation.js";
 import { handleStrategyRoutes } from "./strategy.js";
+import { cxModelPricing, cxReadPrompt, cxFinProfilePrompt, cxProfileLength, HAIKU_55_TIER_TOKENS } from "./cx-product-kb.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCO2_B3HitEVQIJE71RL357tdUPErxkhG4AdwXapyhOWtry_-czGMVg_HpZ0paQQ/pub";
@@ -1585,7 +1586,7 @@ async function initCxAgentTables(db) {
   const v47Keys = [
     ['product_kb_enabled', 'true', 'boolean', 'Reference the product knowledge base when drafting coverage/product questions'],
     ['product_kb_max_products', '4', 'number', 'Max products to include as context per draft'],
-    ['product_extract_model', 'claude-opus-4-8', 'string', 'Model used to extract product coverage maps (text + vision)'],
+    ['product_extract_model', 'claude-sonnet-5-5', 'string', 'Model used to extract product coverage maps (text + vision)'],
   ];
   for (const [key, value, value_type, description] of v47Keys) {
     const exists = await db.prepare("SELECT 1 FROM agent_config WHERE key = ?").bind(key).first();
@@ -1638,6 +1639,18 @@ async function initCxAgentTables(db) {
     if (!exists) await db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind(key, value, value_type, description).run();
   }
 
+  // v5.1 migration: product reading split from merging. Reading every page is bulk work for a
+  // cheap model; merging + writing the Fin profile needs judgment. Both fall back to
+  // product_extract_model, then anthropic_model, if blanked.
+  const v51Keys = [
+    ['product_read_model', 'claude-haiku-5-5', 'string', 'Model that reads each product page/image batch into topic notes'],
+    ['product_merge_model', 'claude-sonnet-5-5', 'string', 'Model that merges product notes into the coverage map and writes the Fin profile'],
+  ];
+  for (const [key, value, value_type, description] of v51Keys) {
+    const exists = await db.prepare("SELECT 1 FROM agent_config WHERE key = ?").bind(key).first();
+    if (!exists) await db.prepare("INSERT INTO agent_config (key, value, value_type, description) VALUES (?, ?, ?, ?)").bind(key, value, value_type, description).run();
+  }
+
   // Guarded column adds (SQLite has no ADD COLUMN IF NOT EXISTS — ignore the error if present).
   for (const ddl of [
     "ALTER TABLE agent_tickets ADD COLUMN last_followup_comment_id TEXT",
@@ -1646,6 +1659,13 @@ async function initCxAgentTables(db) {
     "ALTER TABLE agent_responses ADD COLUMN customer_message TEXT",
     "ALTER TABLE agent_human_replies ADD COLUMN response_id INTEGER",
     "ALTER TABLE agent_human_replies ADD COLUMN learned_at TEXT",
+    // v5.1: Fin profiles. page_notes keeps the per-page reading notes so the profile can be
+    // regenerated without re-uploading; product_id_target makes a job update in place.
+    "ALTER TABLE agent_products ADD COLUMN fin_profile TEXT",
+    "ALTER TABLE agent_products ADD COLUMN page_notes TEXT",
+    "ALTER TABLE agent_product_jobs ADD COLUMN product_id_target INTEGER",
+    "ALTER TABLE agent_product_jobs ADD COLUMN description TEXT",
+    "ALTER TABLE agent_product_jobs ADD COLUMN profile_length TEXT DEFAULT 'detailed'",
   ]) { try { await db.prepare(ddl).run(); } catch {} }
 
   const existingTpl = await db.prepare("SELECT COUNT(*) as c FROM agent_templates").first();
@@ -4055,15 +4075,7 @@ async function cxFetchOrderMetafields(orderId, db, env) {
   return metafields;
 }
 
-// Per-MTok pricing keyed by model family. Used for accurate cost logging once we run
-// different models for different steps (Haiku classifier vs Opus drafter).
-function cxModelPricing(model) {
-  const m = (model || '').toLowerCase();
-  if (m.includes('opus'))   return { in: 15e-6, out: 75e-6 };
-  if (m.includes('haiku'))  return { in: 1e-6,  out: 5e-6  };
-  if (m.includes('sonnet')) return { in: 3e-6,  out: 15e-6 };
-  return { in: 15e-6, out: 75e-6 }; // safe default = Opus
-}
+// Per-model pricing lives in cx-product-kb.js (cxModelPricing), matched on the exact model ID.
 
 async function cxCallClaude(env, model, systemPrompt, userPrompt, maxTokens = 1024) {
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -4073,18 +4085,22 @@ async function cxCallClaude(env, model, systemPrompt, userPrompt, maxTokens = 10
       model, max_tokens: maxTokens,
       // System prompt as a cacheable block. Caching is a no-op below the model's
       // cache minimum (~1024 tok), but kicks in once prompts grow (e.g. few-shot examples).
-      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+      // Empty system = the whole prompt is the user message (the API rejects empty blocks).
+      ...(systemPrompt ? { system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }] } : {}),
       messages: [{ role: 'user', content: userPrompt }]
     })
   });
   if (!resp.ok) { const errText = await resp.text(); throw new Error(`Claude API error ${resp.status}: ${errText}`); }
   const data = await resp.json();
-  const content = data.content?.[0]?.text || '';
+  if (data.stop_reason === 'refusal') throw new Error('Claude declined this request (refusal)');
+  // Newer models think by default, so the first block can be a (empty) thinking block —
+  // take the text blocks, not content[0].
+  const content = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
   const inputTokens = data.usage?.input_tokens || 0;
   const outputTokens = data.usage?.output_tokens || 0;
   const cacheWriteTokens = data.usage?.cache_creation_input_tokens || 0;
   const cacheReadTokens = data.usage?.cache_read_input_tokens || 0;
-  const p = cxModelPricing(model);
+  const p = cxModelPricing(model, inputTokens + cacheWriteTokens + cacheReadTokens);
   // Cache writes cost 1.25× input, cache reads cost 0.1× input.
   const cost = (inputTokens * p.in) + (outputTokens * p.out)
     + (cacheWriteTokens * p.in * 1.25) + (cacheReadTokens * p.in * 0.1);
@@ -4135,64 +4151,150 @@ async function cxDeleteJobChunks(env, jobId) {
   for (const o of list.objects) { try { await env.CX_UPLOADS.delete(o.key); } catch {} }
 }
 
-// Cron worker: advance background product-extraction jobs. Reads a few chunk PDFs per tick
-// via Claude native PDF (sees images at full quality), accumulates partials, and on the last
-// chunk merges + saves the product. A recency lock prevents overlapping ticks double-processing.
+// Product models: reading every page is bulk work for a cheap model; merging and writing the
+// Fin profile need judgment. Each falls back to product_extract_model, then anthropic_model.
+async function cxProductModel(db, key) {
+  return (await cxGetConfig(db, key)) || (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
+}
+
+async function cxCountTokens(env, model, content) {
+  const r = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content }] })
+  });
+  if (!r.ok) return null;
+  return (await r.json()).input_tokens ?? null;
+}
+
+// Reading step: one PDF chunk or image batch -> plain-text topic notes for those pages.
+// kind is 'pages' or 'images'; a/b/total are the page or image numbers. Batch sizes are set
+// so a read stays under Haiku 5.5's 100k-token pricing tier; the count is checked before
+// sending, so an oversized batch fails loudly instead of quietly billing at 5×.
+async function cxReadProductChunk(env, db, blocks, kind, a, b, total) {
+  const model = await cxProductModel(db, 'product_read_model');
+  const content = [...blocks, { type: 'text', text: cxReadPrompt(kind, a, b, total) }];
+  if (/^claude-haiku-5-5/.test(model)) {
+    const n = await cxCountTokens(env, model, content);
+    if (n != null && n > HAIKU_55_TIER_TOKENS) {
+      throw new Error(`${kind} ${a}–${b} is ${n} tokens, over Haiku 5.5's 100k pricing tier — upload this file in smaller pieces`);
+    }
+  }
+  const resp = await cxCallClaude(env, model, '', content, 8000);
+  return resp.content.trim();
+}
+
+// Coverage map for the CX agent's drafting (coverage_outline + topics), merged from the notes.
+async function cxMergeProductNotes(env, db, name, notes, topics = []) {
+  const model = await cxProductModel(db, 'product_merge_model');
+  const sys = `You merge per-page reading notes (in page order, from one product) into ONE clean, deduplicated IP-SAFE coverage map. Organize by card/section/chapter. Under each, keep the NAMED sub-topics as short labels — which electrolytes, drug classes, drugs, scales, procedures, devices, and conditions it covers — instead of collapsing them into a general heading (e.g. "sodium, potassium, calcium, magnesium imbalances", not just "electrolytes"). It is a detailed table of contents, NOT the actual content: NEVER include values, ranges, doses, formulas, definitions, mnemonics, or teaching material. Return ONLY valid JSON: {"coverage_outline":"...markdown...","topics":["15–40 lowercase search keywords customers might use, including synonyms"]}`;
+  const user = `Product: ${name}\n\nReading notes (page order):\n${notes.join('\n\n')}${topics.length ? `\n\nCandidate topic keywords: ${topics.join(', ')}` : ''}`;
+  const resp = await cxCallClaude(env, model, sys, user, 16000);
+  const merged = cxExtractJson(resp.content) || {};
+  return {
+    coverage_outline: merged.coverage_outline || notes.join('\n\n'),
+    topics: Array.isArray(merged.topics) ? merged.topics : [...new Set(topics)],
+  };
+}
+
+// The Fin profile: a markdown knowledge-base entry Fin uses to recommend the product.
+// Built from page_notes, or (backfill of never-re-uploaded products) from the coverage map.
+async function cxWriteFinProfile(env, db, { name, description, length, pageNotes, coverageOutline }) {
+  const model = await cxProductModel(db, 'product_merge_model');
+  const prompt = cxFinProfilePrompt({ name, description, length, pageNotes, coverageOutline });
+  const resp = await cxCallClaude(env, model, '', prompt, 16000);
+  const text = resp.content.trim();
+  if (!text) throw new Error('Fin profile came back empty');
+  return text;
+}
+
+// Chunk n of a job is either a PDF slice (chunk/<n>.pdf) or an image batch (chunk/<n>.json,
+// {images:[{media_type,data}]}). R2 custom metadata carries kind/a/b/total for the prompt.
+async function cxLoadJobChunk(env, job, i) {
+  let obj = await env.CX_UPLOADS.get(`job/${job.id}/chunk/${i}.pdf`);
+  if (obj) {
+    const m = obj.customMetadata || {};
+    const b64 = cxAbToBase64(await obj.arrayBuffer());
+    return { kind: 'pages', a: m.a || i + 1, b: m.b || i + 1, total: m.total || job.total_chunks,
+      blocks: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }] };
+  }
+  obj = await env.CX_UPLOADS.get(`job/${job.id}/chunk/${i}.json`);
+  if (!obj) throw new Error(`missing chunk ${i}`);
+  const m = obj.customMetadata || {};
+  const { images = [] } = await obj.json();
+  return { kind: 'images', a: m.a || 1, b: m.b || images.length, total: m.total || images.length,
+    blocks: images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.media_type || 'image/jpeg', data: im.data } })) };
+}
+
+// Cron worker: advance background product jobs. Reads a few chunks per tick (PDF slices via
+// Claude native PDF, image batches via vision) into ordered plain-text notes; after the last
+// chunk, merges the coverage map, saves the product (or updates product_id_target in place),
+// then writes the Fin profile. Each step stamps updated_at, so a tick that dies mid-way is
+// picked up again after 5 minutes.
 async function processProductJobs(env) {
   const db = env.CX_AGENT_DB;
   if (!db || !env.CX_UPLOADS) return;
-  const CHUNKS_PER_TICK = 3;
+  const CHUNKS_PER_TICK = 4;
   await initCxAgentTables(db);
 
-  // Pick one queued job, or a stalled in-progress one (>5 min since last update).
   const job = await db.prepare(`
     SELECT * FROM agent_product_jobs
-    WHERE status = 'pending' OR (status = 'processing' AND updated_at < datetime('now','-5 minutes'))
+    WHERE status = 'pending' OR (status IN ('processing','merging','writing') AND updated_at < datetime('now','-5 minutes'))
     ORDER BY id ASC LIMIT 1
   `).first();
   if (!job) return;
 
   await db.prepare("UPDATE agent_product_jobs SET status='processing', updated_at=datetime('now') WHERE id = ?").bind(job.id).run();
 
-  let partials = []; try { partials = JSON.parse(job.partials || '[]'); } catch {}
+  let notes = []; try { notes = JSON.parse(job.partials || '[]'); } catch {}
   let topics = []; try { topics = JSON.parse(job.topics || '[]'); } catch {}
   let done = job.done_chunks || 0;
-  const model = (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
+  let productId = null;
 
   try {
     const end = Math.min(done + CHUNKS_PER_TICK, job.total_chunks);
     for (let i = done; i < end; i++) {
-      const obj = await env.CX_UPLOADS.get(`job/${job.id}/chunk/${i}.pdf`);
-      if (!obj) throw new Error(`missing chunk ${i}`);
-      const b64 = cxAbToBase64(await obj.arrayBuffer());
-      const sys = `You are reading pages from a nursing-education product to build an IP-SAFE coverage map. For THESE pages only, list the sections/topics covered as short topic labels (table-of-contents style). NEVER reproduce actual study content, definitions, lab values, dosages, mnemonics, or full sentences. Return ONLY valid JSON: {"partial_outline":"...markdown bullets...","topics":["lowercase","keywords"]}`;
-      const content = [
-        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } },
-        { type: 'text', text: `Product: ${job.name} — chunk ${i + 1}/${job.total_chunks}. Extract the IP-safe topics covered on these pages.` }
-      ];
-      const resp = await cxCallClaude(env, model, sys, content, 2000);
-      const parsed = cxExtractJson(resp.content);
-      if (parsed?.partial_outline) partials.push(parsed.partial_outline);
-      if (Array.isArray(parsed?.topics)) topics.push(...parsed.topics);
+      const chunk = await cxLoadJobChunk(env, job, i);
+      notes[i] = await cxReadProductChunk(env, db, chunk.blocks, chunk.kind, chunk.a, chunk.b, chunk.total);
       done = i + 1;
-      await db.prepare("UPDATE agent_product_jobs SET done_chunks=?, partials=?, topics=?, updated_at=datetime('now') WHERE id=?")
-        .bind(done, JSON.stringify(partials), JSON.stringify([...new Set(topics)]), job.id).run();
+      await db.prepare("UPDATE agent_product_jobs SET done_chunks=?, partials=?, updated_at=datetime('now') WHERE id=?")
+        .bind(done, JSON.stringify(notes), job.id).run();
+    }
+    if (done < job.total_chunks) {
+      // Hand back to the queue so the next tick continues (not after the 5-min stall window).
+      await db.prepare("UPDATE agent_product_jobs SET status='pending', updated_at=datetime('now') WHERE id=?").bind(job.id).run();
+      return;
     }
 
-    if (done >= job.total_chunks) {
-      // All chunks read — merge into one clean map and save the product.
-      await db.prepare("UPDATE agent_product_jobs SET status='merging', updated_at=datetime('now') WHERE id=?").bind(job.id).run();
-      const sys = `You merge partial coverage notes (read in page order from one product) into ONE clean, deduplicated IP-SAFE coverage map. Organize by section/chapter with short topic labels — a detailed table of contents, NOT the actual content. NEVER include definitions, values, mnemonics, or teaching material. Return ONLY valid JSON: {"coverage_outline":"...markdown...","topics":["..."]}`;
-      const user = `Product: ${job.name}\n\nPartial coverage notes (page order):\n${partials.join('\n\n')}\n\nCandidate topic keywords: ${[...new Set(topics)].join(', ')}`;
-      const resp = await cxCallClaude(env, model, sys, user, 4000);
-      const merged = cxExtractJson(resp.content) || {};
-      const ins = await db.prepare(`INSERT INTO agent_products (name, source_filename, coverage_outline, topics, is_active) VALUES (?, ?, ?, ?, 1)`)
-        .bind(job.name, job.source_filename ?? null, merged.coverage_outline || partials.join('\n\n'), JSON.stringify(Array.isArray(merged.topics) ? merged.topics : [...new Set(topics)])).run();
-      await db.prepare("UPDATE agent_product_jobs SET status='done', product_id=?, updated_at=datetime('now') WHERE id=?").bind(ins.meta.last_row_id, job.id).run();
-      await cxDeleteJobChunks(env, job.id);
+    // All chunks read — coverage map for the drafter, then save the product.
+    await db.prepare("UPDATE agent_product_jobs SET status='merging', updated_at=datetime('now') WHERE id=?").bind(job.id).run();
+    const pageNotes = notes.filter(Boolean).join('\n\n');
+    const merged = await cxMergeProductNotes(env, db, job.name, notes.filter(Boolean), topics);
+    const description = (job.description || '').trim() || null;
+    const target = job.product_id_target
+      ? await db.prepare('SELECT id FROM agent_products WHERE id = ?').bind(job.product_id_target).first() : null;
+    if (target) {
+      productId = target.id;
+      await db.prepare(`UPDATE agent_products SET name=?, source_filename=?, description=?, coverage_outline=?, topics=?, page_notes=?, updated_at=datetime('now') WHERE id=?`)
+        .bind(job.name, job.source_filename ?? null, description, merged.coverage_outline, JSON.stringify(merged.topics), pageNotes, productId).run();
+    } else {
+      const ins = await db.prepare(`INSERT INTO agent_products (name, source_filename, description, coverage_outline, topics, page_notes, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)`)
+        .bind(job.name, job.source_filename ?? null, description, merged.coverage_outline, JSON.stringify(merged.topics), pageNotes).run();
+      productId = ins.meta.last_row_id;
     }
+    await db.prepare("UPDATE agent_product_jobs SET status='writing', product_id=?, product_id_target=?, updated_at=datetime('now') WHERE id=?")
+      .bind(productId, productId, job.id).run();
+
+    const finProfile = await cxWriteFinProfile(env, db, {
+      name: job.name, description, length: job.profile_length, pageNotes,
+    });
+    await db.prepare("UPDATE agent_products SET fin_profile=?, updated_at=datetime('now') WHERE id=?").bind(finProfile, productId).run();
+    await db.prepare("UPDATE agent_product_jobs SET status='done', updated_at=datetime('now') WHERE id=?").bind(job.id).run();
+    await cxDeleteJobChunks(env, job.id);
   } catch (err) {
-    await db.prepare("UPDATE agent_product_jobs SET status='error', error=?, updated_at=datetime('now') WHERE id=?").bind(String(err.message).slice(0, 500), job.id).run();
+    // If the product was already saved, keep its id on the job: Regenerate can retry the profile.
+    await db.prepare("UPDATE agent_product_jobs SET status='error', error=?, product_id=COALESCE(?, product_id), updated_at=datetime('now') WHERE id=?")
+      .bind(String(err.message).slice(0, 500), productId, job.id).run();
   }
 }
 
@@ -4486,49 +4588,94 @@ async function handleCxAgentAPI(request, env, path) {
       return new Response(JSON.stringify(extracted), { headers: cors });
     }
 
-    // POST /cx-agent/api/products/vision-batch — { name, images:[base64 jpeg], batch, totalBatches }
-    // Reads a batch of page IMAGES (for image-heavy/scanned PDFs) and returns the IP-safe
-    // topics covered on those pages. The browser loops batches, then calls vision-merge.
+    // POST /cx-agent/api/products/vision-batch — { name, images:[base64 jpeg | {media_type,data}], a, b, total }
+    // Reads one batch of images into plain-text topic notes (same reading step as the
+    // background job). Returned as `notes`; `partial_outline` is kept for older callers.
     if (path === '/cx-agent/api/products/vision-batch' && request.method === 'POST') {
       const body = await request.json();
       if (!Array.isArray(body.images) || !body.images.length) return new Response(JSON.stringify({ error: 'images required' }), { status: 400, headers: cors });
-      const model = (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
-      const sys = `You are reading page images from a nursing-education product to build an IP-SAFE coverage map. For THESE pages only, list the sections/topics covered as short topic labels (table-of-contents style). NEVER reproduce actual study content, definitions, lab values, dosages, mnemonics, or full sentences of material. Return ONLY valid JSON: {"partial_outline":"...markdown bullets of topic labels...","topics":["lowercase","keywords"]}`;
-      const content = body.images.map(b64 => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } }));
-      content.push({ type: 'text', text: `Product: ${body.name || ''} — batch ${body.batch}/${body.totalBatches}. Extract the IP-safe topics covered on these pages.` });
-      const resp = await cxCallClaude(env, model, sys, content, 2000);
-      const parsed = cxExtractJson(resp.content);
-      return new Response(JSON.stringify({ partial_outline: parsed?.partial_outline || '', topics: Array.isArray(parsed?.topics) ? parsed.topics : [] }), { headers: cors });
+      const blocks = body.images.map(im => typeof im === 'string'
+        ? { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: im } }
+        : { type: 'image', source: { type: 'base64', media_type: im.media_type || 'image/jpeg', data: im.data } });
+      const a = parseInt(body.a) || 1, b = parseInt(body.b) || (a + blocks.length - 1), total = parseInt(body.total) || b;
+      const notes = await cxReadProductChunk(env, db, blocks, 'images', a, b, total);
+      return new Response(JSON.stringify({ notes, partial_outline: notes, topics: [] }), { headers: cors });
     }
 
     // POST /cx-agent/api/products/vision-merge — { name, partials:[string], topics:[string] }
-    // Merges the per-batch partial outlines into one clean, deduped coverage map.
+    // Merges per-batch notes into one clean, deduped coverage map.
     if (path === '/cx-agent/api/products/vision-merge' && request.method === 'POST') {
       const body = await request.json();
-      const model = (await cxGetConfig(db, 'product_extract_model')) || (await cxGetConfig(db, 'anthropic_model'));
-      const sys = `You merge partial coverage notes (read page-by-page from one product) into ONE clean, deduplicated IP-SAFE coverage map. Organize by section/chapter with short topic labels — a detailed table of contents, NOT the actual content. NEVER include definitions, values, mnemonics, or teaching material. Return ONLY valid JSON: {"coverage_outline":"...markdown...","topics":["..."]}`;
-      const user = `Product: ${body.name || ''}\n\nPartial coverage notes (in page order):\n${(body.partials || []).join('\n\n')}\n\nCandidate topic keywords: ${(body.topics || []).join(', ')}`;
-      const resp = await cxCallClaude(env, model, sys, user, 4000);
-      const parsed = cxExtractJson(resp.content);
-      return new Response(JSON.stringify({ coverage_outline: parsed?.coverage_outline || '', topics: Array.isArray(parsed?.topics) ? parsed.topics : [] }), { headers: cors });
+      const merged = await cxMergeProductNotes(env, db, body.name || '', body.partials || [], body.topics || []);
+      return new Response(JSON.stringify(merged), { headers: cors });
     }
 
     // POST /cx-agent/api/products — create or update. Body: { id?, name, sku?, description?,
-    //   coverage_outline, topics?(array|json string), version? }
+    //   coverage_outline, topics?(array|json string), version?, fin_profile?, is_active? }
+    // With an id, only the fields present in the body change (so the Fin profile or the
+    // description can be edited by hand without resending everything).
     if (path === '/cx-agent/api/products' && request.method === 'POST') {
       const body = await request.json();
-      if (!body.name || !body.coverage_outline) {
-        return new Response(JSON.stringify({ error: 'name and coverage_outline required' }), { status: 400, headers: cors });
-      }
-      const topicsJson = Array.isArray(body.topics) ? JSON.stringify(body.topics) : (body.topics || '[]');
+      const val = {
+        name: body.name, sku: body.sku, description: body.description, coverage_outline: body.coverage_outline,
+        topics: body.topics === undefined ? undefined : (Array.isArray(body.topics) ? JSON.stringify(body.topics) : (body.topics || '[]')),
+        version: body.version, fin_profile: body.fin_profile, source_filename: body.source_filename,
+        is_active: body.is_active === undefined ? undefined : (body.is_active === false ? 0 : 1),
+      };
       if (body.id) {
-        await db.prepare(`UPDATE agent_products SET name=?, sku=?, description=?, coverage_outline=?, topics=?, version=?, is_active=?, updated_at=datetime('now') WHERE id=?`)
-          .bind(body.name, body.sku ?? null, body.description ?? null, body.coverage_outline, topicsJson, body.version ?? null, body.is_active === false ? 0 : 1, parseInt(body.id)).run();
+        const cols = Object.keys(val).filter(k => val[k] !== undefined);
+        if (val.name !== undefined && !String(val.name).trim()) return new Response(JSON.stringify({ error: 'name cannot be empty' }), { status: 400, headers: cors });
+        if (!cols.length) return new Response(JSON.stringify({ error: 'nothing to update' }), { status: 400, headers: cors });
+        await db.prepare(`UPDATE agent_products SET ${cols.map(c => c + '=?').join(', ')}, updated_at=datetime('now') WHERE id=?`)
+          .bind(...cols.map(c => val[c] ?? null), parseInt(body.id)).run();
         return new Response(JSON.stringify({ updated: true, id: parseInt(body.id) }), { headers: cors });
       }
-      const res = await db.prepare(`INSERT INTO agent_products (name, sku, description, coverage_outline, topics, source_filename, version, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .bind(body.name, body.sku ?? null, body.description ?? null, body.coverage_outline, topicsJson, body.source_filename ?? null, body.version ?? null, body.is_active === false ? 0 : 1).run();
+      if (!body.name || !(body.coverage_outline || body.fin_profile)) {
+        return new Response(JSON.stringify({ error: 'name and coverage_outline (or fin_profile) required' }), { status: 400, headers: cors });
+      }
+      const res = await db.prepare(`INSERT INTO agent_products (name, sku, description, coverage_outline, topics, source_filename, version, fin_profile, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(body.name, val.sku ?? null, val.description ?? null, val.coverage_outline ?? null, val.topics ?? '[]', val.source_filename ?? null, val.version ?? null, val.fin_profile ?? null, val.is_active ?? 1).run();
       return new Response(JSON.stringify({ created: true, id: res.meta.last_row_id }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/:id/fin-profile { length?, description? } — rewrite the Fin
+    // profile from the stored page_notes (no re-upload). A description sent here is saved too.
+    // Products that predate page_notes are written from their coverage map instead.
+    const finMatch = path.match(/^\/cx-agent\/api\/products\/(\d+)\/fin-profile$/);
+    if (finMatch && request.method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const p = await db.prepare('SELECT * FROM agent_products WHERE id = ?').bind(parseInt(finMatch[1])).first();
+      if (!p) return new Response(JSON.stringify({ error: 'product not found' }), { status: 404, headers: cors });
+      if (!p.page_notes && !p.coverage_outline) return new Response(JSON.stringify({ error: 'no page notes or coverage map to write from — upload the files first' }), { status: 400, headers: cors });
+      const description = body.description !== undefined ? (String(body.description).trim() || null) : p.description;
+      const fin_profile = await cxWriteFinProfile(env, db, {
+        name: p.name, description, length: cxProfileLength(body.length),
+        ...(p.page_notes ? { pageNotes: p.page_notes } : { coverageOutline: p.coverage_outline }),
+      });
+      await db.prepare("UPDATE agent_products SET fin_profile=?, description=?, updated_at=datetime('now') WHERE id=?").bind(fin_profile, description, p.id).run();
+      return new Response(JSON.stringify({ id: p.id, fin_profile, from: p.page_notes ? 'page_notes' : 'coverage_outline' }), { headers: cors });
+    }
+
+    // POST /cx-agent/api/products/fin-profile/backfill { limit?, length? } — write Fin profiles
+    // for products that have neither a profile nor page notes, from their coverage map. A few
+    // per call to stay inside Worker limits; call again until remaining is 0. Thinner than a
+    // re-upload through the form, by design.
+    if (path === '/cx-agent/api/products/fin-profile/backfill' && request.method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      const limit = Math.max(1, Math.min(5, parseInt(body.limit) || 3));
+      const todo = (await db.prepare(`SELECT id, name, description, coverage_outline FROM agent_products
+        WHERE fin_profile IS NULL AND page_notes IS NULL AND coverage_outline IS NOT NULL AND trim(coverage_outline) != ''
+        ORDER BY id LIMIT ?`).bind(limit).all()).results || [];
+      const done = [], failed = [];
+      for (const p of todo) {
+        try {
+          const fin_profile = await cxWriteFinProfile(env, db, { name: p.name, description: p.description, length: cxProfileLength(body.length), coverageOutline: p.coverage_outline });
+          await db.prepare("UPDATE agent_products SET fin_profile=?, updated_at=datetime('now') WHERE id=?").bind(fin_profile, p.id).run();
+          done.push({ id: p.id, name: p.name });
+        } catch (e) { failed.push({ id: p.id, name: p.name, error: String(e.message).slice(0, 200) }); }
+      }
+      const left = await db.prepare(`SELECT COUNT(*) AS c FROM agent_products WHERE fin_profile IS NULL AND page_notes IS NULL AND coverage_outline IS NOT NULL AND trim(coverage_outline) != ''`).first();
+      return new Response(JSON.stringify({ done, failed, remaining: left?.c || 0 }), { headers: cors });
     }
 
     // POST /cx-agent/api/products/:id/delete
@@ -4540,21 +4687,29 @@ async function handleCxAgentAPI(request, env, path) {
 
     // ===== v4.9: background extraction jobs (browser splits PDF -> chunks in R2 -> cron reads) =====
 
-    // POST /cx-agent/api/products/job/start  { name, source_filename, total_chunks, total_pages }
+    // POST /cx-agent/api/products/job/start  { name, source_filename, total_chunks, total_pages,
+    //   product_id_target?, description?, profile_length? }  — a target updates that product in place.
     if (path === '/cx-agent/api/products/job/start' && request.method === 'POST') {
       const body = await request.json();
       if (!body.name || !body.total_chunks) return new Response(JSON.stringify({ error: 'name and total_chunks required' }), { status: 400, headers: cors });
-      const res = await db.prepare(`INSERT INTO agent_product_jobs (name, source_filename, total_chunks, total_pages, status) VALUES (?, ?, ?, ?, 'uploading')`)
-        .bind(body.name, body.source_filename ?? null, parseInt(body.total_chunks), body.total_pages ?? null).run();
+      const res = await db.prepare(`INSERT INTO agent_product_jobs (name, source_filename, total_chunks, total_pages, status, product_id_target, description, profile_length) VALUES (?, ?, ?, ?, 'uploading', ?, ?, ?)`)
+        .bind(body.name, body.source_filename ?? null, parseInt(body.total_chunks), body.total_pages ?? null,
+          body.product_id_target ? parseInt(body.product_id_target) : null, body.description ?? null, cxProfileLength(body.profile_length)).run();
       return new Response(JSON.stringify({ job_id: res.meta.last_row_id }), { headers: cors });
     }
 
-    // PUT /cx-agent/api/products/job/:id/chunk/:n   (raw application/pdf body) -> store in R2
+    // PUT /cx-agent/api/products/job/:id/chunk/:n?a=&b=&total=  -> store in R2.
+    //   application/pdf body = a PDF slice (pages a–b of total);
+    //   application/json body = {images:[{media_type,data}]} (images a–b of total).
     const chunkMatch = path.match(/^\/cx-agent\/api\/products\/job\/(\d+)\/chunk\/(\d+)$/);
     if (chunkMatch && request.method === 'PUT') {
       if (!env.CX_UPLOADS) return new Response(JSON.stringify({ error: 'R2 not configured' }), { status: 500, headers: cors });
+      const q = new URL(request.url).searchParams;
+      const customMetadata = {};
+      for (const k of ['a', 'b', 'total']) if (q.get(k)) customMetadata[k] = String(parseInt(q.get(k)) || '');
+      const ext = (request.headers.get('Content-Type') || '').includes('json') ? 'json' : 'pdf';
       const bytes = await request.arrayBuffer();
-      await env.CX_UPLOADS.put(`job/${chunkMatch[1]}/chunk/${chunkMatch[2]}.pdf`, bytes);
+      await env.CX_UPLOADS.put(`job/${chunkMatch[1]}/chunk/${chunkMatch[2]}.${ext}`, bytes, { customMetadata });
       return new Response(JSON.stringify({ stored: true }), { headers: cors });
     }
 
@@ -4567,7 +4722,7 @@ async function handleCxAgentAPI(request, env, path) {
 
     // GET /cx-agent/api/products/jobs  -> active + recently finished jobs (for status display)
     if (path === '/cx-agent/api/products/jobs' && request.method === 'GET') {
-      const rows = (await db.prepare(`SELECT id, name, source_filename, total_chunks, done_chunks, total_pages, status, product_id, error, updated_at FROM agent_product_jobs WHERE status != 'done' OR updated_at > datetime('now','-1 day') ORDER BY id DESC LIMIT 30`).all()).results || [];
+      const rows = (await db.prepare(`SELECT id, name, source_filename, total_chunks, done_chunks, total_pages, status, product_id, product_id_target, profile_length, error, updated_at FROM agent_product_jobs WHERE status != 'done' OR updated_at > datetime('now','-1 day') ORDER BY id DESC LIMIT 30`).all()).results || [];
       return new Response(JSON.stringify({ jobs: rows }), { headers: cors });
     }
 
@@ -5661,7 +5816,7 @@ async function handleCxAgentAPI(request, env, path) {
       // ---- PRODUCT COVERAGE MAPS ------------------------------------------
       if (what === 'products') {
         const rows = (await db.prepare(
-          'SELECT name, coverage_outline, topics FROM agent_products WHERE is_active = 1 ORDER BY name'
+          'SELECT name, coverage_outline, topics, fin_profile FROM agent_products WHERE is_active = 1 ORDER BY name'
         ).all()).results || [];
         const idx = url.searchParams.get('index');
         const pick = idx != null ? [rows[parseInt(idx)]].filter(Boolean) : rows;
@@ -5681,6 +5836,14 @@ async function handleCxAgentAPI(request, env, path) {
           let topics = []; try { topics = JSON.parse(p.topics || '[]'); } catch {}
           md.push('---');
           md.push('');
+          // A Fin profile already starts with "# <Product name>" — use it exactly as stored,
+          // then the keywords. Products without one fall back to the coverage map.
+          if (p.fin_profile && p.fin_profile.trim()) {
+            md.push(p.fin_profile.trim());
+            md.push('');
+            if (topics.length) { md.push('**Search keywords:** ' + topics.join(', ')); md.push(''); }
+            continue;
+          }
           md.push('# ' + p.name);
           md.push('');
           if (topics.length) { md.push('**Search keywords:** ' + topics.join(', ')); md.push(''); }
