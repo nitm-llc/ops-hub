@@ -3,6 +3,7 @@ import { handleVideoReviewAPI } from "./video-review.js";
 import { handleClickUpAutomationRoutes, clickUpAutomationCron } from "./clickup-automation.js";
 import { handleStrategyRoutes } from "./strategy.js";
 import { cxModelPricing, cxReadPrompt, cxFinProfilePrompt, cxProfileLength, HAIKU_55_TIER_TOKENS } from "./cx-product-kb.js";
+import { zdDateRange, zdSearchQuery, zdAnalysisPrompt, zdAnalysisUserPrompt, zdNormalizeAnalysis, zdSummarize, zdToCsv } from "./cx-ticket-export.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCO2_B3HitEVQIJE71RL357tdUPErxkhG4AdwXapyhOWtry_-czGMVg_HpZ0paQQ/pub";
@@ -1512,6 +1513,18 @@ async function initCxAgentTables(db) {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     )`),
+    // Bulk Zendesk export for pattern analysis — ANY ticket in a date range, not just ones the
+    // agent processed. Filled in three resumable passes: list → transcript → analysis.
+    db.prepare(`CREATE TABLE IF NOT EXISTS zd_export_tickets (
+      zendesk_ticket_id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL, updated_at TEXT, status TEXT, channel TEXT,
+      subject TEXT, description TEXT, tags TEXT, requester_id TEXT,
+      transcript TEXT, comment_count INTEGER, fetched_at TEXT,
+      category TEXT, is_return INTEGER, product TEXT, reason TEXT, resolution TEXT,
+      summary TEXT, analysis_model TEXT, analyzed_at TEXT, analysis_error TEXT,
+      listed_at TEXT DEFAULT (datetime('now'))
+    )`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_zd_export_created ON zd_export_tickets(created_at)`),
   ]);
 
   const existing = await db.prepare("SELECT COUNT(*) as c FROM agent_config").first();
@@ -4359,6 +4372,175 @@ function cxFirstNameFromEmail(email) {
   return firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
 }
 
+// ===== ZENDESK TICKET EXPORT =====
+// Pulls every ticket in a date range straight from Zendesk (the agent's own export only has
+// tickets it processed, from April 2026 on), keeps the full thread, and tags each one for
+// return/refund patterns. The browser drives it in small resumable steps — list, transcripts,
+// analyze — so a big range never runs into a single request's limits, and closing the tab
+// just pauses it.
+
+// One readable conversation: customer, team and internal notes, oldest first. Messaging
+// (Instagram/chat) content lives in chat_transcript comments, so those get parsed.
+function cxExportTranscript(ticket, comments, botId) {
+  const name = /^Conversation with\s+(.+)$/i.exec(String(ticket.description || '').trim())?.[1]?.trim() || null;
+  const parts = [];
+  for (const c of [...comments].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))) {
+    if (botId && c.author_id === botId) continue; // the agent's own drafts aren't the conversation
+    if (c.via?.channel === 'chat_transcript') {
+      for (const m of cxParseChatTranscript([c], name)) {
+        parts.push(`${name ? (m.fromCustomer ? 'Customer' : 'Team') : (m.sender || 'Chat')}: ${m.text}`);
+      }
+      continue;
+    }
+    const text = cxCleanReplyText(c.plain_body || c.body || '');
+    if (!text) continue;
+    const who = !c.public ? 'Internal note' : (c.author_id === ticket.requester_id ? 'Customer' : 'Team');
+    parts.push(`${who}: ${text.slice(0, 2000)}`);
+  }
+  return parts.join('\n\n').slice(0, 15000);
+}
+
+// Runs fn over items, at most `limit` at a time.
+async function cxPool(items, limit, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const item = items[i++]; await fn(item); }
+  }));
+}
+
+async function cxTicketExportRoute(request, env, db, path, cors) {
+  const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: cors });
+  const url = new URL(request.url);
+  const body = request.method === 'POST' ? await request.json().catch(() => ({})) : {};
+  let range;
+  try {
+    range = zdDateRange(body.start || url.searchParams.get('start'), body.end || url.searchParams.get('end'));
+  } catch (e) {
+    return json({ error: e.message }, 400);
+  }
+  const inRange = 'created_at >= ? AND created_at < ?';
+  const subdomain = await cxGetConfig(db, 'zendesk_subdomain');
+  const zdHeaders = { Authorization: `Basic ${btoa(`${env.ZENDESK_EMAIL}/token:${env.ZENDESK_API_TOKEN}`)}` };
+  const retryAfter = (resp) => Math.max(5, Number(resp.headers.get('Retry-After')) || 30);
+
+  // Step 1: list every ticket in the range (metadata only), one search-export page per call.
+  if (path === '/cx-agent/api/ticket-export/list' && request.method === 'POST') {
+    const qs = new URLSearchParams({ query: zdSearchQuery(range), 'filter[type]': 'ticket', 'page[size]': '500' });
+    if (body.cursor) qs.set('page[after]', body.cursor);
+    const resp = await fetch(`https://${subdomain}.zendesk.com/api/v2/search/export.json?${qs}`, { headers: zdHeaders });
+    if (resp.status === 429) return json({ retry_after: retryAfter(resp) });
+    if (!resp.ok) return json({ error: `Zendesk search ${resp.status}: ${(await resp.text()).slice(0, 300)}` }, 502);
+    const data = await resp.json();
+    const tickets = data.results || [];
+    const stmts = tickets.map(t => db.prepare(`INSERT INTO zd_export_tickets
+        (zendesk_ticket_id, created_at, updated_at, status, channel, subject, description, tags, requester_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(zendesk_ticket_id) DO UPDATE SET updated_at = excluded.updated_at, status = excluded.status,
+          channel = excluded.channel, subject = excluded.subject, tags = excluded.tags`)
+      .bind(String(t.id), t.created_at, t.updated_at || null, t.status || null, t.via?.channel || null,
+        t.subject || null, String(t.description || '').slice(0, 4000), (t.tags || []).join(', '),
+        t.requester_id != null ? String(t.requester_id) : null));
+    for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
+    return json({ listed: tickets.length, has_more: !!data.meta?.has_more, cursor: data.meta?.after_cursor || null });
+  }
+
+  // Step 2: pull the full conversation for tickets that don't have one yet.
+  if (path === '/cx-agent/api/ticket-export/transcripts' && request.method === 'POST') {
+    const { results: rows = [] } = await db.prepare(`SELECT zendesk_ticket_id, description, requester_id FROM zd_export_tickets
+      WHERE transcript IS NULL AND ${inRange} LIMIT 30`).bind(range.from, range.to).all();
+    const botId = Number(await cxGetConfig(db, 'bot_author_id')) || null;
+    let done = 0, wait = 0;
+    await cxPool(rows, 5, async (row) => {
+      if (wait) return;
+      const comments = [];
+      let next = `https://${subdomain}.zendesk.com/api/v2/tickets/${row.zendesk_ticket_id}/comments.json`;
+      for (let page = 0; next && page < 5; page++) {
+        const resp = await fetch(next, { headers: zdHeaders });
+        if (resp.status === 429) { wait = retryAfter(resp); return; }
+        if (!resp.ok) break; // deleted/merged tickets 404 — fall back to the description
+        const data = await resp.json();
+        comments.push(...(data.comments || []));
+        next = data.next_page;
+      }
+      const ticket = { description: row.description, requester_id: Number(row.requester_id) };
+      await db.prepare(`UPDATE zd_export_tickets SET transcript = ?, comment_count = ?, fetched_at = datetime('now') WHERE zendesk_ticket_id = ?`)
+        .bind(cxExportTranscript(ticket, comments, botId) || row.description || '', comments.length, row.zendesk_ticket_id).run();
+      done++;
+    });
+    const left = await db.prepare(`SELECT COUNT(*) AS c FROM zd_export_tickets WHERE transcript IS NULL AND ${inRange}`).bind(range.from, range.to).first();
+    return json({ fetched: done, remaining: left.c, ...(wait ? { retry_after: wait } : {}) });
+  }
+
+  // Step 3: tag each ticket for returns/refunds/product problems.
+  if (path === '/cx-agent/api/ticket-export/analyze' && request.method === 'POST') {
+    if (body.retry_failed) {
+      await db.prepare(`UPDATE zd_export_tickets SET analyzed_at = NULL, analysis_error = NULL
+        WHERE category IS NULL AND analysis_error IS NOT NULL AND ${inRange}`).bind(range.from, range.to).run();
+    }
+    const model = (await cxGetConfig(db, 'ticket_analysis_model')) || 'claude-haiku-5-5';
+    const { results: products = [] } = await db.prepare(`SELECT name FROM agent_products WHERE is_active = 1 ORDER BY name`).all();
+    const system = zdAnalysisPrompt(products.map(p => p.name));
+    const { results: rows = [] } = await db.prepare(`SELECT zendesk_ticket_id, subject, channel, tags, transcript, description FROM zd_export_tickets
+      WHERE transcript IS NOT NULL AND analyzed_at IS NULL AND ${inRange} LIMIT 24`).bind(range.from, range.to).all();
+    let done = 0, cost = 0, wait = 0;
+    await cxPool(rows, 6, async (row) => {
+      if (wait) return;
+      try {
+        const r = await cxCallClaude(env, model, system, zdAnalysisUserPrompt(row), 400);
+        cost += r.cost;
+        const a = zdNormalizeAnalysis(cxExtractJson(r.content));
+        await db.prepare(`UPDATE zd_export_tickets SET category = ?, is_return = ?, product = ?, reason = ?, resolution = ?, summary = ?,
+            analysis_model = ?, analyzed_at = datetime('now'), analysis_error = NULL WHERE zendesk_ticket_id = ?`)
+          .bind(a.category, a.is_return, a.product, a.reason, a.resolution, a.summary, model, row.zendesk_ticket_id).run();
+        done++;
+      } catch (e) {
+        // Rate limits and overloads are temporary — leave the row for the next pass.
+        if (/Claude API error (429|529|503)/.test(e.message)) { wait = 20; return; }
+        await db.prepare(`UPDATE zd_export_tickets SET analyzed_at = datetime('now'), analysis_error = ? WHERE zendesk_ticket_id = ?`)
+          .bind(e.message.slice(0, 500), row.zendesk_ticket_id).run();
+      }
+    });
+    const left = await db.prepare(`SELECT COUNT(*) AS c FROM zd_export_tickets WHERE transcript IS NOT NULL AND analyzed_at IS NULL AND ${inRange}`).bind(range.from, range.to).first();
+    return json({ analyzed: done, remaining: left.c, cost_usd: +cost.toFixed(4), model, ...(wait ? { retry_after: wait } : {}) });
+  }
+
+  // Progress + the pattern rollup.
+  if (path === '/cx-agent/api/ticket-export/summary' && request.method === 'GET') {
+    const progress = await db.prepare(`SELECT COUNT(*) AS listed,
+        SUM(transcript IS NOT NULL) AS with_transcript,
+        SUM(category IS NOT NULL) AS analyzed,
+        SUM(category IS NULL AND analysis_error IS NOT NULL) AS failed
+      FROM zd_export_tickets WHERE ${inRange}`).bind(range.from, range.to).first();
+    const { results: rows = [] } = await db.prepare(`SELECT created_at, channel, category, is_return, product, reason, resolution
+      FROM zd_export_tickets WHERE ${inRange}`).bind(range.from, range.to).all();
+    return json({ progress, summary: zdSummarize(rows) });
+  }
+
+  // Drill-down: the tickets behind a number in the summary.
+  if (path === '/cx-agent/api/ticket-export/tickets' && request.method === 'GET') {
+    let where = inRange;
+    const params = [range.from, range.to];
+    const category = url.searchParams.get('category');
+    const product = url.searchParams.get('product');
+    if (category) { where += ' AND category = ?'; params.push(category); }
+    if (url.searchParams.get('returns') === '1') where += ' AND is_return = 1';
+    if (product) { where += ' AND lower(product) = lower(?)'; params.push(product); }
+    const { results = [] } = await db.prepare(`SELECT zendesk_ticket_id, created_at, channel, subject, category, product, reason, resolution, summary
+      FROM zd_export_tickets WHERE ${where} ORDER BY created_at LIMIT 300`).bind(...params).all();
+    return json({ subdomain, tickets: results });
+  }
+
+  if (path === '/cx-agent/api/ticket-export/csv' && request.method === 'GET') {
+    const { results = [] } = await db.prepare(`SELECT * FROM zd_export_tickets WHERE ${inRange} ORDER BY created_at`).bind(range.from, range.to).all();
+    const cols = ['zendesk_ticket_id', 'created_at', 'status', 'channel', 'subject', 'tags', 'category', 'is_return',
+      'product', 'reason', 'resolution', 'summary', 'comment_count', 'transcript'];
+    return new Response(zdToCsv(results, cols), { headers: { ...cors, 'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="zendesk-tickets-${range.start}-to-${range.end}.csv"` } });
+  }
+
+  return json({ error: 'not found' }, 404);
+}
+
 async function handleCxAgentAPI(request, env, path) {
   const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", "Content-Type": "application/json" };
   if (request.method === "OPTIONS") return new Response(null, { headers: cors });
@@ -4368,6 +4550,8 @@ async function handleCxAgentAPI(request, env, path) {
   await initCxAgentTables(db);
 
   try {
+    if (path.startsWith('/cx-agent/api/ticket-export/')) return await cxTicketExportRoute(request, env, db, path, cors);
+
     if (path === '/cx-agent/api/tickets' && request.method === 'GET') {
       const url = new URL(request.url);
       const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);

@@ -166,6 +166,7 @@
   <button class="tab" data-tab="products">Products</button>
   <button class="tab" data-tab="knowledge">Knowledge</button>
   <button class="tab" data-tab="actions">Actions</button>
+  <button class="tab" data-tab="ticket-export">Ticket Export</button>
 </div>
 
 <!-- TICKETS TAB -->
@@ -370,6 +371,27 @@
   </div>
 </div>
 
+<!-- TICKET EXPORT TAB -->
+<div class="tab-panel" id="tab-ticket-export">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:4px">📦 Zendesk Ticket Export &amp; Return Patterns</div>
+    <div style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+      Pulls <b>every</b> Zendesk ticket created in a date range, with the full conversation, then has AI tag each one: what went wrong (damaged, wrong item, return, refund…), which product, the customer's reason, and how it was resolved.
+      It runs in steps and saves as it goes, so you can close this tab and click <b>Pull &amp; analyze</b> again later to pick up where it stopped. Costs well under $1 per 1,000 tickets.
+    </div>
+    <div class="filter-bar" style="margin:0">
+      <label>From</label><input type="date" id="te-start">
+      <label>To</label><input type="date" id="te-end">
+      <button id="te-run" onclick="teRun()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">Pull &amp; analyze</button>
+      <button onclick="teLoadSummary()" style="padding:6px 14px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px">Show results</button>
+      <button onclick="teCsv()" style="padding:6px 14px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px">Download CSV</button>
+    </div>
+    <div id="te-status" style="font-size:12px;color:var(--text-muted);margin-top:10px"></div>
+  </div>
+  <div id="te-summary"></div>
+  <div id="te-drill"></div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -401,6 +423,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'products') { loadProducts(); loadProductJobs(); resumeProductJob(); }
     if (tab.dataset.tab === 'knowledge') loadKnowledge();
     if (tab.dataset.tab === 'actions') loadActions();
+    if (tab.dataset.tab === 'ticket-export') teLoadSummary();
   });
 });
 
@@ -1553,6 +1576,146 @@ async function exportCsv() {
   const fmt = d => d.toISOString().slice(0, 10);
   document.getElementById('export-end').value = fmt(end);
   document.getElementById('export-start').value = fmt(start);
+})();
+
+// ============ TICKET EXPORT ============
+// Drives the Worker's resumable steps (list → transcripts → analyze) and renders the rollup.
+
+const TE_LABELS = {
+  return_request: 'Return request', exchange: 'Exchange', damaged: 'Arrived damaged', wrong_item: 'Wrong item',
+  missing_item: 'Missing item', defective: 'Defect / quality', not_as_expected: 'Not as expected',
+  refund_request: 'Refund request', cancellation: 'Cancellation', lost_or_late: 'Lost or late',
+  digital_access: 'Digital access', other: 'Other',
+};
+const TE_RETURN_CATS = ['return_request','exchange','damaged','wrong_item','missing_item','defective','not_as_expected','refund_request','cancellation'];
+const teLabel = (k) => TE_LABELS[k] || String(k).replace(/_/g, ' ');
+const teSleep = (s) => new Promise(r => setTimeout(r, s * 1000));
+
+function teRange() {
+  const start = document.getElementById('te-start').value;
+  const end = document.getElementById('te-end').value;
+  if (!start || !end) throw new Error('Pick a start and end date first');
+  try { localStorage.setItem('te-range', JSON.stringify({ start, end })); } catch {}
+  return { start, end };
+}
+function teStatus(msg) { document.getElementById('te-status').textContent = msg; }
+
+async function teRun() {
+  let range;
+  try { range = teRange(); } catch (e) { toast(e.message, 'error'); return; }
+  const btn = document.getElementById('te-run');
+  btn.disabled = true;
+  const post = (step, extra = {}) => api('/ticket-export/' + step, { method: 'POST', body: JSON.stringify({ ...range, ...extra }) });
+  try {
+    // 1. List
+    let cursor = null, listed = 0;
+    for (;;) {
+      const r = await post('list', { cursor });
+      if (r.retry_after) { teStatus(`Zendesk asked us to slow down — waiting ${r.retry_after}s…`); await teSleep(r.retry_after); continue; }
+      listed += r.listed;
+      teStatus(`Step 1 of 3 — found ${listed.toLocaleString()} tickets…`);
+      if (!r.has_more || !r.cursor) break;
+      cursor = r.cursor;
+    }
+    // 2. Transcripts
+    for (;;) {
+      const r = await post('transcripts');
+      teStatus(`Step 2 of 3 — downloading conversations: ${r.remaining.toLocaleString()} left…`);
+      if (r.retry_after) { teStatus(`Zendesk rate limit — waiting ${r.retry_after}s (${r.remaining.toLocaleString()} left)…`); await teSleep(r.retry_after); continue; }
+      if (!r.remaining || !r.fetched) break;
+    }
+    // 3. Analyze
+    let cost = 0, first = true;
+    for (;;) {
+      const r = await post('analyze', first ? { retry_failed: true } : {});
+      first = false;
+      cost += r.cost_usd || 0;
+      teStatus(`Step 3 of 3 — AI tagging: ${r.remaining.toLocaleString()} left · $${cost.toFixed(2)} so far`);
+      if (r.retry_after) { await teSleep(r.retry_after); continue; }
+      if (!r.remaining || !r.analyzed) break;
+      teLoadSummary(true);
+    }
+    teStatus(`Done · AI cost this run $${cost.toFixed(2)}`);
+    toast('Export and analysis finished', 'success');
+  } catch (e) {
+    teStatus('Stopped: ' + e.message + ' — click Pull & analyze to resume.');
+    toast('Stopped: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    teLoadSummary(true);
+  }
+}
+
+function teTable(title, head, rows) {
+  return `<div class="table-card"><h3>${title}</h3><table><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${head.length}" style="color:var(--text-muted)">Nothing yet</td></tr>`}</tbody></table></div>`;
+}
+const tePct = (n, d) => d ? Math.round(n / d * 100) + '%' : '—';
+const teBar = (n, max) => `<div style="background:var(--accent,#6366f1);height:8px;border-radius:4px;width:${max ? Math.max(2, n / max * 160) : 0}px"></div>`;
+
+async function teLoadSummary(quiet) {
+  let range;
+  try { range = teRange(); } catch (e) { if (!quiet) toast(e.message, 'error'); return; }
+  const el = document.getElementById('te-summary');
+  try {
+    const { progress: p, summary: s } = await api('/ticket-export/summary?' + new URLSearchParams(range));
+    if (!p.listed) { el.innerHTML = '<div class="table-card" style="color:var(--text-muted)">No tickets pulled for this range yet — click <b>Pull &amp; analyze</b>.</div>'; return; }
+    const pending = p.listed - p.analyzed - (p.failed || 0);
+    const topProduct = s.products.find(x => x.returns);
+    let html = `<div class="kpi-row">
+      <div class="kpi-card"><div class="label">Tickets</div><div class="value">${p.listed.toLocaleString()}</div><div class="sub">${pending ? pending.toLocaleString() + ' not tagged yet' : 'all tagged'}${p.failed ? ` · ${p.failed} failed` : ''}</div></div>
+      <div class="kpi-card"><div class="label">Return / refund related</div><div class="value">${s.returns.toLocaleString()}</div><div class="sub">${tePct(s.returns, s.analyzed)} of tagged tickets</div></div>
+      <div class="kpi-card"><div class="label">Most return issues</div><div class="value" style="font-size:16px">${topProduct ? escape(topProduct.name) : '—'}</div><div class="sub">${topProduct ? topProduct.returns + ' tickets' : ''}</div></div>
+    </div>`;
+    const maxCat = Math.max(0, ...s.by_category.map(c => c.count));
+    html += teTable('What customers contacted us about', ['Issue', 'Tickets', '% of tagged', ''],
+      s.by_category.map(c => `<tr class="clickable" onclick="teDrill({category:'${c.key}'}, '${escape(teLabel(c.key))}')"><td>${TE_RETURN_CATS.includes(c.key) ? '↩️ ' : ''}${escape(teLabel(c.key))}</td><td>${c.count}</td><td>${tePct(c.count, s.analyzed)}</td><td>${teBar(c.count, maxCat)}</td></tr>`));
+    html += teTable('Products with the most return / refund issues', ['Product', 'Return tickets', 'All tickets', 'Breakdown'],
+      s.products.filter(x => x.returns).slice(0, 25).map(x => `<tr class="clickable" onclick='teDrill(${escape(JSON.stringify({ product: x.name, returns: 1 }))}, ${escape(JSON.stringify(x.name))})'><td>${escape(x.name)}</td><td>${x.returns}</td><td>${x.total}</td><td style="font-size:12px;color:var(--text-muted)">${x.categories.map(c => `${escape(teLabel(c.key))} ${c.count}`).join(' · ')}</td></tr>`));
+    const maxWeek = Math.max(0, ...s.by_week.map(w => w.returns));
+    html += teTable('Week by week', ['Week of', 'Tickets', 'Return-related', '% returns', ''],
+      s.by_week.map(w => `<tr><td>${w.week}</td><td>${w.total}</td><td>${w.returns}</td><td>${tePct(w.returns, w.total)}</td><td>${teBar(w.returns, maxWeek)}</td></tr>`));
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">`;
+    html += teTable('Reasons customers gave (returns)', ['Reason', 'Tickets'], s.top_reasons.map(r => `<tr><td>${escape(r.key)}</td><td>${r.count}</td></tr>`));
+    html += teTable('How returns were resolved', ['Outcome', 'Tickets'], s.return_resolutions.map(r => `<tr><td>${escape(r.key.replace(/_/g, ' '))}</td><td>${r.count}</td></tr>`));
+    html += `</div>`;
+    el.innerHTML = html;
+  } catch (e) {
+    if (!quiet) toast('Could not load results: ' + e.message, 'error');
+  }
+}
+
+async function teDrill(filter, title) {
+  const el = document.getElementById('te-drill');
+  try {
+    const { subdomain, tickets } = await api('/ticket-export/tickets?' + new URLSearchParams({ ...teRange(), ...filter }));
+    el.innerHTML = teTable(`${escape(title)} — ${tickets.length} tickets`, ['Ticket', 'Date', 'Issue', 'Product', 'Reason', 'Resolved', 'Summary'],
+      tickets.map(t => `<tr><td><a href="https://${subdomain}.zendesk.com/agent/tickets/${t.zendesk_ticket_id}" target="_blank" rel="noopener">#${t.zendesk_ticket_id}</a></td><td style="white-space:nowrap">${t.created_at.slice(0, 10)}</td><td>${escape(teLabel(t.category || ''))}</td><td>${escape(t.product || '')}</td><td>${escape(t.reason || '')}</td><td>${escape((t.resolution || '').replace(/_/g, ' '))}</td><td style="font-size:12px">${escape(t.summary || '')}</td></tr>`));
+    el.scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function teCsv() {
+  let range;
+  try { range = teRange(); } catch (e) { toast(e.message, 'error'); return; }
+  const resp = await fetch('/cx-agent/api/ticket-export/csv?' + new URLSearchParams(range), { credentials: 'same-origin' });
+  if (!resp.ok) { toast('Download failed: ' + (await resp.text()).slice(0, 100), 'error'); return; }
+  const url = URL.createObjectURL(await resp.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `zendesk-tickets-${range.start}-to-${range.end}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+(function setDefaultTicketExportDates() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('te-range')); } catch {}
+  const end = new Date(), start = new Date();
+  start.setDate(start.getDate() - 30);
+  document.getElementById('te-start').value = saved?.start || start.toISOString().slice(0, 10);
+  document.getElementById('te-end').value = saved?.end || end.toISOString().slice(0, 10);
 })();
 
 // ============ TRAINING REVIEW ============
