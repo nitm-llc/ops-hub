@@ -4474,8 +4474,9 @@ async function cxTicketExportRoute(request, env, db, path, cors) {
   // Step 3: tag each ticket for returns/refunds/product problems.
   if (path === '/cx-agent/api/ticket-export/analyze' && request.method === 'POST') {
     if (body.retry_failed) {
-      await db.prepare(`UPDATE zd_export_tickets SET analyzed_at = NULL, analysis_error = NULL
-        WHERE category IS NULL AND analysis_error IS NOT NULL AND ${inRange}`).bind(range.from, range.to).run();
+      // A good read always has a summary, so a row without one is a failed read.
+      await db.prepare(`UPDATE zd_export_tickets SET analyzed_at = NULL, analysis_error = NULL, category = NULL, is_return = NULL
+        WHERE analyzed_at IS NOT NULL AND summary IS NULL AND ${inRange}`).bind(range.from, range.to).run();
     }
     const model = (await cxGetConfig(db, 'ticket_analysis_model')) || 'claude-haiku-5-5';
     const { results: products = [] } = await db.prepare(`SELECT name FROM agent_products WHERE is_active = 1 ORDER BY name`).all();
@@ -4486,9 +4487,13 @@ async function cxTicketExportRoute(request, env, db, path, cors) {
     await cxPool(rows, 6, async (row) => {
       if (wait) return;
       try {
-        const r = await cxCallClaude(env, model, system, zdAnalysisUserPrompt(row), 400);
+        // Newer models think before answering, and that comes out of max_tokens — a tight cap
+        // leaves no room for the JSON.
+        const r = await cxCallClaude(env, model, system, zdAnalysisUserPrompt(row), 2000);
         cost += r.cost;
-        const a = zdNormalizeAnalysis(cxExtractJson(r.content));
+        const parsed = cxExtractJson(r.content);
+        if (!parsed?.summary) throw new Error(`unreadable answer: ${String(r.content).slice(0, 300) || '(empty)'}`);
+        const a = zdNormalizeAnalysis(parsed);
         await db.prepare(`UPDATE zd_export_tickets SET category = ?, is_return = ?, product = ?, reason = ?, resolution = ?, summary = ?,
             analysis_model = ?, analyzed_at = datetime('now'), analysis_error = NULL WHERE zendesk_ticket_id = ?`)
           .bind(a.category, a.is_return, a.product, a.reason, a.resolution, a.summary, model, row.zendesk_ticket_id).run();
@@ -4509,7 +4514,7 @@ async function cxTicketExportRoute(request, env, db, path, cors) {
     const progress = await db.prepare(`SELECT COUNT(*) AS listed,
         SUM(transcript IS NOT NULL) AS with_transcript,
         SUM(category IS NOT NULL) AS analyzed,
-        SUM(category IS NULL AND analysis_error IS NOT NULL) AS failed
+        SUM(analyzed_at IS NOT NULL AND summary IS NULL) AS failed
       FROM zd_export_tickets WHERE ${inRange}`).bind(range.from, range.to).first();
     const { results: rows = [] } = await db.prepare(`SELECT created_at, channel, category, is_return, product, reason, resolution
       FROM zd_export_tickets WHERE ${inRange}`).bind(range.from, range.to).all();
