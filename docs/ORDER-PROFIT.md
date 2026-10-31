@@ -7,7 +7,10 @@ the most we can spend to get an order before it loses money (break-even CPA, and
 
 ## Decisions (Ben, 2026-10-30)
 
-- **Scope:** Shopify website orders fulfilled by ShipMonk. Not Amazon FBA/FBM, university/manual, or Etsy.
+- **Scope:** Shopify website orders from **2026-01-01** (Ben 2026-10-31), fulfilled by ShipMonk (Jun+) or ShipFusion (Jan–Apr;
+  `tpl_orders` CSV import, order numbers `#2-NNN`, fees include additional/insert pick + services). **May 2026 has no 3PL
+  data** (switchover), so May orders are unmatched and left out of break-even. ShipFusion didn't record SKUs per box, so
+  Jan–Apr product cost uses Shopify line items; digital `D-*` lines count $0. Not Amazon FBA/FBM, university/manual, or Etsy.
 - **Revenue:** what the customer paid net of discount codes and refunds, plus shipping charged, **excluding sales tax**.
 - **Product cost:** Finale average cost per SKU = Finale `cost / units` for that SKU in the order's ship month
   (from `nitm-PL-sheet/finale/YYYY-MM.csv`, all sources combined). If the SKU has no Finale row that month, use
@@ -42,6 +45,12 @@ the most we can spend to get an order before it loses money (break-even CPA, and
   $3,344 vs. $3,399 actually billed for D-NSCB orders. Configured in `VITALSOURCE` in `src/index.js`.
   **Ben's rule: only digital NSCB orders carry it.** But VitalSource also billed codes on physical-only `SB-NSCB*` orders in
   Sep 2026: 106 codes, $2,653. Either the physical bundle includes digital access or the integration over-issues codes. Open.
+  **Finding 2026-10-31:** those physical-order codes are the **+$30 digital add-on**. Every spiral bundle sells at two
+  prices exactly $30 apart under the same SKU (SB-NSCB-N $128/$158, -PHARM $187.40/$217.40, -NCLEX $223.40/$253.40,
+  -GME $679.20/$709.20), and in Sep 2026 every higher-priced order got a code (104 of 104), while no lower-priced one did.
+  The integration sends the *whole* line price ($158) as the custom price, so the fee is 13% of $158 = $20.54, not 13%
+  of the $30 digital part (≈ $3.90). Line `variant_title` is now synced so the add-on can be identified without price-guessing.
+  Pending Ben: count these in the fee, and raise the custom-price question with VitalSource/web2market.
   Digital study guides (~130 codes/month, mostly at the $3 minimum) aren't included until their Shopify SKUs are known.
 - **Break-even** counts only ShipMonk-matched orders with a cost for every SKU.
   `breakeven_cpa` = average profit before ads; `breakeven_roas` = revenue ÷ profit.
@@ -117,6 +126,11 @@ before bundle mapping. The gaps:
 - Already mapped in `sku_map`: `LST`, `NSCP`, `PPG`, `ALW-FBM` (aliases), and the `-EDU` educator variants. The
   educator variants are *assumed* to cost the same as the regular SKU.
 - Few-order, high-unit SKUs (e.g. `S3-SEIJ-10LV`, `NSCB-2027-FBA-2`) are FBA/bulk transfers, not Shopify orders.
+
+## QC (2026-10-31)
+
+Three orders rebuilt by hand from the raw sources matched the sheet to the cent: #2-175740 (PPG-N, −$3.21),
+#2-175830 (SB-NSCB-PHARM, $118.58), #2-175427 (D-NSCB-PHARM incl. $20.46 VitalSource, $92.42).
 
 ## Open questions (fill in as they're answered)
 
