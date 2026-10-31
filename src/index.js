@@ -7009,16 +7009,19 @@ const FEE_RATES = { paypal: [0.0349, 0.49], shopify_payments: [0.029, 0.30] }; /
 // SB-NSCB* orders in Sep 2026 (106 codes, $2,653) - add "SB-NSCB" here if that turns out to be intended.
 const VITALSOURCE = { rate: 0.13, minimum: 3, skuPrefixes: ["D-NSCB"] };
 
-async function computeOrderProfit(env, { days = 90 } = {}) {
-  const sinceIso = new Date(Date.now() - days * 864e5).toISOString();
+async function computeOrderProfit(env, { days = 90, since = null } = {}) {
+  const sinceIso = since ? new Date(since + "T00:00:00Z").toISOString() : new Date(Date.now() - days * 864e5).toISOString();
   const all = async (sql, ...b) => (await env.DB.prepare(sql).bind(...b).all()).results || [];
   const orders = await all(`SELECT * FROM shopify_orders WHERE created_at >= ? AND test = 0 AND cancelled_at IS NULL ORDER BY created_at`, sinceIso);
   if (!orders.length) return [];
-  // ShipMonk shipments for these orders. Shopify "#2-167623" = ShipMonk "2-167623" (or "Merged: 2-167623, 2-...").
-  const ships = await all(`SELECT shipment_id, order_number, ship_date, shipping_cost, packaging_cost, first_pick_fee
-    FROM tpl_orders WHERE order_number LIKE '%2-%' AND ship_date >= ?`, sinceIso.slice(0, 10));
+  // 3PL shipments for these orders. Shopify "#2-167623" = ShipMonk "2-167623" (or "Merged: 2-167623, 2-...")
+  // = ShipFusion "#2-167623" (Jan-Apr 2026 CSV import; ShipFusion rows carry extra fee columns, ShipMonk leaves them 0).
+  const ships = await all(`SELECT t.shipment_id, t.order_number, t.ship_date, t.shipping_cost, t.packaging_cost, t.first_pick_fee,
+      t.additional_pick_fee, t.insert_pick_fee, t.services_cost,
+      EXISTS (SELECT 1 FROM shipmonk_order_items i WHERE i.order_key = t.shipment_id) AS is_shipmonk
+    FROM tpl_orders t WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
   const byNum = {};
-  for (const s of ships) for (const m of String(s.order_number).matchAll(/(?:^|\s|,)(2-\d+)/g)) (byNum[m[1]] ||= []).push(s);
+  for (const s of ships) for (const m of String(s.order_number).matchAll(/(?:^|[\s,#])(2-\d+)/g)) (byNum[m[1]] ||= []).push(s);
   const items = await all(`SELECT i.order_key, i.sku, i.qty FROM shipmonk_order_items i JOIN tpl_orders t ON t.shipment_id = i.order_key
     WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
   const itemsByShip = {};
@@ -7047,9 +7050,12 @@ async function computeOrderProfit(env, { days = 90 } = {}) {
     const shipMonth = (sh[0]?.ship_date || o.created_at).slice(0, 7);
     // physical goods: what ShipMonk shipped (includes freebies); fall back to Shopify line items
     let lines = sh.flatMap(s => itemsByShip[s.shipment_id] || []);
-    if (!lines.length) lines = shopItemsByOrder[o.id] || [];
+    const fromShopify = !lines.length;
+    if (fromShopify) lines = shopItemsByOrder[o.id] || [];
     let cogs = 0; const missing = [];
     for (const li of lines) {
+      // Shopify-only lines that are digital (D-..., no physical recipe) have no product cost.
+      if (fromShopify && /^D-/.test(li.sku || "") && !map[li.sku]) continue;
       const parts = map[li.sku] || [{ finale_sku: li.sku, qty: 1 }];
       for (const p of parts) {
         const c = costOf(p.finale_sku, shipMonth);
@@ -7057,7 +7063,9 @@ async function computeOrderProfit(env, { days = 90 } = {}) {
         cogs += c * p.qty * li.qty;
       }
     }
-    const fulfillment = sh.reduce((a, s) => a + (s.shipping_cost || 0) + (s.packaging_cost || 0) + (s.first_pick_fee || 0), 0);
+    const fulfillment = sh.reduce((a, s) => a + (s.shipping_cost || 0) + (s.packaging_cost || 0) + (s.first_pick_fee || 0)
+      + (s.additional_pick_fee || 0) + (s.insert_pick_fee || 0) + (s.services_cost || 0), 0);
+    const fulfilledBy = !sh.length ? "" : sh.some(s => s.is_shipmonk) ? "ShipMonk" : "ShipFusion";
     const overheadShare = sh.length ? (overhead[shipMonth] || 0) : 0;
     const netRevenue = (o.total || 0) - (o.tax || 0) - (o.refunded || 0);
     let fees = o.payment_fees || 0, feesEstimated = 0;
@@ -7080,7 +7088,7 @@ async function computeOrderProfit(env, { days = 90 } = {}) {
       net_revenue: r2(netRevenue), product_subtotal: r2(o.subtotal), shipping_charged: r2(o.shipping), discounts: r2(o.discounts),
       refunded: r2(o.refunded), product_cost: r2(cogs), shipmonk_per_order: r2(fulfillment), shipmonk_overhead: r2(overheadShare),
       payment_fees: r2(fees), fees_estimated: feesEstimated ? "yes" : "", vitalsource_fee: r2(vitalsource), profit_before_ads: r2(profit),
-      margin_pct: netRevenue > 0 ? r2(100 * profit / netRevenue) : "", shipmonk_matched: sh.length ? "yes" : "no",
+      margin_pct: netRevenue > 0 ? r2(100 * profit / netRevenue) : "", shipmonk_matched: sh.length ? "yes" : "no", fulfilled_by: fulfilledBy,
       skus_without_cost: missing.join(" "),
     });
   }
@@ -7124,7 +7132,7 @@ function toCsv(rows) {
 // ===== SHOPIFY ORDERS -> D1 (order-profit feed; see docs/ORDER-PROFIT.md) =====
 // Incremental by updated_at watermark; each cron tick processes a few pages so the
 // June-2026 backfill finishes over a few hours without hitting worker time limits.
-const SHOPIFY_ORDERS_START = "2026-06-01T00:00:00Z";
+const SHOPIFY_ORDERS_START = "2026-01-01T00:00:00Z"; // Ben 2026-10-31: orders from Jan 1 2026 on
 const SHOPIFY_ORDERS_QUERY = `
   query Orders($q: String!, $after: String) {
     orders(first: 10, after: $after, query: $q, sortKey: UPDATED_AT) {
@@ -7140,7 +7148,7 @@ const SHOPIFY_ORDERS_QUERY = `
         totalPriceSet { shopMoney { amount } }
         totalRefundedSet { shopMoney { amount } }
         transactions(first: 10) { kind status gateway fees { amount { amount } } }
-        lineItems(first: 50) { nodes { sku quantity originalUnitPriceSet { shopMoney { amount } } discountedTotalSet { shopMoney { amount } } } }
+        lineItems(first: 50) { nodes { sku name variantTitle quantity originalUnitPriceSet { shopMoney { amount } } discountedTotalSet { shopMoney { amount } } } }
       }
     }
   }`;
@@ -7154,7 +7162,7 @@ async function shopifyOrdersState(env, key, value) {
   await env.DB.prepare(`INSERT OR REPLACE INTO shopify_sync_state (key, value) VALUES (?, ?)`).bind(key, String(value)).run();
 }
 
-async function syncShopifyOrders(env, { maxPages = 15 } = {}) {
+async function syncShopifyOrders(env, { maxPages = 30 } = {}) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shopify_orders (
     id TEXT PRIMARY KEY, name TEXT, order_number TEXT, created_at TEXT, updated_at TEXT, cancelled_at TEXT,
     test INTEGER DEFAULT 0, financial_status TEXT, customer_id TEXT, first_order_id TEXT, is_first_order INTEGER,
@@ -7164,6 +7172,9 @@ async function syncShopifyOrders(env, { maxPages = 15 } = {}) {
     order_id TEXT, line_no INTEGER, sku TEXT, qty INTEGER, unit_price REAL, discounted_total REAL,
     PRIMARY KEY (order_id, line_no))`).run();
   await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_shopify_orders_number ON shopify_orders (order_number)`).run();
+  for (const col of ["title TEXT", "variant_title TEXT"]) {
+    try { await env.DB.prepare(`ALTER TABLE shopify_order_items ADD COLUMN ${col}`).run(); } catch (e) { /* already there */ }
+  }
 
   const shop = await shopifyStoreDomain(env);
   // Record the token's granted scopes (hourly) so a missing read_all_orders (Shopify then only
@@ -7208,8 +7219,8 @@ async function syncShopifyOrders(env, { maxPages = 15 } = {}) {
         money(o.totalPriceSet), money(o.totalRefundedSet), (o.paymentGatewayNames || []).join(","), fees, reported));
       stmts.push(env.DB.prepare(`DELETE FROM shopify_order_items WHERE order_id = ?`).bind(o.id));
       (o.lineItems?.nodes || []).forEach((li, i) => stmts.push(env.DB.prepare(
-        `INSERT INTO shopify_order_items (order_id, line_no, sku, qty, unit_price, discounted_total) VALUES (?,?,?,?,?,?)`
-      ).bind(o.id, i, li.sku || "", li.quantity || 0, money(li.originalUnitPriceSet), money(li.discountedTotalSet))));
+        `INSERT INTO shopify_order_items (order_id, line_no, sku, qty, unit_price, discounted_total, title, variant_title) VALUES (?,?,?,?,?,?,?,?)`
+      ).bind(o.id, i, li.sku || "", li.quantity || 0, money(li.originalUnitPriceSet), money(li.discountedTotalSet), li.name || "", li.variantTitle || "")));
       if (o.updatedAt > maxUpdated) maxUpdated = o.updatedAt;
       written++;
     }
@@ -8596,7 +8607,9 @@ export default {
       if (!env.ORDER_FEED_TOKEN || tok !== env.ORDER_FEED_TOKEN) return new Response("forbidden", { status: 403 });
       try {
         const days = Math.min(400, parseInt(url.searchParams.get("days") || "90"));
-        const rows = await computeOrderProfit(env, { days });
+        const sinceParam = url.searchParams.get("since");
+        const since = /^\d{4}-\d{2}-\d{2}$/.test(sinceParam || "") ? sinceParam : null;
+        const rows = await computeOrderProfit(env, { days, since });
         const body = path.endsWith("summary.csv") ? toCsv(summarizeOrderProfit(rows)) : toCsv(rows);
         return new Response(body, { headers: { "Content-Type": "text/csv; charset=utf-8", "Cache-Control": "no-store" } });
       } catch (e) { return new Response("error: " + e.message, { status: 500 }); }
