@@ -7005,9 +7005,20 @@ async function shopifyGraphQL(env, shopDomain, query, variables, { maxRetries = 
 const FEE_RATES = { paypal: [0.0349, 0.49], shopify_payments: [0.029, 0.30] }; // used only when Shopify reports no fee
 // VitalSource fulfillment fee on digital NSCB codes: 13% of the custom price our integration sends
 // (= the Shopify line's price before discount), $3 minimum per code (agreement Exhibit A 3a, 13% negotiated 2024).
-// Ben 2026-10-31: applies only to digital NSCB lines (D-NSCB*). Note VitalSource also billed codes on physical
-// SB-NSCB* orders in Sep 2026 (106 codes, $2,653) - add "SB-NSCB" here if that turns out to be intended.
-const VITALSOURCE = { rate: 0.13, minimum: 3, skuPrefixes: ["D-NSCB"] };
+// Ben 2026-10-31: applies to every line that includes the digital NSCB: D-NSCB* SKUs, and spiral SB-NSCB* lines
+// sold with the +$30 eBook add-on (same SKU; the variant reads "e-Book & Spiral-Book / ..."). Lines synced before
+// variant names were captured fall back to the add-on price points.
+const VITALSOURCE = {
+  rate: 0.13, minimum: 3,
+  isDigitalNscb(li) {
+    const sku = String(li.sku || "");
+    if (sku.startsWith("D-NSCB")) return true;
+    if (!sku.startsWith("SB-NSCB")) return false;
+    const label = `${li.variant_title || ""} ${li.title || ""}`;
+    if (label.trim()) return /e-?book/i.test(label);
+    return [158, 217.4, 253.4, 709.2].includes(Math.round((li.unit_price || 0) * 100) / 100);
+  },
+};
 
 async function computeOrderProfit(env, { days = 90, since = null } = {}) {
   const sinceIso = since ? new Date(since + "T00:00:00Z").toISOString() : new Date(Date.now() - days * 864e5).toISOString();
@@ -7026,7 +7037,7 @@ async function computeOrderProfit(env, { days = 90, since = null } = {}) {
     WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
   const itemsByShip = {};
   for (const it of items) (itemsByShip[it.order_key] ||= []).push(it);
-  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty, i.unit_price FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
+  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty, i.unit_price, i.title, i.variant_title FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
   const shopItemsByOrder = {};
   for (const it of shopItems) (shopItemsByOrder[it.order_id] ||= []).push(it);
   const map = {};
@@ -7078,7 +7089,7 @@ async function computeOrderProfit(env, { days = 90, since = null } = {}) {
     let vitalsource = 0;
     if (!((o.total || 0) > 0 && (o.refunded || 0) >= (o.total || 0) - 0.01)) {
       for (const li of shopItemsByOrder[o.id] || []) {
-        if (!VITALSOURCE.skuPrefixes.some(p => String(li.sku || "").startsWith(p))) continue;
+        if (!VITALSOURCE.isDigitalNscb(li)) continue;
         vitalsource += Math.max(VITALSOURCE.rate * (li.unit_price || 0), VITALSOURCE.minimum) * (li.qty || 1);
       }
     }
