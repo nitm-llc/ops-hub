@@ -7001,8 +7001,13 @@ async function shopifyGraphQL(env, shopDomain, query, variables, { maxRetries = 
 // ===== ORDER PROFIT (docs/ORDER-PROFIT.md) =====
 // profit_before_ads = net revenue (ex tax, after discounts & refunds, incl. shipping charged)
 //   - Finale avg cost of the SKUs ShipMonk shipped (via sku_map) - ShipMonk per-order charges
-//   - share of that month's ShipMonk non-per-order fees - payment processing fees
+//   - share of that month's ShipMonk non-per-order fees - payment processing fees - VitalSource fee (digital NSCB)
 const FEE_RATES = { paypal: [0.0349, 0.49], shopify_payments: [0.029, 0.30] }; // used only when Shopify reports no fee
+// VitalSource fulfillment fee on digital NSCB codes: 13% of the custom price our integration sends
+// (= the Shopify line's price before discount), $3 minimum per code (agreement Exhibit A 3a, 13% negotiated 2024).
+// Ben 2026-10-31: applies only to digital NSCB lines (D-NSCB*). Note VitalSource also billed codes on physical
+// SB-NSCB* orders in Sep 2026 (106 codes, $2,653) - add "SB-NSCB" here if that turns out to be intended.
+const VITALSOURCE = { rate: 0.13, minimum: 3, skuPrefixes: ["D-NSCB"] };
 
 async function computeOrderProfit(env, { days = 90 } = {}) {
   const sinceIso = new Date(Date.now() - days * 864e5).toISOString();
@@ -7018,7 +7023,7 @@ async function computeOrderProfit(env, { days = 90 } = {}) {
     WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
   const itemsByShip = {};
   for (const it of items) (itemsByShip[it.order_key] ||= []).push(it);
-  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
+  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty, i.unit_price FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
   const shopItemsByOrder = {};
   for (const it of shopItems) (shopItemsByOrder[it.order_id] ||= []).push(it);
   const map = {};
@@ -7061,12 +7066,20 @@ async function computeOrderProfit(env, { days = 90 } = {}) {
       const rate = g.includes("paypal") ? FEE_RATES.paypal : g.includes("shopify_payments") ? FEE_RATES.shopify_payments : null;
       if (rate && o.total > 0) { fees = o.total * rate[0] + rate[1]; feesEstimated = 1; }
     }
-    const profit = netRevenue - cogs - fulfillment - overheadShare - fees;
+    // VitalSource: one code per digital NSCB unit; a fully refunded order gets the fee credited back.
+    let vitalsource = 0;
+    if (!((o.total || 0) > 0 && (o.refunded || 0) >= (o.total || 0) - 0.01)) {
+      for (const li of shopItemsByOrder[o.id] || []) {
+        if (!VITALSOURCE.skuPrefixes.some(p => String(li.sku || "").startsWith(p))) continue;
+        vitalsource += Math.max(VITALSOURCE.rate * (li.unit_price || 0), VITALSOURCE.minimum) * (li.qty || 1);
+      }
+    }
+    const profit = netRevenue - cogs - fulfillment - overheadShare - fees - vitalsource;
     out.push({
       order: o.name, created, week: isoWeekStart(created), month: created.slice(0, 7), first_order: o.is_first_order ? "yes" : (o.is_first_order === 0 ? "no" : ""),
       net_revenue: r2(netRevenue), product_subtotal: r2(o.subtotal), shipping_charged: r2(o.shipping), discounts: r2(o.discounts),
       refunded: r2(o.refunded), product_cost: r2(cogs), shipmonk_per_order: r2(fulfillment), shipmonk_overhead: r2(overheadShare),
-      payment_fees: r2(fees), fees_estimated: feesEstimated ? "yes" : "", profit_before_ads: r2(profit),
+      payment_fees: r2(fees), fees_estimated: feesEstimated ? "yes" : "", vitalsource_fee: r2(vitalsource), profit_before_ads: r2(profit),
       margin_pct: netRevenue > 0 ? r2(100 * profit / netRevenue) : "", shipmonk_matched: sh.length ? "yes" : "no",
       skus_without_cost: missing.join(" "),
     });
@@ -7086,16 +7099,16 @@ function summarizeOrderProfit(rows) {
     for (const [period, key] of [["week", r.week], ["month", r.month]]) {
       for (const seg of ["first orders", "all orders"]) {
         if (seg === "first orders" && r.first_order !== "yes") continue;
-        const g = (groups[`${period}|${key}|${seg}`] ||= { period, start: key, segment: seg, orders: 0, rev: 0, profit: 0, cogs: 0, ful: 0, fees: 0 });
+        const g = (groups[`${period}|${key}|${seg}`] ||= { period, start: key, segment: seg, orders: 0, rev: 0, profit: 0, cogs: 0, ful: 0, fees: 0, vst: 0 });
         g.orders++; g.rev += r.net_revenue; g.profit += r.profit_before_ads; g.cogs += r.product_cost;
-        g.ful += r.shipmonk_per_order + r.shipmonk_overhead; g.fees += r.payment_fees;
+        g.ful += r.shipmonk_per_order + r.shipmonk_overhead; g.fees += r.payment_fees; g.vst += r.vitalsource_fee;
       }
     }
   }
   return Object.values(groups).sort((a, b) => (a.period + a.start + a.segment).localeCompare(b.period + b.start + b.segment)).map(g => ({
     period: g.period, start: g.start, segment: g.segment, orders: g.orders,
     avg_order_revenue: r2(g.rev / g.orders), avg_product_cost: r2(g.cogs / g.orders), avg_fulfillment: r2(g.ful / g.orders),
-    avg_payment_fees: r2(g.fees / g.orders),
+    avg_payment_fees: r2(g.fees / g.orders), avg_vitalsource_fee: r2(g.vst / g.orders),
     breakeven_cpa: r2(g.profit / g.orders), // = average profit before ads per order
     breakeven_roas: g.profit > 0 ? r2(g.rev / g.profit) : "", margin_pct: g.rev > 0 ? r2(100 * g.profit / g.rev) : "",
   }));
