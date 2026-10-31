@@ -6998,6 +6998,213 @@ async function shopifyGraphQL(env, shopDomain, query, variables, { maxRetries = 
   }
 }
 
+// ===== ORDER PROFIT (docs/ORDER-PROFIT.md) =====
+// profit_before_ads = net revenue (ex tax, after discounts & refunds, incl. shipping charged)
+//   - Finale avg cost of the SKUs ShipMonk shipped (via sku_map) - ShipMonk per-order charges
+//   - share of that month's ShipMonk non-per-order fees - payment processing fees
+const FEE_RATES = { paypal: [0.0349, 0.49], shopify_payments: [0.029, 0.30] }; // used only when Shopify reports no fee
+
+async function computeOrderProfit(env, { days = 90 } = {}) {
+  const sinceIso = new Date(Date.now() - days * 864e5).toISOString();
+  const all = async (sql, ...b) => (await env.DB.prepare(sql).bind(...b).all()).results || [];
+  const orders = await all(`SELECT * FROM shopify_orders WHERE created_at >= ? AND test = 0 AND cancelled_at IS NULL ORDER BY created_at`, sinceIso);
+  if (!orders.length) return [];
+  // ShipMonk shipments for these orders. Shopify "#167623" = ShipMonk "2-167623" (or "Merged: 2-167623, 2-...").
+  const ships = await all(`SELECT shipment_id, order_number, ship_date, shipping_cost, packaging_cost, first_pick_fee
+    FROM tpl_orders WHERE order_number LIKE '%2-%' AND ship_date >= ?`, sinceIso.slice(0, 10));
+  const byNum = {};
+  for (const s of ships) for (const m of String(s.order_number).matchAll(/(?:^|\s|,)2-(\d+)/g)) (byNum[m[1]] ||= []).push(s);
+  const items = await all(`SELECT i.order_key, i.sku, i.qty FROM shipmonk_order_items i JOIN tpl_orders t ON t.shipment_id = i.order_key
+    WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
+  const itemsByShip = {};
+  for (const it of items) (itemsByShip[it.order_key] ||= []).push(it);
+  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
+  const shopItemsByOrder = {};
+  for (const it of shopItems) (shopItemsByOrder[it.order_id] ||= []).push(it);
+  const map = {};
+  for (const r of await all(`SELECT shipped_sku, finale_sku, qty FROM sku_map`)) (map[r.shipped_sku] ||= []).push(r);
+  const costs = {}; // sku -> [[month, avg_cost], ...] ascending
+  for (const r of await all(`SELECT sku, month, avg_cost FROM sku_costs WHERE avg_cost IS NOT NULL ORDER BY month`)) (costs[r.sku] ||= []).push([r.month, r.avg_cost]);
+  const overhead = {};
+  try { for (const r of await all(`SELECT month, per_order FROM shipmonk_monthly_overhead`)) overhead[r.month] = r.per_order; } catch { /* table not created yet */ }
+
+  const costOf = (sku, month) => {
+    const rows = costs[sku];
+    if (!rows) return null;
+    let best = null;
+    for (const [m, c] of rows) { if (m <= month) best = c; }
+    return best ?? rows[0][1]; // shipped before Finale history starts: use the earliest known cost
+  };
+  const out = [];
+  for (const o of orders) {
+    const created = o.created_at.slice(0, 10);
+    const sh = byNum[o.order_number] || [];
+    const shipMonth = (sh[0]?.ship_date || o.created_at).slice(0, 7);
+    // physical goods: what ShipMonk shipped (includes freebies); fall back to Shopify line items
+    let lines = sh.flatMap(s => itemsByShip[s.shipment_id] || []);
+    if (!lines.length) lines = shopItemsByOrder[o.id] || [];
+    let cogs = 0; const missing = [];
+    for (const li of lines) {
+      const parts = map[li.sku] || [{ finale_sku: li.sku, qty: 1 }];
+      for (const p of parts) {
+        const c = costOf(p.finale_sku, shipMonth);
+        if (c == null) { if (!missing.includes(li.sku)) missing.push(li.sku); continue; }
+        cogs += c * p.qty * li.qty;
+      }
+    }
+    const fulfillment = sh.reduce((a, s) => a + (s.shipping_cost || 0) + (s.packaging_cost || 0) + (s.first_pick_fee || 0), 0);
+    const overheadShare = sh.length ? (overhead[shipMonth] || 0) : 0;
+    const netRevenue = (o.total || 0) - (o.tax || 0) - (o.refunded || 0);
+    let fees = o.payment_fees || 0, feesEstimated = 0;
+    if (!o.fees_reported) {
+      const g = (o.gateways || "").toLowerCase();
+      const rate = g.includes("paypal") ? FEE_RATES.paypal : g.includes("shopify_payments") ? FEE_RATES.shopify_payments : null;
+      if (rate && o.total > 0) { fees = o.total * rate[0] + rate[1]; feesEstimated = 1; }
+    }
+    const profit = netRevenue - cogs - fulfillment - overheadShare - fees;
+    out.push({
+      order: o.name, created, week: isoWeekStart(created), month: created.slice(0, 7), first_order: o.is_first_order ? "yes" : (o.is_first_order === 0 ? "no" : ""),
+      net_revenue: r2(netRevenue), product_subtotal: r2(o.subtotal), shipping_charged: r2(o.shipping), discounts: r2(o.discounts),
+      refunded: r2(o.refunded), product_cost: r2(cogs), shipmonk_per_order: r2(fulfillment), shipmonk_overhead: r2(overheadShare),
+      payment_fees: r2(fees), fees_estimated: feesEstimated ? "yes" : "", profit_before_ads: r2(profit),
+      margin_pct: netRevenue > 0 ? r2(100 * profit / netRevenue) : "", shipmonk_matched: sh.length ? "yes" : "no",
+      skus_without_cost: missing.join(" "),
+    });
+  }
+  return out;
+}
+
+function r2(x) { return Math.round((x || 0) * 100) / 100; }
+function isoWeekStart(ymd) { const d = new Date(ymd + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
+
+// Break-even ad spend by week and month. Only fully costed, ShipMonk-matched orders count,
+// so a missing SKU cost or unshipped order can't inflate the number.
+function summarizeOrderProfit(rows) {
+  const groups = {};
+  for (const r of rows) {
+    if (r.shipmonk_matched !== "yes" || r.skus_without_cost) continue;
+    for (const [period, key] of [["week", r.week], ["month", r.month]]) {
+      for (const seg of ["first orders", "all orders"]) {
+        if (seg === "first orders" && r.first_order !== "yes") continue;
+        const g = (groups[`${period}|${key}|${seg}`] ||= { period, start: key, segment: seg, orders: 0, rev: 0, profit: 0, cogs: 0, ful: 0, fees: 0 });
+        g.orders++; g.rev += r.net_revenue; g.profit += r.profit_before_ads; g.cogs += r.product_cost;
+        g.ful += r.shipmonk_per_order + r.shipmonk_overhead; g.fees += r.payment_fees;
+      }
+    }
+  }
+  return Object.values(groups).sort((a, b) => (a.period + a.start + a.segment).localeCompare(b.period + b.start + b.segment)).map(g => ({
+    period: g.period, start: g.start, segment: g.segment, orders: g.orders,
+    avg_order_revenue: r2(g.rev / g.orders), avg_product_cost: r2(g.cogs / g.orders), avg_fulfillment: r2(g.ful / g.orders),
+    avg_payment_fees: r2(g.fees / g.orders),
+    breakeven_cpa: r2(g.profit / g.orders), // = average profit before ads per order
+    breakeven_roas: g.profit > 0 ? r2(g.rev / g.profit) : "", margin_pct: g.rev > 0 ? r2(100 * g.profit / g.rev) : "",
+  }));
+}
+
+function toCsv(rows) {
+  if (!rows.length) return "";
+  const cols = Object.keys(rows[0]);
+  const esc = (v) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  return [cols.join(","), ...rows.map(r => cols.map(c => esc(r[c])).join(","))].join("\n");
+}
+
+// ===== SHOPIFY ORDERS -> D1 (order-profit feed; see docs/ORDER-PROFIT.md) =====
+// Incremental by updated_at watermark; each cron tick processes a few pages so the
+// June-2026 backfill finishes over a few hours without hitting worker time limits.
+const SHOPIFY_ORDERS_START = "2026-06-01T00:00:00Z";
+const SHOPIFY_ORDERS_QUERY = `
+  query Orders($q: String!, $after: String) {
+    orders(first: 10, after: $after, query: $q, sortKey: UPDATED_AT) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id name createdAt updatedAt cancelledAt test displayFinancialStatus
+        paymentGatewayNames
+        customer { id orders(first: 1, sortKey: CREATED_AT) { nodes { id } } }
+        subtotalPriceSet { shopMoney { amount } }
+        totalDiscountsSet { shopMoney { amount } }
+        totalShippingPriceSet { shopMoney { amount } }
+        totalTaxSet { shopMoney { amount } }
+        totalPriceSet { shopMoney { amount } }
+        totalRefundedSet { shopMoney { amount } }
+        transactions(first: 10) { kind status gateway fees { amount { amount } } }
+        lineItems(first: 50) { nodes { sku quantity originalUnitPriceSet { shopMoney { amount } } discountedTotalSet { shopMoney { amount } } } }
+      }
+    }
+  }`;
+
+async function shopifyOrdersState(env, key, value) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shopify_sync_state (key TEXT PRIMARY KEY, value TEXT)`).run();
+  if (value === undefined) {
+    const r = await env.DB.prepare(`SELECT value FROM shopify_sync_state WHERE key = ?`).bind(key).first();
+    return r ? r.value : null;
+  }
+  await env.DB.prepare(`INSERT OR REPLACE INTO shopify_sync_state (key, value) VALUES (?, ?)`).bind(key, String(value)).run();
+}
+
+async function syncShopifyOrders(env, { maxPages = 15 } = {}) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shopify_orders (
+    id TEXT PRIMARY KEY, name TEXT, order_number TEXT, created_at TEXT, updated_at TEXT, cancelled_at TEXT,
+    test INTEGER DEFAULT 0, financial_status TEXT, customer_id TEXT, first_order_id TEXT, is_first_order INTEGER,
+    subtotal REAL, discounts REAL, shipping REAL, tax REAL, total REAL, refunded REAL,
+    gateways TEXT, payment_fees REAL, fees_reported INTEGER DEFAULT 0, synced_at TEXT DEFAULT (datetime('now')))`).run();
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS shopify_order_items (
+    order_id TEXT, line_no INTEGER, sku TEXT, qty INTEGER, unit_price REAL, discounted_total REAL,
+    PRIMARY KEY (order_id, line_no))`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_shopify_orders_number ON shopify_orders (order_number)`).run();
+
+  const shop = await shopifyStoreDomain(env);
+  const since = (await shopifyOrdersState(env, "orders_watermark")) || SHOPIFY_ORDERS_START;
+  const q = `updated_at:>='${since}' AND created_at:>='${SHOPIFY_ORDERS_START}'`;
+  let after = await shopifyOrdersState(env, "orders_cursor");
+  const cursorFor = await shopifyOrdersState(env, "orders_cursor_query");
+  if (!after || cursorFor !== q) after = null; // a cursor is only valid for the query that produced it
+
+  const money = (s) => parseFloat(s?.shopMoney?.amount ?? s?.amount ?? 0) || 0;
+  let pages = 0, written = 0, maxUpdated = since, done = false;
+  while (pages < maxPages) {
+    const data = await shopifyGraphQL(env, shop, SHOPIFY_ORDERS_QUERY, { q, after });
+    const conn = data.orders;
+    const stmts = [];
+    for (const o of conn.nodes) {
+      let fees = 0, reported = 0;
+      for (const t of o.transactions || []) {
+        if (t.status !== "SUCCESS") continue;
+        for (const f of t.fees || []) { fees += money(f.amount); reported = 1; }
+      }
+      const firstId = o.customer?.orders?.nodes?.[0]?.id || null;
+      stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO shopify_orders (id, name, order_number, created_at, updated_at, cancelled_at, test,
+          financial_status, customer_id, first_order_id, is_first_order, subtotal, discounts, shipping, tax, total, refunded,
+          gateways, payment_fees, fees_reported, synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).bind(
+        o.id, o.name, String(o.name || "").replace(/^#/, ""), o.createdAt, o.updatedAt, o.cancelledAt, o.test ? 1 : 0,
+        o.displayFinancialStatus, o.customer?.id || null, firstId, o.customer ? (firstId === o.id ? 1 : 0) : null,
+        money(o.subtotalPriceSet), money(o.totalDiscountsSet), money(o.totalShippingPriceSet), money(o.totalTaxSet),
+        money(o.totalPriceSet), money(o.totalRefundedSet), (o.paymentGatewayNames || []).join(","), fees, reported));
+      stmts.push(env.DB.prepare(`DELETE FROM shopify_order_items WHERE order_id = ?`).bind(o.id));
+      (o.lineItems?.nodes || []).forEach((li, i) => stmts.push(env.DB.prepare(
+        `INSERT INTO shopify_order_items (order_id, line_no, sku, qty, unit_price, discounted_total) VALUES (?,?,?,?,?,?)`
+      ).bind(o.id, i, li.sku || "", li.quantity || 0, money(li.originalUnitPriceSet), money(li.discountedTotalSet))));
+      if (o.updatedAt > maxUpdated) maxUpdated = o.updatedAt;
+      written++;
+    }
+    if (stmts.length) await env.DB.batch(stmts);
+    pages++;
+    if (!conn.pageInfo.hasNextPage) { done = true; break; }
+    after = conn.pageInfo.endCursor;
+  }
+  if (done) {
+    // caught up: move the watermark forward and start the next run from a fresh query
+    await shopifyOrdersState(env, "orders_watermark", maxUpdated);
+    await shopifyOrdersState(env, "orders_cursor", "");
+    await shopifyOrdersState(env, "orders_cursor_query", "");
+  } else {
+    // mid-backfill: resume this same query from the cursor next tick
+    await shopifyOrdersState(env, "orders_cursor", after);
+    await shopifyOrdersState(env, "orders_cursor_query", q);
+  }
+  await shopifyOrdersState(env, "orders_last_sync_at", new Date().toISOString());
+  return { written, pages, caught_up: done, since };
+}
+
 // Idempotent — safe to call every run. Ensures both the stage and the recorded-date
 // definitions exist; swallows the "already exists"/TAKEN userError.
 async function ensureStageMetafieldDefinition(env, shopDomain) {
@@ -8355,6 +8562,22 @@ export default {
       try { const full = url.searchParams.get("full") === "1"; const r = await syncShipmonkOrders(env, { full }); return new Response(JSON.stringify({ success: true, ...r }), { headers: { "Content-Type": "application/json" } }); }
       catch (e) { return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } }); }
     }
+    // ===== ORDER PROFIT FEEDS (pulled daily by the NITM P&L sheet's Apps Script) =====
+    // /feeds/* must be Access-bypassed; ORDER_FEED_TOKEN is required (no token set = feed off).
+    if (path === "/feeds/order-profit.csv" || path === "/feeds/order-profit-summary.csv") {
+      const tok = url.searchParams.get("key") || request.headers.get("X-Feed-Key") || "";
+      if (!env.ORDER_FEED_TOKEN || tok !== env.ORDER_FEED_TOKEN) return new Response("forbidden", { status: 403 });
+      try {
+        const days = Math.min(400, parseInt(url.searchParams.get("days") || "90"));
+        const rows = await computeOrderProfit(env, { days });
+        const body = path.endsWith("summary.csv") ? toCsv(summarizeOrderProfit(rows)) : toCsv(rows);
+        return new Response(body, { headers: { "Content-Type": "text/csv; charset=utf-8", "Cache-Control": "no-store" } });
+      } catch (e) { return new Response("error: " + e.message, { status: 500 }); }
+    }
+    if (path === "/3pl/api/shopify-orders-sync") {
+      try { const pages = parseInt(url.searchParams.get("pages") || "15"); const r = await syncShopifyOrders(env, { maxPages: pages }); return new Response(JSON.stringify({ success: true, ...r }), { headers: { "Content-Type": "application/json" } }); }
+      catch (e) { return new Response(JSON.stringify({ success: false, error: e.message }), { status: 500, headers: { "Content-Type": "application/json" } }); }
+    }
     if (path === "/3pl/api/shipmonk-probe") {
       try {
         let orders = null, products = null;
@@ -8582,6 +8805,19 @@ export default {
         await smState(env, "cron_last_run", new Date().toISOString());
         await syncShipmonkOrders(env, {});
       } catch (e) { /* cron sync errors are non-fatal */ }
+    })());
+    // Incremental Shopify orders sync for the order-profit feed (docs/ORDER-PROFIT.md),
+    // gated to ~every 4 min; each tick does up to 15 pages so the June backfill catches up in a few hours.
+    ctx.waitUntil((async () => {
+      try {
+        if (!env.SHOPIFY_ACCESS_TOKEN) return;
+        const lastRun = await shopifyOrdersState(env, "cron_last_run");
+        if (lastRun && (Date.now() - new Date(lastRun).getTime()) < 3.5 * 60 * 1000) return;
+        await shopifyOrdersState(env, "cron_last_run", new Date().toISOString());
+        await syncShopifyOrders(env, {});
+      } catch (e) {
+        try { await shopifyOrdersState(env, "last_error", `${new Date().toISOString()} ${e.message}`.slice(0, 500)); } catch { /* ignore */ }
+      }
     })());
     // Advance the Amazon FBA report state machine (poll pending / request when stale).
     ctx.waitUntil((async () => {
