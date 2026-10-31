@@ -18,7 +18,7 @@ the most we can spend to get an order before it loses money (break-even CPA, and
 - **Ads view:** first orders only (the customer's first Shopify order). Break-even CPA = average profit
   before ads per first order; break-even ROAS = average first-order revenue ÷ that profit. Show by week and month.
 
-`profit_before_ads = revenue − product_cost − shipmonk_per_order − shipmonk_overhead_share − payment_fees`
+`profit_before_ads = revenue − product_cost − shipmonk_per_order − shipmonk_overhead_share − payment_fees − vitalsource_fee`
 
 ## How each number is computed (built 2026-10-30)
 
@@ -36,6 +36,13 @@ the most we can spend to get an order before it loses money (break-even CPA, and
   Oct 2026 value: $3.87/order. ShipMonk's API billing endpoints weren't checked yet (needs the worker's API key).
 - **Payment fees** = Shopify-reported transaction fees when present; otherwise estimated at
   PayPal 3.49% + $0.49 or Shopify Payments 2.9% + $0.30 (`fees_estimated = yes`).
+- **VitalSource fee** (decision 2026-10-31): for each `D-NSCB*` line, max(13% × the line's price before discount, $3) × qty.
+  Fully refunded orders get $0, because VitalSource credits refunds. This is the agreement's fulfillment fee (Exhibit A 3a, 13% of the
+  "Custom Price" our integration sends, $3 minimum; Greg Bartell negotiated 15% → 13% in 2024). The Sep 2026 estimate was
+  $3,344 vs. $3,399 actually billed for D-NSCB orders. Configured in `VITALSOURCE` in `src/index.js`.
+  **Ben's rule: only digital NSCB orders carry it.** But VitalSource also billed codes on physical-only `SB-NSCB*` orders in
+  Sep 2026: 106 codes, $2,653. Either the physical bundle includes digital access or the integration over-issues codes. Open.
+  Digital study guides (~130 codes/month, mostly at the $3 minimum) aren't included until their Shopify SKUs are known.
 - **Break-even** counts only ShipMonk-matched orders with a cost for every SKU.
   `breakeven_cpa` = average profit before ads; `breakeven_roas` = revenue ÷ profit.
 
@@ -50,6 +57,13 @@ the most we can spend to get an order before it loses money (break-even CPA, and
   token instead of a Bypass policy, so the feed is never reachable without Cloudflare's check.
 - Manual sync: `/3pl/api/shopify-orders-sync?pages=15` (behind Access).
 - Sheet: `nitm-PL-sheet/apps-script/order_profit_feed.gs` writes the "Order Profit" and "Ad Break-even" tabs daily at 6am.
+
+## Deploys (learned 2026-10-31)
+
+The repo is connected to **Cloudflare Workers Builds** (Mark's Git integration). Pushing any branch uploads an
+*undeployed preview version* (it shows as authored by Mark), and pushes to `main` presumably deploy production. Two consequences:
+- Until PR #3 is merged, any push to main redeploys production without this feature.
+- `wrangler secret put` refuses while a newer undeployed version exists, so change secrets right after a `wrangler deploy`.
 
 ## Where it runs
 
@@ -90,10 +104,16 @@ Google Apps Script on a daily trigger (same pattern as `nitm-PL-sheet/apps-scrip
 
 Finale costs 22 core SKUs. Of ~10,450 customer-size ShipMonk shipments June–October, 7,705 (74%) are fully costed
 before bundle mapping. The gaps:
-- `S3-FREE`: a freebie in ~10,400 orders, with no Finale cost. **Ben: what does it cost?**
+- `S3-FREE`: an insert in ~10,400 orders; $0.25 each (Ben).
 - Bundles/variants needing a recipe (shipped SKU → Finale SKUs × qty): `ALW-Bundle`, `NSCP-Bundle`,
   `FCB-EVERYTHING`, `FCB-kit`, `APN-KIT`, `SB-NSCB-PHARM`, `SB-NSCB-NCLEX`, `SB-NSCB-GME`, `SB-NSCB-NH`,
   `D-NSCB-*`, `PPG-FC-P`, `PPG-BCP`, `PPG-FCB`.
+- **Bundle recipes from Ben (2026-10-31), loaded:** `ALW-Bundle`=ALW; `NSCP-Bundle`=NSCP-Main; `SB-NSCB-PHARM`=SB-NSCB-N+B-FC-P-N;
+  `SB-NSCB-NCLEX`=SB-NSCB-N+SB-NSN-N; `FCB-EVERYTHING`=all 7 B-FC sets + FCB-Box; `SB-NSCB-GME`=14 items (all 7 sets,
+  FCB-Box, NSCP-Main, SB-NSN-N, BCP, LST-Main, PPG-N, SB-NSCB-N); `D-NSCB-x` = SB-NSCB-x minus SB-NSCB-N (digital NSCB, $0
+  product cost); `D-NSCB-SB-x` = digital AND spiral, so it includes SB-NSCB-N; `FC-x` = `B-FC-x-N`; `S3-FREE` insert = $0.25
+  (manual `sku_costs` row, month `0000-00`). ShipMonk records bundles as one kit SKU, so mapping doesn't double count.
+  Result: 98.7% of matched Shopify orders fully costed.
 - Already mapped in `sku_map`: `LST`, `NSCP`, `PPG`, `ALW-FBM` (aliases), and the `-EDU` educator variants. The
   educator variants are *assumed* to cost the same as the regular SKU.
 - Few-order, high-unit SKUs (e.g. `S3-SEIJ-10LV`, `NSCB-2027-FBA-2`) are FBA/bulk transfers, not Shopify orders.
