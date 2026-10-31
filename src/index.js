@@ -7009,11 +7009,11 @@ async function computeOrderProfit(env, { days = 90 } = {}) {
   const all = async (sql, ...b) => (await env.DB.prepare(sql).bind(...b).all()).results || [];
   const orders = await all(`SELECT * FROM shopify_orders WHERE created_at >= ? AND test = 0 AND cancelled_at IS NULL ORDER BY created_at`, sinceIso);
   if (!orders.length) return [];
-  // ShipMonk shipments for these orders. Shopify "#167623" = ShipMonk "2-167623" (or "Merged: 2-167623, 2-...").
+  // ShipMonk shipments for these orders. Shopify "#2-167623" = ShipMonk "2-167623" (or "Merged: 2-167623, 2-...").
   const ships = await all(`SELECT shipment_id, order_number, ship_date, shipping_cost, packaging_cost, first_pick_fee
     FROM tpl_orders WHERE order_number LIKE '%2-%' AND ship_date >= ?`, sinceIso.slice(0, 10));
   const byNum = {};
-  for (const s of ships) for (const m of String(s.order_number).matchAll(/(?:^|\s|,)2-(\d+)/g)) (byNum[m[1]] ||= []).push(s);
+  for (const s of ships) for (const m of String(s.order_number).matchAll(/(?:^|\s|,)(2-\d+)/g)) (byNum[m[1]] ||= []).push(s);
   const items = await all(`SELECT i.order_key, i.sku, i.qty FROM shipmonk_order_items i JOIN tpl_orders t ON t.shipment_id = i.order_key
     WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
   const itemsByShip = {};
