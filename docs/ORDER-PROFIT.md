@@ -1,4 +1,4 @@
-> Status: LIVE · Owns: the per-order profit feed (Shopify order + Finale SKU cost + ShipMonk fulfillment → profit before ads) and its break-even ad spend view · Updated: 2026-10-30
+> Status: LIVE · Owns: the per-order profit feed (Shopify order + Finale SKU cost + ShipMonk fulfillment → profit before ads) and its break-even ad spend view · Updated: 2026-10-31
 
 # Order profit feed
 
@@ -44,7 +44,10 @@ the most we can spend to get an order before it loses money (break-even CPA, and
 - D1: `shopify_orders`, `shopify_order_items`, `shopify_sync_state` (cron, ~every 4 min, from 2026-06-01);
   `sku_costs` (from `feeds.py finale-ingest`); `sku_map`; `shipmonk_monthly_overhead`.
 - `GET /feeds/order-profit.csv?key=…&days=90` and `/feeds/order-profit-summary.csv?key=…`. They need the
-  `ORDER_FEED_TOKEN` worker secret, and `/feeds/*` has to bypass Cloudflare Access.
+  `ORDER_FEED_TOKEN` worker secret (sent as `X-Feed-Key`), and they sit behind a Cloudflare Access application
+  "ops-hub feeds" (path `feeds/`) with a **Service Auth** policy. Only requests carrying the service token
+  `nitm-pl-sheet` (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) get through. Decision 2026-10-31: service
+  token instead of a Bypass policy, so the feed is never reachable without Cloudflare's check.
 - Manual sync: `/3pl/api/shopify-orders-sync?pages=15` (behind Access).
 - Sheet: `nitm-PL-sheet/apps-script/order_profit_feed.gs` writes the "Order Profit" and "Ad Break-even" tabs daily at 6am.
 
@@ -52,7 +55,8 @@ the most we can spend to get an order before it loses money (break-even CPA, and
 
 All joining happens in **ops-hub (D1 + the 2-minute cron)**, which runs around the clock. The Google Sheet
 ([NITM P&L](https://docs.google.com/spreadsheets/d/1Ky5Xy3c_wqHfa6DOdF2yduiBQyKy0TD9cajvfuHOkCI/edit)) pulls
-the results. The site sits behind Cloudflare Access, so the sheet reads a token-protected CSV endpoint with a
+the results. The site sits behind Cloudflare Access, so the sheet's Apps Script presents a Cloudflare service token
+plus the worker key to read a CSV endpoint, with a
 Google Apps Script on a daily trigger (same pattern as `nitm-PL-sheet/apps-script/save_finale_cogs.gs`).
 
 ## Data that already exists (2026-10-30)
