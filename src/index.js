@@ -7166,6 +7166,20 @@ async function syncShopifyOrders(env, { maxPages = 15 } = {}) {
   await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_shopify_orders_number ON shopify_orders (order_number)`).run();
 
   const shop = await shopifyStoreDomain(env);
+  // Record the token's granted scopes (hourly) so a missing read_all_orders (Shopify then only
+  // returns the last 60 days of orders) is visible in shopify_sync_state.
+  try {
+    const checked = await shopifyOrdersState(env, "token_scopes_checked_at");
+    if (!checked || Date.now() - new Date(checked).getTime() > 3600e3) {
+      const d = await shopifyGraphQL(env, shop, `{ currentAppInstallation { app { title } accessScopes { handle } } }`, {});
+      const inst = d.currentAppInstallation || {};
+      const scopes = (inst.accessScopes || []).map(s => s.handle);
+      await shopifyOrdersState(env, "token_app", inst.app?.title || "");
+      await shopifyOrdersState(env, "token_has_read_all_orders", scopes.includes("read_all_orders") ? "yes" : "NO");
+      await shopifyOrdersState(env, "token_scopes", scopes.join(","));
+      await shopifyOrdersState(env, "token_scopes_checked_at", new Date().toISOString());
+    }
+  } catch (e) { /* diagnostics only */ }
   const since = (await shopifyOrdersState(env, "orders_watermark")) || SHOPIFY_ORDERS_START;
   const q = `updated_at:>='${since}' AND created_at:>='${SHOPIFY_ORDERS_START}'`;
   let after = await shopifyOrdersState(env, "orders_cursor");
