@@ -7037,7 +7037,7 @@ async function computeOrderProfit(env, { days = 90, since = null } = {}) {
     WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
   const itemsByShip = {};
   for (const it of items) (itemsByShip[it.order_key] ||= []).push(it);
-  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty, i.unit_price, i.title, i.variant_title FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
+  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty, i.unit_price, i.discounted_total, i.title, i.variant_title FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
   const shopItemsByOrder = {};
   for (const it of shopItems) (shopItemsByOrder[it.order_id] ||= []).push(it);
   const map = {};
@@ -7101,13 +7101,25 @@ async function computeOrderProfit(env, { days = 90, since = null } = {}) {
       payment_fees: r2(fees), fees_estimated: feesEstimated ? "yes" : "", vitalsource_fee: r2(vitalsource), profit_before_ads: r2(profit),
       margin_pct: netRevenue > 0 ? r2(100 * profit / netRevenue) : "", shipmonk_matched: sh.length ? "yes" : "no", fulfilled_by: fulfilledBy,
       skus_without_cost: missing.join(" "),
+      ...productMix(shopItemsByOrder[o.id] || []),
     });
   }
   return out;
 }
 
 function r2(x) { return Math.round((x || 0) * 100) / 100; }
-function isoWeekStart(ymd) { const d = new Date(ymd + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
+
+// What was bought, for break-even by product (Ben 2026-11-01). Shopify SKUs as they appear on the order:
+//  product_mix  = the order's distinct SKUs, sorted, one per line (newline-separated); a spiral NSCB line sold with the
+//                 eBook add-on is written "SB-NSCB-N+eBook" (same SKU, different variant)
+//  product_line = the Shopify SKU of the line with the most revenue (the order's main item)
+function productMix(lines) {
+  const label = (li) => String(li.sku || "") + (String(li.sku || "").startsWith("SB-NSCB") && VITALSOURCE.isDigitalNscb(li) ? "+eBook" : "");
+  const mix = [...new Set(lines.filter(li => li.sku).map(label))].sort().join("\n");
+  let lead = null;
+  for (const li of lines) if (li.sku && (!lead || (li.discounted_total || 0) > (lead.discounted_total || 0))) lead = li;
+  return { product_mix: mix, product_line: lead ? String(lead.sku) : "", items: lines.reduce((a, li) => a + (li.qty || 0), 0) };
+}
 
 // Break-even ad spend by week and month. Only fully costed, ShipMonk-matched orders count,
 // so a missing SKU cost or unshipped order can't inflate the number.
