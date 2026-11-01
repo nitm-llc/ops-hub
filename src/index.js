@@ -7037,7 +7037,7 @@ async function computeOrderProfit(env, { days = 90, since = null } = {}) {
     WHERE t.order_number LIKE '%2-%' AND t.ship_date >= ?`, sinceIso.slice(0, 10));
   const itemsByShip = {};
   for (const it of items) (itemsByShip[it.order_key] ||= []).push(it);
-  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty, i.unit_price, i.title, i.variant_title FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
+  const shopItems = await all(`SELECT i.order_id, i.sku, i.qty, i.unit_price, i.discounted_total, i.title, i.variant_title FROM shopify_order_items i JOIN shopify_orders o ON o.id = i.order_id WHERE o.created_at >= ?`, sinceIso);
   const shopItemsByOrder = {};
   for (const it of shopItems) (shopItemsByOrder[it.order_id] ||= []).push(it);
   const map = {};
@@ -7101,12 +7101,35 @@ async function computeOrderProfit(env, { days = 90, since = null } = {}) {
       payment_fees: r2(fees), fees_estimated: feesEstimated ? "yes" : "", vitalsource_fee: r2(vitalsource), profit_before_ads: r2(profit),
       margin_pct: netRevenue > 0 ? r2(100 * profit / netRevenue) : "", shipmonk_matched: sh.length ? "yes" : "no", fulfilled_by: fulfilledBy,
       skus_without_cost: missing.join(" "),
+      ...productMix(shopItemsByOrder[o.id] || []),
     });
   }
   return out;
 }
 
 function r2(x) { return Math.round((x || 0) * 100) / 100; }
+
+// What was bought, for break-even by product (Ben 2026-10-31). product_mix = the order's distinct Shopify SKUs,
+// sorted, with spiral NSCB lines sold with the eBook add-on marked "+eBook" (same SKU, different variant).
+// lead_sku = the line with the most revenue; product_line = lead_sku's category.
+function productLine(sku) {
+  const s = String(sku || "");
+  if (/^(SB-NSCB|D-NSCB-SB)/.test(s)) return "NSCB spiral bundle";
+  if (/^D-NSCB/.test(s)) return "NSCB eBook";
+  if (/^(B-FC|FC-|FCB)/.test(s)) return "Flashcards";
+  if (/^(ALW|APN|MTL|NSCP|SB-NSN|NSN|LST|BCP|CPG)/.test(s)) return "Workbooks & guides";
+  if (/^(PPG|NP-MSP|M4|M1|S8)/.test(s)) return "Small items";
+  if (/^D-/.test(s)) return "Digital (other)";
+  return s ? "Other" : "";
+}
+function productMix(lines) {
+  const label = (li) => String(li.sku || "") + (String(li.sku || "").startsWith("SB-NSCB") && VITALSOURCE.isDigitalNscb(li) ? "+eBook" : "");
+  const mix = [...new Set(lines.filter(li => li.sku).map(label))].sort().join(" + ");
+  let lead = null;
+  for (const li of lines) if (li.sku && (!lead || (li.discounted_total || 0) > (lead.discounted_total || 0))) lead = li;
+  return { product_mix: mix, lead_sku: lead ? label(lead) : "", product_line: lead ? productLine(lead.sku) : "",
+           items: lines.reduce((a, li) => a + (li.qty || 0), 0) };
+}
 function isoWeekStart(ymd) { const d = new Date(ymd + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
 
 // Break-even ad spend by week and month. Only fully costed, ShipMonk-matched orders count,
