@@ -7108,6 +7108,7 @@ async function computeOrderProfit(env, { days = 90, since = null } = {}) {
 }
 
 function r2(x) { return Math.round((x || 0) * 100) / 100; }
+function isoWeekStart(ymd) { const d = new Date(ymd + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); }
 
 // What was bought, for break-even by product (Ben 2026-11-01). Shopify SKUs as they appear on the order:
 //  product_mix  = the order's distinct SKUs, sorted, one per line (newline-separated); a spiral NSCB line sold with the
