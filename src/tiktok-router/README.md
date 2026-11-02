@@ -39,7 +39,7 @@ Avery.
    ```bash
    node tools/tiktok-router/register-webhook.mjs
    ```
-   `CLICKUP_TOKEN` is already a Worker secret, shared with Calendar, Stage Timing and ClickUp Automation. The script asks for that same token (input hidden). Copy it from ClickUp > Settings > Apps. Do **not** click Regenerate, which would break those modules until the Worker secret is updated too.
+   `CLICKUP_TOKEN` is already a Worker secret, shared with Calendar, Stage Timing and ClickUp Automation. The script asks for that same token. Copy it from ClickUp > Settings > Apps. Do **not** click Regenerate, which would break those modules until the Worker secret is updated too.
 4. Move a test card through every stage and check the log:
    ```bash
    npx wrangler d1 execute content-calendar --remote --command "SELECT at, task_id, event, status, action FROM tiktok_routing_log ORDER BY id DESC LIMIT 30"

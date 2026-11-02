@@ -8,6 +8,7 @@
 // It refuses to create a duplicate (duplicates double-fire every event). Pass
 // --replace to delete an existing webhook on the same endpoint and start over.
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 
 const TEAM_ID = "9017029478";
 const LIST_ID = 1600440000001184;
@@ -16,33 +17,17 @@ const ENDPOINT = "https://ops.anurseinthemaking.com/clickup-automation/webhook/t
 const EVENTS = ["taskStatusUpdated", "taskTagUpdated"];
 const SECRET_NAME = "TIKTOK_ROUTER_WEBHOOK_SECRET";
 
-// Asked for interactively (input hidden) so the token never lands in shell history.
-async function askHidden(prompt) {
-  process.stdout.write(prompt);
-  const { stdin } = process;
-  stdin.setRawMode?.(true);
-  stdin.resume();
-  stdin.setEncoding("utf8");
-  let value = "";
-  return new Promise((resolve) => {
-    stdin.on("data", function onData(ch) {
-      for (const c of ch) {
-        if (c === "\r" || c === "\n") {
-          stdin.setRawMode?.(false);
-          stdin.pause();
-          stdin.off("data", onData);
-          process.stdout.write("\n");
-          return resolve(value.trim());
-        }
-        if (c === "\u0003") process.exit(1); // Ctrl-C
-        if (c === "\u007f") value = value.slice(0, -1);
-        else value += c;
-      }
-    });
-  });
+// Asked for interactively so the token never lands in shell history. A plain
+// readline prompt: hidden raw-mode input hung in some terminals.
+async function ask(prompt) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await rl.question(prompt);
+  rl.close();
+  // Strip bracketed-paste markers some terminals wrap pasted text in.
+  return answer.replace(/\x1b\[20[01]~/g, "").trim();
 }
 
-const token = process.env.CLICKUP_TOKEN || (await askHidden("Paste your ClickUp API token (pk_...): "));
+const token = process.env.CLICKUP_TOKEN || (await ask("Paste your ClickUp API token (pk_...): "));
 if (!/^pk_\d+_[A-Z0-9]+$/i.test(token) || /xxx/i.test(token)) {
   console.error("That doesn't look like a ClickUp token. It should look like pk_12345678_ABC123...");
   process.exit(1);
