@@ -2,6 +2,7 @@ import { handleStageRoutes } from "./stage-tracker.js";
 import { handleVideoReviewAPI } from "./video-review.js";
 import { handleClickUpAutomationRoutes, clickUpAutomationCron } from "./clickup-automation.js";
 import { handleStrategyRoutes } from "./strategy.js";
+import { handleTikTokRouterRoutes } from "./tiktok-router/index.js";
 import { cxModelPricing, cxReadPrompt, cxFinProfilePrompt, cxProfileLength, HAIKU_55_TIER_TOKENS } from "./cx-product-kb.js";
 import { zdDateRange, zdSearchQuery, zdAnalysisPrompt, zdAnalysisUserPrompt, zdNormalizeAnalysis, zdSummarize, zdToCsv } from "./cx-ticket-export.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
@@ -8589,6 +8590,11 @@ export default {
     // ===== STAGE TIMING (handles /stage/* ; returns null otherwise) =====
     const stageResp = await handleStageRoutes(request, env, ctx, path);
     if (stageResp) return stageResp;
+
+    // ===== TIKTOK ROUTER (handles POST /clickup-automation/webhook/tiktok only) =====
+    // Above the ClickUp Automation mount; it sits under that module's Access bypass.
+    const ttResp = await handleTikTokRouterRoutes(request, env, ctx, path);
+    if (ttResp) return ttResp;
 
     // ===== CLICKUP AUTOMATION (handles /clickup-automation/* ; returns null otherwise) =====
     // Mounted here, above the global OPTIONS handler below, because this module
