@@ -37,9 +37,9 @@ Avery.
 2. Commit and push, then run `npx wrangler deploy`.
 3. Register the webhook. This saves the signing secret as `TIKTOK_ROUTER_WEBHOOK_SECRET` for you:
    ```bash
-   CLICKUP_TOKEN=pk_xxx node tools/tiktok-router/register-webhook.mjs
+   node tools/tiktok-router/register-webhook.mjs
    ```
-   `CLICKUP_TOKEN` is already a Worker secret, shared with Calendar, Stage Timing and ClickUp Automation. You need the same value locally to run this script.
+   `CLICKUP_TOKEN` is already a Worker secret, shared with Calendar, Stage Timing and ClickUp Automation. The script asks for that same token (input hidden). Copy it from ClickUp > Settings > Apps. Do **not** click Regenerate, which would break those modules until the Worker secret is updated too.
 4. Move a test card through every stage and check the log:
    ```bash
    npx wrangler d1 execute content-calendar --remote --command "SELECT at, task_id, event, status, action FROM tiktok_routing_log ORDER BY id DESC LIMIT 30"

@@ -3,7 +3,7 @@
 // once).
 //
 // Run from the repo root:
-//   CLICKUP_TOKEN=pk_xxx node tools/tiktok-router/register-webhook.mjs
+//   node tools/tiktok-router/register-webhook.mjs     (it asks for your ClickUp token)
 //
 // It refuses to create a duplicate (duplicates double-fire every event). Pass
 // --replace to delete an existing webhook on the same endpoint and start over.
@@ -16,9 +16,35 @@ const ENDPOINT = "https://ops.anurseinthemaking.com/clickup-automation/webhook/t
 const EVENTS = ["taskStatusUpdated", "taskTagUpdated"];
 const SECRET_NAME = "TIKTOK_ROUTER_WEBHOOK_SECRET";
 
-const token = process.env.CLICKUP_TOKEN;
-if (!token) {
-  console.error("Set CLICKUP_TOKEN first:  CLICKUP_TOKEN=pk_xxx node tools/tiktok-router/register-webhook.mjs");
+// Asked for interactively (input hidden) so the token never lands in shell history.
+async function askHidden(prompt) {
+  process.stdout.write(prompt);
+  const { stdin } = process;
+  stdin.setRawMode?.(true);
+  stdin.resume();
+  stdin.setEncoding("utf8");
+  let value = "";
+  return new Promise((resolve) => {
+    stdin.on("data", function onData(ch) {
+      for (const c of ch) {
+        if (c === "\r" || c === "\n") {
+          stdin.setRawMode?.(false);
+          stdin.pause();
+          stdin.off("data", onData);
+          process.stdout.write("\n");
+          return resolve(value.trim());
+        }
+        if (c === "\u0003") process.exit(1); // Ctrl-C
+        if (c === "\u007f") value = value.slice(0, -1);
+        else value += c;
+      }
+    });
+  });
+}
+
+const token = process.env.CLICKUP_TOKEN || (await askHidden("Paste your ClickUp API token (pk_...): "));
+if (!/^pk_\d+_[A-Z0-9]+$/i.test(token) || /xxx/i.test(token)) {
+  console.error("That doesn't look like a ClickUp token. It should look like pk_12345678_ABC123...");
   process.exit(1);
 }
 const replace = process.argv.includes("--replace");
