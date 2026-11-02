@@ -73,7 +73,9 @@ export const DEFAULT_RULES = {
     tag: "roadblock",
     priority: 2, // ClickUp: 1 urgent, 2 high, 3 normal, 4 low
     notify: PEOPLE.avery,
-    comment: "Roadblock added. Avery, can you help get this unstuck?",
+    notify_name: "Avery Pless", // display name, so "{person}" can be filled without a ClickUp call
+    // "{person}" becomes notify_name's first name when the comment is posted.
+    comment: "Roadblock added. {person}, can you help get this unstuck?",
   },
 };
 
@@ -142,6 +144,7 @@ export function normalizeRules(input) {
       tag: String(b.tag || "roadblock").trim().toLowerCase(),
       priority: [1, 2, 3, 4].includes(Number(b.priority)) ? Number(b.priority) : 2,
       notify: userId(b.notify, "Roadblock person"),
+      notify_name: b.notify_name ? String(b.notify_name).trim().slice(0, 120) : null,
       comment: comment || DEFAULT_RULES.roadblock.comment,
     },
   };

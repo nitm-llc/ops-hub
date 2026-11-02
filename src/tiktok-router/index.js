@@ -52,6 +52,7 @@ async function ensureTable(env) {
        id      INTEGER PRIMARY KEY AUTOINCREMENT,
        at      TEXT NOT NULL,
        task_id TEXT NOT NULL,
+       task_name TEXT,
        event   TEXT NOT NULL,
        status  TEXT,
        action  TEXT NOT NULL
@@ -79,13 +80,20 @@ async function ensureTable(env) {
   _tableReady = true;
 }
 
-async function writeLog(env, { taskId, event, status = null, action }) {
+async function writeLog(env, { taskId, taskName = null, event, status = null, action }) {
   if (!env.DB) return;
   try {
     await env.DB.prepare(
-      "INSERT INTO tiktok_routing_log (at, task_id, event, status, action) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO tiktok_routing_log (at, task_id, task_name, event, status, action) VALUES (?, ?, ?, ?, ?, ?)"
     )
-      .bind(new Date().toISOString(), String(taskId || "?"), String(event || "?"), status, String(action).slice(0, 1000))
+      .bind(
+        new Date().toISOString(),
+        String(taskId || "?"),
+        taskName ? String(taskName).slice(0, 300) : null,
+        String(event || "?"),
+        status,
+        String(action).slice(0, 1000)
+      )
       .run();
   } catch (e) {
     // The log must never be the thing that breaks routing.
@@ -213,11 +221,18 @@ async function roadblock({ env, event, task, rules, log }) {
   await clickup(env, "PUT", `/task/${encodeURIComponent(task.id)}`, { priority: rb.priority || 2 });
   if (rb.notify == null) return log("roadblock: priority raised; no one set to notify");
   await clickup(env, "POST", `/task/${encodeURIComponent(task.id)}/comment`, {
-    comment_text: rb.comment,
+    comment_text: roadblockComment(rb),
     assignee: rb.notify,
     notify_all: false,
   });
   return log(`roadblock: priority raised, comment assigned to ${rb.notify}`);
+}
+
+// "{person}" in the comment becomes the notified person's first name, so
+// changing who is notified doesn't leave the comment addressing someone else.
+export function roadblockComment(rb) {
+  const first = String(rb.notify_name || "").trim().split(/\s+/)[0] || "there";
+  return String(rb.comment || "").replaceAll("{person}", first);
 }
 
 // Event -> handlers, run in order. Add AI PM checks here.
@@ -234,7 +249,8 @@ export async function processEvent(env, event) {
   const taskId = event.task_id;
   const name = event.event;
   let stage = null;
-  const log = (action) => writeLog(env, { taskId, event: name, status: stage, action });
+  let taskName = null;
+  const log = (action) => writeLog(env, { taskId, taskName, event: name, status: stage, action });
 
   try {
     await ensureTable(env);
@@ -245,6 +261,7 @@ export async function processEvent(env, event) {
     // Always act on fresh data, never on the webhook's snapshot.
     const task = await clickup(env, "GET", `/task/${encodeURIComponent(taskId)}?custom_fields=true`);
     if (String(task?.list?.id) !== LIST_ID) return log(`ignored: task is in list ${task?.list?.id}`);
+    taskName = task.name || null;
     stage = String(task.status?.status || "").toLowerCase() || null;
     const { rules } = await loadRules(env);
 
@@ -303,7 +320,7 @@ async function clickupContext(env, refresh) {
   const members = (team.members || [])
     .map((m) => m.user)
     .filter((u) => u && u.id)
-    .map((u) => ({ id: Number(u.id), name: u.username || u.email, email: u.email || null }))
+    .map((u) => ({ id: Number(u.id), name: u.username || u.email, email: u.email || null, picture: u.profilePicture || null }))
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const statuses = (list.statuses || [])
     .slice()
@@ -372,11 +389,36 @@ async function handleApi(request, env, sub) {
     }
 
     if (sub === "log" && method === "GET") {
-      const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 50));
+      const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 100));
       const { results } = await env.DB.prepare(
-        "SELECT id, at, task_id, event, status, action FROM tiktok_routing_log ORDER BY id DESC LIMIT ?"
+        "SELECT id, at, task_id, task_name, event, status, action FROM tiktok_routing_log ORDER BY id DESC LIMIT ?"
       ).bind(limit).all();
-      return json({ log: results || [] });
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const summary = await env.DB.prepare(
+        `SELECT MAX(at) AS last_at,
+                SUM(CASE WHEN at > ? THEN 1 ELSE 0 END) AS events_24h,
+                SUM(CASE WHEN at > ? AND action LIKE 'error:%' THEN 1 ELSE 0 END) AS errors_24h
+           FROM tiktok_routing_log`
+      ).bind(since, since).first();
+      return json({ log: results || [], summary: summary || {} });
+    }
+
+    // Who would get the card at every stage, under some (possibly unsaved) rules.
+    // The page's "try a card" panel uses this so the logic lives in one place.
+    if (sub === "preview" && method === "POST") {
+      const body = await request.json().catch(() => null);
+      let rules;
+      try {
+        rules = normalizeRules(body?.rules);
+      } catch (e) {
+        return json({ error: e.message }, 400);
+      }
+      const card = {
+        writerId: body?.card?.writerId == null ? null : Number(body.card.writerId),
+        format: body?.card?.format || null,
+      };
+      const stages = Array.isArray(body?.stages) && body.stages.length ? body.stages.map(String) : STAGES;
+      return json({ preview: stages.map((stage) => ({ stage, ...ownerFor(rules, stage, card) })) });
     }
 
     if (sub === "history" && method === "GET") {

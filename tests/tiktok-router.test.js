@@ -36,8 +36,8 @@ function stmt(sql, args = []) {
     bind: (...a) => stmt(sql, a),
     run: async () => {
       if (sql.startsWith("INSERT INTO tiktok_routing_log")) {
-        const [at, task_id, event, status, action] = args;
-        logRows.push({ at, task_id, event, status, action });
+        const [at, task_id, task_name, event, status, action] = args;
+        logRows.push({ at, task_id, task_name, event, status, action });
       } else if (sql.startsWith("INSERT INTO tiktok_router_rules")) {
         const [rules, updated_at, updated_by] = args;
         rulesRow = { rules, updated_at, updated_by };
@@ -214,7 +214,7 @@ test("roadblock newly added -> priority High + comment assigned to Avery", async
   assert.equal(comments().length, 1);
   assert.match(comments()[0].url, /\/task\/t1\/comment$/);
   assert.deepEqual(comments()[0].body, {
-    comment_text: ROADBLOCK.comment,
+    comment_text: "Roadblock added. Avery, can you help get this unstuck?",
     assignee: PEOPLE.avery,
     notify_all: false,
   });
@@ -317,12 +317,12 @@ test("roadblock switched off -> no priority change, no comment", async () => {
 });
 
 test("roadblock notify person + comment are editable", async () => {
-  withRules((r) => { r.roadblock.notify = PEOPLE.cass; r.roadblock.comment = "Help!"; });
+  withRules((r) => { r.roadblock.notify = PEOPLE.cass; r.roadblock.notify_name = "Cassandra Van Nostrand"; r.roadblock.comment = "Help, {person}!"; });
   await deliver(card("edit", { tags: ["roadblock"] }), {
     event: "taskTagUpdated",
     history: [{ field: "tag", before: [], after: [{ name: "roadblock" }] }],
   });
-  assert.deepEqual(comments()[0].body, { comment_text: "Help!", assignee: PEOPLE.cass, notify_all: false });
+  assert.deepEqual(comments()[0].body, { comment_text: "Help, Cassandra!", assignee: PEOPLE.cass, notify_all: false });
 });
 
 test("normalizeRules rejects an unknown mode and a non-user owner", () => {
@@ -388,4 +388,25 @@ test("API refuses a non-JSON write (cross-site form)", async () => {
   const { status } = await apiCall("rules", { method: "PUT", body: { rules: DEFAULT_RULES }, type: "text/plain" });
   assert.equal(status, 415);
   assert.equal(rulesRow, null);
+});
+
+test("the log records the card's name", async () => {
+  await deliver({ ...card("package"), name: "Insulin myths" });
+  assert.equal(logRows.at(-1).task_name, "Insulin myths");
+});
+
+test("API preview: who gets a Funny card Diana wrote, under unsaved rules", async () => {
+  const r = structuredClone(DEFAULT_RULES);
+  r.stages.voiceover = { mode: "person", owner: PEOPLE.karli };
+  const { status, data } = await apiCall("preview", {
+    method: "POST",
+    body: { rules: r, card: { writerId: PEOPLE.diana, format: "Funny" } },
+  });
+  assert.equal(status, 200);
+  const by = Object.fromEntries(data.preview.map((p) => [p.stage, p.owner ?? null]));
+  assert.equal(by["script review"], PEOPLE.karli);
+  assert.equal(by["voiceover"], PEOPLE.karli);
+  assert.equal(by["edit"], PEOPLE.tia);
+  assert.equal(by["film"], null);
+  assert.equal(rulesRow, null, "preview must not save");
 });

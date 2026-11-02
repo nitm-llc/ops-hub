@@ -9,147 +9,251 @@
   /* nav.js owns the neutral palette (--bg/--panel/--surface/--border/--text/...).
      Only accent + semantic colours belong here. */
   :root {
-    --accent: #2563eb; --accent-text: #ffffff;
+    --accent: #2563eb; --accent-text: #ffffff; --accent-bg: #eff4ff;
     --red: #dc2626; --red-bg: #fee2e2; --amber: #b45309; --amber-bg: #fef3c7;
     --green: #15803d; --green-bg: #dcfce7; --blue: #1d4ed8; --blue-bg: #dbeafe;
   }
   :root[data-theme="dark"] {
-    --accent: #60a5fa; --accent-text: #0b1a33;
+    --accent: #60a5fa; --accent-text: #0b1a33; --accent-bg: #15213a;
     --red: #f87171; --red-bg: #431a1a; --amber: #fbbf24; --amber-bg: #422f06;
     --green: #4ade80; --green-bg: #10331c; --blue: #93c5fd; --blue-bg: #16264a;
   }
   * { box-sizing: border-box; margin: 0; }
-  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 110px; }
-  .wrap { max-width: 940px; margin: 0 auto; padding: 26px 20px; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 120px; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 26px 16px; }
   h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.3px; }
-  h2 { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
-  .sub { font-size: 14px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
-  a { color: var(--accent); }
-  .muted { color: var(--muted); }
+  h2 { font-size: 17px; font-weight: 700; }
+  .sub { font-size: 14px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
   .tiny { font-size: 12.5px; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
   .hide { display: none !important; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
-  button { padding: 10px 16px; border-radius: 9px; border: 0; background: var(--accent); color: var(--accent-text);
-           font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
+  button { padding: 9px 15px; border-radius: 9px; border: 0; background: var(--accent); color: var(--accent-text);
+           font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; min-height: 38px; }
   button:disabled { opacity: .45; cursor: default; }
   button.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
-  button.sm { padding: 6px 11px; font-size: 12.5px; border-radius: 8px; }
-
-  select, textarea, input[type=text] {
+  button.link { background: none; color: var(--accent); padding: 4px 6px; min-height: 0; font-weight: 600; }
+  button:focus-visible, select:focus-visible, textarea:focus-visible, .mode:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  select, textarea {
     font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
-    border: 1px solid var(--border2); border-radius: 8px; padding: 7px 9px; min-height: 36px; max-width: 100%;
+    border: 1px solid var(--border2); border-radius: 8px; padding: 7px 9px; min-height: 38px; max-width: 100%;
   }
-  textarea { width: 100%; min-height: 64px; resize: vertical; }
+  textarea { width: 100%; min-height: 60px; resize: vertical; line-height: 1.45; }
 
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-top: 14px; }
-  .banner { border-radius: 12px; padding: 12px 15px; font-size: 14px; margin-top: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-top: 16px; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+
+  /* status line */
+  .status { display: flex; gap: 8px; align-items: center; font-size: 13.5px; margin-top: 14px; color: var(--text2); flex-wrap: wrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+  .dot.ok { background: var(--green); } .dot.warn { background: var(--amber); } .dot.bad { background: var(--red); }
+
+  .banner { border-radius: 12px; padding: 12px 15px; font-size: 14px; margin-top: 16px; line-height: 1.45; }
   .banner.bad { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
-  .banner.info { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue); }
 
-  .stage { display: grid; grid-template-columns: 150px 1fr; gap: 10px 14px; align-items: center;
-           padding: 11px 0; border-top: 1px solid var(--border); }
-  .stage:first-of-type { border-top: 0; }
-  .stage .name { font-weight: 600; text-transform: capitalize; }
-  .stage .ctl { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .stage .result { font-size: 13px; color: var(--muted); }
-  .stage.off .name { color: var(--muted); font-weight: 500; }
-  @media (max-width: 560px) { .stage { grid-template-columns: 1fr; gap: 6px; } }
+  /* people */
+  .who { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 14px; }
+  .av { width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto; display: inline-grid; place-items: center;
+        font-size: 11px; font-weight: 700; color: #fff; object-fit: cover; }
+  .note { font-weight: 400; color: var(--muted); font-size: 13px; }
+  .nobody { color: var(--amber); font-weight: 600; font-size: 14px; }
 
-  .rule { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; margin-top: 10px; line-height: 2; }
+  /* pipeline */
+  .pipe { list-style: none; padding: 0; margin-top: 10px; }
+  .stage { border-top: 1px solid var(--border); }
+  .stage:first-child { border-top: 0; }
+  .srow { display: grid; grid-template-columns: 28px 150px 1fr auto; gap: 12px; align-items: center; padding: 12px 2px; }
+  .num { width: 24px; height: 24px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border2);
+         font-size: 11.5px; font-weight: 700; color: var(--muted); display: grid; place-items: center; }
+  .sname { font-weight: 600; text-transform: capitalize; }
+  .stage.off .sname, .stage.off .num { color: var(--faint); }
+  .sowner { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; min-width: 0; }
+  .offtext { color: var(--muted); font-size: 13.5px; }
+  .edited { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-bg); padding: 2px 7px; border-radius: 99px; margin-left: 6px; text-transform: none; }
+  .stage.open { background: var(--accent-bg); border-radius: 10px; }
+  .editor { padding: 2px 12px 16px 42px; }
+  .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+  .mode { display: block; border: 1px solid var(--border2); background: var(--panel); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+  .mode input { margin-right: 6px; }
+  .mode b { font-size: 14px; }
+  .mode .d { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .mode.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .editor .pick { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+  .editor .foot { margin-top: 12px; display: flex; gap: 8px; }
+  @media (max-width: 620px) {
+    .srow { grid-template-columns: 24px 1fr auto; }
+    .sowner { grid-column: 2 / -1; grid-row: 2; }
+    .editor { padding-left: 12px; }
+  }
+
+  /* shared rules */
+  .rules2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  @media (max-width: 720px) { .rules2 { grid-template-columns: 1fr; } }
+  .rulebox { border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--surface); }
+  .rulebox h3 { font-size: 15px; }
+  .uses { font-size: 12.5px; color: var(--muted); margin-top: 3px; text-transform: capitalize; }
+  .line { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-top: 10px; font-size: 14px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .chip { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; padding: 5px 10px; border-radius: 99px;
-          border: 1px solid var(--border2); background: var(--surface); cursor: pointer; user-select: none; }
-  .chip.on { background: var(--blue-bg); color: var(--blue); border-color: var(--blue); font-weight: 600; }
-  .chip input { display: none; }
-  .uses { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
-  .toggle { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
+  .chip { font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 99px; min-height: 32px;
+          border: 1px solid var(--border2); background: var(--panel); color: var(--text2); cursor: pointer; font-weight: 500; }
+  .chip[aria-pressed="true"] { background: var(--blue-bg); color: var(--blue); border-color: var(--blue); font-weight: 700; }
 
+  /* simulator */
+  .sim-in { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; font-size: 14px; }
+  .journey { list-style: none; padding: 0; margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .journey li { border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; background: var(--surface); min-height: 62px; }
+  .journey .st { font-size: 12px; color: var(--muted); text-transform: capitalize; margin-bottom: 5px; }
+  .journey .skip { font-size: 13px; color: var(--faint); }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; }
+  .pill.grey { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+
+  /* roadblock */
+  .toggle { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; cursor: pointer; margin-top: 12px; line-height: 1.45; }
+  .toggle input { margin-top: 3px; width: 17px; height: 17px; }
+  .preview-comment { font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+  /* activity */
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+  .seg button { background: transparent; color: var(--muted); padding: 5px 11px; min-height: 30px; font-size: 13px; border-radius: 7px; }
+  .seg button[aria-pressed="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .acts { list-style: none; padding: 0; margin-top: 10px; }
+  .act { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border); font-size: 13.5px; }
+  .act:first-child { border-top: 0; }
+  .act .when { color: var(--muted); font-size: 12.5px; padding-top: 2px; }
+  .act .what { line-height: 1.5; }
+  .act .cardname { font-weight: 600; }
+  .act .stg { text-transform: capitalize; }
+  .act.err .what { color: var(--red); }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; margin-right: 6px; vertical-align: 1px; }
+  .tag.assign { background: var(--green-bg); color: var(--green); }
+  .tag.block { background: var(--amber-bg); color: var(--amber); }
+  .tag.err { background: var(--red-bg); color: var(--red); }
+  .tag.none { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+  .empty { text-align: center; color: var(--muted); padding: 26px 10px; font-size: 14px; }
+
+  details.more { margin-top: 16px; }
+  details.more summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text2); padding: 6px 0; }
+
+  /* save bar + toast */
   .savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--border2);
-             padding: 12px 20px; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; z-index: 50;
-             box-shadow: 0 -4px 14px rgba(0,0,0,.08); }
-  .savebar .msg { font-size: 14px; font-weight: 600; }
-
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  td.when { white-space: nowrap; color: var(--muted); }
-  .err { color: var(--red); }
-  .tablewrap { overflow-x: auto; }
+             padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); z-index: 50; box-shadow: 0 -6px 18px rgba(0,0,0,.10); }
+  .savebar .in { max-width: 880px; margin: 0 auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .savebar .msg { flex: 1; min-width: 200px; font-size: 14px; font-weight: 600; }
+  .savebar ul { max-width: 880px; margin: 0 auto 10px; padding-left: 20px; font-size: 13.5px; color: var(--text2); line-height: 1.6; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111827; color: #f9fafb;
+           padding: 11px 16px; border-radius: 10px; font-size: 14px; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.25); max-width: calc(100% - 32px); }
 </style>
 </head>
 <body>
 <script defer src="/shared/nav.js"></script>
 <div class="wrap">
   <h1>TikTok Router</h1>
-  <p class="sub">Who gets assigned when a card moves stage in <b>Organic Social › TikTok Production</b>.
-    The new owner replaces everyone else on the card. Changes apply to the next card that moves, and cards already in a stage aren't touched.</p>
-  <p class="sub tiny" id="savedInfo"></p>
+  <p class="sub">When a card in <b>Organic Social › TikTok Production</b> moves to a new stage, it's assigned to that stage's owner and everyone else on the card is removed.</p>
+  <div class="status" id="status" aria-live="polite"><span class="dot"></span><span>Checking…</span></div>
 
-  <div id="error" class="banner bad hide"></div>
-  <div id="loading" class="panel muted">Loading…</div>
+  <div id="error" class="banner bad hide" role="alert"></div>
+  <div id="loading" class="card muted">Loading…</div>
 
   <div id="app" class="hide">
-    <div class="panel">
-      <h2>Stages</h2>
-      <p class="sub tiny">For each stage, choose who gets the card when it arrives.</p>
-      <div id="stages" style="margin-top:8px"></div>
-    </div>
-
-    <div class="panel">
-      <h2>Review rule</h2>
-      <div class="uses" id="reviewUses"></div>
-      <div class="rule">If the Writer is <span id="reviewWriter"></span>, assign <span id="reviewThen"></span>.</div>
-      <div class="rule">Otherwise, assign <span id="reviewOtherwise"></span>.</div>
-    </div>
-
-    <div class="panel">
-      <h2>Edit rule</h2>
-      <div class="uses" id="editUses"></div>
-      <div class="rule">If the Format is one of these, assign <span id="editThen"></span>:</div>
-      <div class="chips" id="editFormats"></div>
-      <div class="rule">Otherwise (including no Format), assign <span id="editOtherwise"></span>.</div>
-    </div>
-
-    <div class="panel">
-      <h2>Roadblock tag</h2>
-      <label class="toggle" style="margin-top:8px"><input type="checkbox" id="rbEnabled"> When the <b>roadblock</b> tag is added, set priority to High and post a comment.</label>
-      <div class="rule">Assign the comment to <span id="rbNotify"></span> so they get notified.</div>
-      <div style="margin-top:8px"><textarea id="rbComment" maxlength="1000"></textarea></div>
-    </div>
-
-    <div class="panel">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-        <h2>Recent activity</h2>
-        <button class="ghost sm" id="refreshLog">Refresh</button>
+    <!-- Pipeline -->
+    <section class="card" aria-labelledby="h-pipe">
+      <div class="card-head">
+        <h2 id="h-pipe">Who gets each stage</h2>
+        <span class="tiny muted" id="savedInfo"></span>
       </div>
-      <p class="sub tiny">Everything the router did or skipped, newest first.</p>
-      <div class="tablewrap" style="margin-top:10px"><table>
-        <thead><tr><th>When</th><th>Card</th><th>Stage</th><th>What happened</th></tr></thead>
-        <tbody id="log"></tbody>
-      </table></div>
-    </div>
+      <ol class="pipe" id="pipe"></ol>
+    </section>
 
-    <div class="panel">
-      <h2>Rule changes</h2>
-      <div id="history" class="tiny" style="margin-top:8px"></div>
-      <button class="ghost sm" id="reset" style="margin-top:12px">Reset all rules to the original defaults</button>
-    </div>
+    <!-- Shared rules -->
+    <section class="card" aria-labelledby="h-rules">
+      <h2 id="h-rules">Shared rules</h2>
+      <p class="sub tiny">Some stages pick a person based on the card. Changing a rule here changes every stage that uses it.</p>
+      <div class="rules2">
+        <div class="rulebox">
+          <h3>Nurse review</h3>
+          <div class="uses" id="reviewUses"></div>
+          <div class="line">If <span id="reviewWriter"></span> wrote the script, assign <span id="reviewThen"></span></div>
+          <div class="line">Otherwise, assign <span id="reviewOtherwise"></span></div>
+        </div>
+        <div class="rulebox">
+          <h3>Editor by Format</h3>
+          <div class="uses" id="editUses"></div>
+          <div class="line">Assign <span id="editThen"></span> for these Formats:</div>
+          <div class="chips" id="editFormats" role="group" aria-label="Formats for the first editor"></div>
+          <div class="line">Any other Format, or none, goes to <span id="editOtherwise"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Simulator -->
+    <section class="card" aria-labelledby="h-sim">
+      <div class="card-head">
+        <h2 id="h-sim">Try a card</h2>
+        <span class="pill grey hide" id="simUnsaved">Includes unsaved changes</span>
+      </div>
+      <p class="sub tiny">Pick a Writer and Format to see who would get the card at every stage.</p>
+      <div class="sim-in">
+        <label>Writer <select id="simWriter"></select></label>
+        <label>Format <select id="simFormat"></select></label>
+      </div>
+      <ol class="journey" id="journey" aria-live="polite"></ol>
+    </section>
+
+    <!-- Roadblock -->
+    <section class="card" aria-labelledby="h-rb">
+      <h2 id="h-rb">Roadblock tag</h2>
+      <label class="toggle"><input type="checkbox" id="rbEnabled">
+        <span>When someone adds the <b>roadblock</b> tag, set the card's priority to <b>High</b> and post a comment asking for help.</span></label>
+      <div id="rbBody">
+        <div class="line">Assign the comment to <span id="rbNotify"></span> so they're notified</div>
+        <label class="sr" for="rbComment">Comment text</label>
+        <textarea id="rbComment" maxlength="1000" style="margin-top:10px"></textarea>
+        <div class="preview-comment" id="rbPreview"></div>
+      </div>
+    </section>
+
+    <!-- Activity -->
+    <section class="card" aria-labelledby="h-act">
+      <div class="card-head">
+        <h2 id="h-act">Recent activity</h2>
+        <div class="seg" role="group" aria-label="Filter activity">
+          <button type="button" data-f="changes" aria-pressed="true">Changes</button>
+          <button type="button" data-f="all" aria-pressed="false">Everything</button>
+        </div>
+      </div>
+      <ul class="acts" id="acts"></ul>
+    </section>
+
+    <details class="more">
+      <summary>Change history</summary>
+      <div class="card" style="margin-top:8px">
+        <div id="history" class="tiny"></div>
+        <button class="ghost" id="reset" style="margin-top:14px">Reset all rules to the original defaults</button>
+      </div>
+    </details>
   </div>
 </div>
 
-<div class="savebar hide" id="savebar">
-  <span class="msg">You have unsaved changes</span>
-  <button class="ghost" id="discard">Discard</button>
-  <button id="save">Save changes</button>
+<div class="savebar hide" id="savebar" role="region" aria-label="Unsaved changes">
+  <ul id="diffs"></ul>
+  <div class="in">
+    <span class="msg" id="saveMsg"></span>
+    <button class="ghost" id="discard">Discard</button>
+    <button id="save">Save changes</button>
+  </div>
 </div>
+<div class="toast hide" id="toast" role="status"></div>
 
 <script>
 const API = '/tiktok-router/api/';
-const MODE_LABELS = { off: 'Leave alone', person: 'Always assign…', review: 'Review rule', edit: 'Edit rule' };
-let saved = null;     // rules as last loaded/saved
-let rules = null;     // working copy
-let members = [], statuses = [], formats = [], defaults = null;
+const STAGE_HINTS = { film: 'Follows the weekly filming rotation.' };
+let saved = null, rules = null;
+let members = [], statuses = [], formats = [];
+let openStage = null, logFilter = 'changes', lastLog = [], lastSummary = {};
 
+// ---------- utilities ----------
 async function api(path, opts = {}) {
   if (opts.body && typeof opts.body !== 'string') {
     opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -160,196 +264,380 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
-
+const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const nameOf = (id) => {
-  if (id == null) return 'nobody';
-  const m = members.find((x) => x.id === Number(id));
-  return m ? m.name : `user ${id}`;
-};
-function fmtTime(ts) {
+const dirty = () => rules && JSON.stringify(rules) !== JSON.stringify(saved);
+const member = (id) => members.find((m) => m.id === Number(id));
+const nameOf = (id) => (id == null ? 'nobody' : member(id)?.name || `user ${id}`);
+const firstName = (id) => nameOf(id).split(/\s+/)[0];
+
+function relTime(ts) {
   if (!ts) return '';
-  const d = new Date(ts);
-  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const mins = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return `${h} hr ago`;
+  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.remove('hide');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hide'), 3500);
+}
+function showError(msg) { $('error').textContent = msg || ''; $('error').classList.toggle('hide', !msg); }
+
+// ---------- people ----------
+function avatar(id) {
+  const m = member(id);
+  if (m?.picture) return `<img class="av" src="${esc(m.picture)}" alt="">`;
+  const name = nameOf(id);
+  const initials = name.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+  const hue = (Number(id) * 47) % 360;
+  return `<span class="av" style="background:hsl(${hue} 55% 45%)" aria-hidden="true">${esc(initials)}</span>`;
+}
+function who(id, note) {
+  if (id == null) return `<span class="nobody">Nobody yet</span>`;
+  return `<span class="who">${avatar(id)}${esc(nameOf(id))}${note ? ` <span class="note">${esc(note)}</span>` : ''}</span>`;
 }
 
-function showError(msg) {
-  const el = document.getElementById('error');
-  el.textContent = msg; el.classList.toggle('hide', !msg);
+// People already used in this workflow come first; everyone else below.
+function usedIds() {
+  const ids = new Set();
+  for (const s of Object.values(rules.stages)) if (s.mode === 'person' && s.owner != null) ids.add(s.owner);
+  for (const v of [rules.review.writer, rules.review.then, rules.review.otherwise, rules.edit.then, rules.edit.otherwise, rules.roadblock.notify]) if (v != null) ids.add(v);
+  return ids;
 }
-
-// A people <select>. Keeps an id that isn't in the member list visible rather than silently dropping it.
-function personSelect(value, onChange, { allowNone = true } = {}) {
+function personSelect(value, onChange, { label, noneLabel = 'Nobody (skip this stage)' } = {}) {
   const sel = document.createElement('select');
-  const opts = [];
-  if (allowNone) opts.push(`<option value="">— nobody (skip) —</option>`);
-  const known = members.some((m) => m.id === Number(value));
-  if (value != null && !known) opts.push(`<option value="${esc(value)}">user ${esc(value)} (not in workspace)</option>`);
-  for (const m of members) opts.push(`<option value="${m.id}">${esc(m.name)}</option>`);
-  sel.innerHTML = opts.join('');
+  if (label) sel.setAttribute('aria-label', label);
+  const used = usedIds();
+  const opt = (m) => `<option value="${m.id}">${esc(m.name)}</option>`;
+  const team = members.filter((m) => used.has(m.id));
+  const rest = members.filter((m) => !used.has(m.id));
+  let html = `<option value="">${esc(noneLabel)}</option>`;
+  if (value != null && !member(value)) html += `<option value="${esc(value)}">user ${esc(value)} (not in workspace)</option>`;
+  html += team.length ? `<optgroup label="In this workflow">${team.map(opt).join('')}</optgroup><optgroup label="Everyone else">${rest.map(opt).join('')}</optgroup>` : members.map(opt).join('');
+  sel.innerHTML = html;
   sel.value = value == null ? '' : String(value);
   sel.addEventListener('change', () => onChange(sel.value === '' ? null : Number(sel.value)));
   return sel;
 }
-function mount(id, el) { const host = document.getElementById(id); host.replaceChildren(el); }
+const mount = (id, el) => $(id).replaceChildren(el);
 
+// ---------- describing rules ----------
 function stageOrder() {
   const names = [...statuses];
   for (const s of Object.keys(rules.stages)) if (!names.includes(s)) names.push(s);
   return names;
 }
+const cfgOf = (r, stage) => r.stages[stage] || { mode: 'off' };
+const formatList = (r) => r.edit.formats.join(', ') || 'no Formats picked';
 
-function describe(stage) {
-  const s = rules.stages[stage] || { mode: 'off' };
-  if (s.mode === 'off') return 'Assignees stay as they are.';
-  if (s.mode === 'person') return s.owner == null ? 'Skipped until someone is picked.' : '';
-  if (s.mode === 'review') return `${nameOf(rules.review.then)} if ${nameOf(rules.review.writer)} wrote it, otherwise ${nameOf(rules.review.otherwise)}.`;
-  if (s.mode === 'edit') return `${nameOf(rules.edit.then)} for ${rules.edit.formats.join(' / ') || 'no formats'}, otherwise ${nameOf(rules.edit.otherwise)}.`;
+function ownerHTML(stage) {
+  const c = cfgOf(rules, stage);
+  if (c.mode === 'off') return `<span class="offtext">Not changed. ${esc(STAGE_HINTS[stage] || 'Assignees stay as they are.')}</span>`;
+  if (c.mode === 'person') return c.owner == null ? `<span class="nobody">Nobody yet</span> <span class="note">Cards keep their current assignees</span>` : who(c.owner);
+  if (c.mode === 'review') return who(rules.review.then, `if ${firstName(rules.review.writer)} wrote it`) + who(rules.review.otherwise, 'otherwise');
+  if (c.mode === 'edit') return who(rules.edit.then, rules.edit.formats.join(', ') || 'no Formats') + who(rules.edit.otherwise, 'everything else');
+}
+// Plain text, for the change summary.
+function stageText(r, stage) {
+  const c = cfgOf(r, stage);
+  if (c.mode === 'off') return 'not changed';
+  if (c.mode === 'person') return c.owner == null ? 'nobody' : nameOf(c.owner);
+  if (c.mode === 'review') return 'Nurse review rule';
+  if (c.mode === 'edit') return 'Editor by Format rule';
+}
+function diffs() {
+  const out = [];
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  for (const st of stageOrder()) {
+    const a = stageText(saved, st), b = stageText(rules, st);
+    if (a !== b) out.push(`<b>${esc(cap(st))}:</b> ${esc(a)} → ${esc(b)}`);
+  }
+  const rv = (r) => `${nameOf(r.review.then)} if ${nameOf(r.review.writer)} wrote it, otherwise ${nameOf(r.review.otherwise)}`;
+  if (rv(saved) !== rv(rules)) out.push(`<b>Nurse review:</b> ${esc(rv(rules))}`);
+  const ed = (r) => `${nameOf(r.edit.then)} for ${formatList(r)}, otherwise ${nameOf(r.edit.otherwise)}`;
+  if (ed(saved) !== ed(rules)) out.push(`<b>Editor by Format:</b> ${esc(ed(rules))}`);
+  const rb = (r) => r.roadblock.enabled === false ? 'off' : `notify ${nameOf(r.roadblock.notify)}`;
+  if (rb(saved) !== rb(rules)) out.push(`<b>Roadblock:</b> ${esc(rb(saved))} → ${esc(rb(rules))}`);
+  if ((saved.roadblock.comment || '') !== (rules.roadblock.comment || '')) out.push('<b>Roadblock:</b> comment text edited');
+  return out;
 }
 
-function render() {
-  // Stages
-  const host = document.getElementById('stages');
+// ---------- pipeline ----------
+const MODES = [
+  ['person', 'One person', () => 'Always assign the same person.'],
+  ['review', 'Nurse review', () => `${firstName(rules.review.then)} if ${firstName(rules.review.writer)} wrote it, otherwise ${firstName(rules.review.otherwise)}.`],
+  ['edit', 'Editor by Format', () => `${firstName(rules.edit.then)} for ${formatList(rules)}, otherwise ${firstName(rules.edit.otherwise)}.`],
+  ['off', "Don't change", () => "Leave the card's assignees as they are."],
+];
+
+function renderPipe() {
+  const host = $('pipe');
   host.replaceChildren();
-  for (const stage of stageOrder()) {
-    const cfg = rules.stages[stage] || { mode: 'off' };
-    const row = document.createElement('div');
-    row.className = 'stage' + (cfg.mode === 'off' ? ' off' : '');
-    const name = document.createElement('div'); name.className = 'name'; name.textContent = stage;
-    const ctl = document.createElement('div'); ctl.className = 'ctl';
-    const mode = document.createElement('select');
-    mode.innerHTML = Object.entries(MODE_LABELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
-    mode.value = cfg.mode;
-    mode.addEventListener('change', () => {
-      rules.stages[stage] = mode.value === 'person' ? { mode: 'person', owner: cfg.owner ?? null } : { mode: mode.value };
+  stageOrder().forEach((stage, i) => {
+    const c = cfgOf(rules, stage);
+    const changed = stageText(saved, stage) !== stageText(rules, stage);
+    const li = document.createElement('li');
+    li.className = 'stage' + (c.mode === 'off' ? ' off' : '') + (openStage === stage ? ' open' : '');
+    li.innerHTML = `<div class="srow">
+        <span class="num">${i + 1}</span>
+        <span class="sname">${esc(stage)}${changed ? '<span class="edited">Edited</span>' : ''}</span>
+        <span class="sowner">${ownerHTML(stage)}</span>
+        <button class="link" type="button" aria-expanded="${openStage === stage}">${openStage === stage ? 'Done' : 'Change'}</button>
+      </div>`;
+    li.querySelector('button').addEventListener('click', () => { openStage = openStage === stage ? null : stage; renderPipe(); });
+    if (openStage === stage) li.append(stageEditor(stage));
+    host.append(li);
+  });
+}
+
+function stageEditor(stage) {
+  const c = cfgOf(rules, stage);
+  const box = document.createElement('div');
+  box.className = 'editor';
+  const modes = document.createElement('div');
+  modes.className = 'modes';
+  modes.setAttribute('role', 'radiogroup');
+  modes.setAttribute('aria-label', `Who gets ${stage}`);
+  for (const [key, title, desc] of MODES) {
+    const lab = document.createElement('label');
+    lab.className = 'mode' + (c.mode === key ? ' on' : '');
+    lab.innerHTML = `<input type="radio" name="mode-${esc(stage)}" value="${key}" ${c.mode === key ? 'checked' : ''}><b>${esc(title)}</b><div class="d">${esc(desc())}</div>`;
+    lab.querySelector('input').addEventListener('change', () => {
+      rules.stages[stage] = key === 'person' ? { mode: 'person', owner: c.owner ?? null } : { mode: key };
       changed();
     });
-    ctl.append(mode);
-    if (cfg.mode === 'person') ctl.append(personSelect(cfg.owner, (v) => { rules.stages[stage] = { mode: 'person', owner: v }; changed(); }));
-    const result = document.createElement('span'); result.className = 'result'; result.textContent = describe(stage);
-    ctl.append(result);
-    row.append(name, ctl);
-    host.append(row);
+    modes.append(lab);
   }
+  box.append(modes);
+  if (c.mode === 'person') {
+    const pick = document.createElement('div');
+    pick.className = 'pick';
+    pick.append('Assign ', personSelect(c.owner, (v) => { rules.stages[stage] = { mode: 'person', owner: v }; changed(); }, { label: `Owner of ${stage}` }));
+    box.append(pick);
+  }
+  if (c.mode === 'review' || c.mode === 'edit') {
+    const p = document.createElement('p');
+    p.className = 'sub tiny';
+    p.innerHTML = `To change who that rule picks, edit <a href="#h-rules">Shared rules</a>. It also changes the other stages that use it.`;
+    box.append(p);
+  }
+  return box;
+}
 
-  // Review + edit rules
-  const using = (m) => stageOrder().filter((s) => rules.stages[s]?.mode === m);
-  const usesText = (m) => { const u = using(m); return u.length ? `Used by: ${u.join(', ')}` : 'Not used by any stage right now.'; };
-  document.getElementById('reviewUses').textContent = usesText('review');
-  document.getElementById('editUses').textContent = usesText('edit');
-  mount('reviewWriter', personSelect(rules.review.writer, (v) => { rules.review.writer = v; changed(); }));
-  mount('reviewThen', personSelect(rules.review.then, (v) => { rules.review.then = v; changed(); }));
-  mount('reviewOtherwise', personSelect(rules.review.otherwise, (v) => { rules.review.otherwise = v; changed(); }));
-  mount('editThen', personSelect(rules.edit.then, (v) => { rules.edit.then = v; changed(); }));
-  mount('editOtherwise', personSelect(rules.edit.otherwise, (v) => { rules.edit.otherwise = v; changed(); }));
+// ---------- shared rules ----------
+function renderRules() {
+  const using = (m) => stageOrder().filter((s) => cfgOf(rules, s).mode === m);
+  const usesText = (m) => { const u = using(m); return u.length ? 'Used by ' + u.join(', ') : 'Not used by any stage right now'; };
+  $('reviewUses').textContent = usesText('review');
+  $('editUses').textContent = usesText('edit');
+  mount('reviewWriter', personSelect(rules.review.writer, (v) => { rules.review.writer = v; changed(); }, { label: 'Writer', noneLabel: 'nobody' }));
+  mount('reviewThen', personSelect(rules.review.then, (v) => { rules.review.then = v; changed(); }, { label: 'Reviewer for that writer' }));
+  mount('reviewOtherwise', personSelect(rules.review.otherwise, (v) => { rules.review.otherwise = v; changed(); }, { label: 'Reviewer otherwise' }));
+  mount('editThen', personSelect(rules.edit.then, (v) => { rules.edit.then = v; changed(); }, { label: 'Editor for the picked Formats' }));
+  mount('editOtherwise', personSelect(rules.edit.otherwise, (v) => { rules.edit.otherwise = v; changed(); }, { label: 'Editor otherwise' }));
 
-  const chips = document.getElementById('editFormats');
+  const chips = $('editFormats');
   chips.replaceChildren();
-  const allFormats = [...formats];
-  for (const f of rules.edit.formats) if (!allFormats.some((x) => x.toLowerCase() === f.toLowerCase())) allFormats.push(f);
-  for (const f of allFormats) {
+  const all = [...formats];
+  for (const f of rules.edit.formats) if (!all.some((x) => x.toLowerCase() === f.toLowerCase())) all.push(f);
+  for (const f of all) {
     const on = rules.edit.formats.some((x) => x.toLowerCase() === f.toLowerCase());
-    const chip = document.createElement('label');
-    chip.className = 'chip' + (on ? ' on' : '');
-    chip.innerHTML = `<input type="checkbox" ${on ? 'checked' : ''}>${esc(f)}`;
-    chip.querySelector('input').addEventListener('change', (e) => {
-      rules.edit.formats = e.target.checked
-        ? [...rules.edit.formats, f]
-        : rules.edit.formats.filter((x) => x.toLowerCase() !== f.toLowerCase());
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.textContent = f; b.setAttribute('aria-pressed', on);
+    b.addEventListener('click', () => {
+      rules.edit.formats = on ? rules.edit.formats.filter((x) => x.toLowerCase() !== f.toLowerCase()) : [...rules.edit.formats, f];
       changed();
+      chips.querySelector(`[data-f="${CSS.escape(f)}"]`)?.focus();
     });
-    chips.append(chip);
+    b.dataset.f = f;
+    chips.append(b);
   }
-
-  // Roadblock
-  document.getElementById('rbEnabled').checked = rules.roadblock.enabled !== false;
-  mount('rbNotify', personSelect(rules.roadblock.notify, (v) => { rules.roadblock.notify = v; changed(); }));
-  document.getElementById('rbComment').value = rules.roadblock.comment || '';
-
-  document.getElementById('savebar').classList.toggle('hide', JSON.stringify(rules) === JSON.stringify(saved));
 }
 
-function changed() { render(); }
+// ---------- roadblock ----------
+function renderRoadblock() {
+  const rb = rules.roadblock;
+  $('rbEnabled').checked = rb.enabled !== false;
+  $('rbBody').classList.toggle('hide', rb.enabled === false);
+  mount('rbNotify', personSelect(rb.notify, (v) => {
+    rb.notify = v; rb.notify_name = v == null ? null : nameOf(v);
+    changed();
+  }, { label: 'Person to notify', noneLabel: 'nobody' }));
+  if (document.activeElement !== $('rbComment')) $('rbComment').value = rb.comment || '';
+  renderCommentPreview();
+}
+function renderCommentPreview() {
+  const rb = rules.roadblock;
+  const first = (rb.notify_name || nameOf(rb.notify)).split(/\s+/)[0];
+  const text = (rb.comment || '').replaceAll('{person}', first || 'there');
+  const hint = (rb.comment || '').includes('{person}') ? '' : ' Tip: type {person} to insert the notified person\'s first name.';
+  $('rbPreview').textContent = `Posts as: “${text}”.${hint}`;
+}
+$('rbEnabled').addEventListener('change', (e) => { rules.roadblock.enabled = e.target.checked; changed(); });
+$('rbComment').addEventListener('input', (e) => { rules.roadblock.comment = e.target.value; renderCommentPreview(); renderSaveBar(); });
 
-document.getElementById('rbEnabled').addEventListener('change', (e) => { rules.roadblock.enabled = e.target.checked; changed(); });
-document.getElementById('rbComment').addEventListener('input', (e) => {
-  rules.roadblock.comment = e.target.value;
-  document.getElementById('savebar').classList.toggle('hide', JSON.stringify(rules) === JSON.stringify(saved));
-});
+// ---------- simulator ----------
+function renderSimInputs() {
+  const w = $('simWriter'), f = $('simFormat');
+  if (!w.options.length) {
+    const writers = [rules.review.writer, ...members.map((m) => m.id)].filter((v, i, a) => v != null && a.indexOf(v) === i);
+    w.innerHTML = `<option value="">No Writer</option>` + writers.map((id) => `<option value="${id}">${esc(nameOf(id))}</option>`).join('');
+    w.value = rules.review.writer == null ? '' : String(rules.review.writer);
+    f.innerHTML = `<option value="">No Format</option>` + formats.map((x) => `<option>${esc(x)}</option>`).join('');
+    f.value = rules.edit.formats[0] || '';
+    w.addEventListener('change', runSim); f.addEventListener('change', runSim);
+  }
+}
+let simSeq = 0;
+async function runSim() {
+  const seq = ++simSeq;
+  $('simUnsaved').classList.toggle('hide', !dirty());
+  try {
+    const { preview } = await api('preview', {
+      method: 'POST',
+      body: { rules, stages: stageOrder(), card: { writerId: $('simWriter').value || null, format: $('simFormat').value || null } },
+    });
+    if (seq !== simSeq) return; // a newer run superseded this one
+    $('journey').innerHTML = preview.map((p) => `<li><div class="st">${esc(p.stage)}</div>${
+      p.action === 'assign' ? who(p.owner) : `<span class="skip">${cfgOf(rules, p.stage).mode === 'off' ? 'Not changed' : 'Nobody yet'}</span>`
+    }</li>`).join('');
+  } catch (e) {
+    if (seq === simSeq) $('journey').innerHTML = `<li class="skip">${esc(e.message)}</li>`;
+  }
+}
+let simTimer;
+const scheduleSim = () => { clearTimeout(simTimer); simTimer = setTimeout(runSim, 200); };
 
+// ---------- save / discard ----------
+function renderSaveBar() {
+  const d = dirty() ? diffs() : [];
+  const on = dirty();
+  $('savebar').classList.toggle('hide', !on);
+  $('diffs').innerHTML = d.map((x) => `<li>${x}</li>`).join('');
+  $('saveMsg').textContent = d.length === 1 ? '1 unsaved change' : `${d.length || 'Some'} unsaved changes`;
+}
 function setSavedInfo(d) {
-  document.getElementById('savedInfo').textContent = d.is_default
-    ? 'Using the original default rules. Nobody has changed them yet.'
-    : `Last changed ${fmtTime(d.updated_at)}${d.updated_by ? ' by ' + d.updated_by : ''}.`;
+  $('savedInfo').textContent = d.is_default ? 'Original rules · nobody has changed them yet'
+    : `Last changed ${relTime(d.updated_at)}${d.updated_by ? ' by ' + d.updated_by.split('@')[0] : ''}`;
 }
+function changed() { renderPipe(); renderRules(); renderRoadblock(); renderSaveBar(); scheduleSim(); }
 
-document.getElementById('save').addEventListener('click', async (e) => {
-  e.target.disabled = true; showError('');
+$('save').addEventListener('click', async (e) => {
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'Saving…'; showError('');
   try {
     const d = await api('rules', { method: 'PUT', body: { rules } });
-    saved = clone(d.rules); rules = clone(d.rules);
-    setSavedInfo(d); render(); loadHistory();
+    saved = clone(d.rules); rules = clone(d.rules); openStage = null;
+    setSavedInfo(d); changed(); loadHistory();
+    toast('Saved. Applies to the next card that moves.');
   } catch (err) { showError('Could not save: ' + err.message); }
-  e.target.disabled = false;
+  btn.disabled = false; btn.textContent = 'Save changes';
 });
-document.getElementById('discard').addEventListener('click', () => { rules = clone(saved); render(); });
-document.getElementById('reset').addEventListener('click', async () => {
-  if (!confirm('Put every rule back to the original defaults? This replaces the current rules for everyone.')) return;
+$('discard').addEventListener('click', () => { rules = clone(saved); openStage = null; changed(); toast('Changes discarded'); });
+$('reset').addEventListener('click', async () => {
+  if (!confirm('Put every rule back to the original defaults? This changes the live rules for everyone.')) return;
   showError('');
   try {
     const d = await api('rules/reset', { method: 'POST', body: {} });
-    saved = clone(d.rules); rules = clone(d.rules);
-    setSavedInfo(d); render(); loadHistory();
+    saved = clone(d.rules); rules = clone(d.rules); openStage = null;
+    setSavedInfo(d); changed(); loadHistory(); toast('Rules reset to the defaults');
   } catch (err) { showError('Could not reset: ' + err.message); }
 });
-window.addEventListener('beforeunload', (e) => {
-  if (rules && JSON.stringify(rules) !== JSON.stringify(saved)) { e.preventDefault(); e.returnValue = ''; }
-});
+window.addEventListener('beforeunload', (e) => { if (dirty()) { e.preventDefault(); e.returnValue = ''; } });
 
-// Swap user ids in log lines for names: "assigned 89106216; removed 89106214".
-function humanAction(a) {
-  return esc(a)
-    .replace(/(assigned|assigned to|removed|comment assigned to) ([\d,]+)/g, (_, verb, ids) =>
-      `${verb} ${ids.split(',').map((id) => esc(nameOf(id))).join(', ')}`)
-    .replace(/^error:/, '<span class="err">error:</span>');
+// ---------- activity ----------
+function classify(a) {
+  if (/^assigned /.test(a)) return 'assign';
+  if (/^roadblock: priority/.test(a)) return 'block';
+  if (/^error:/.test(a)) return 'err';
+  return 'none';
 }
-
+function activityText(r) {
+  const a = r.action;
+  let m;
+  if ((m = a.match(/^assigned (\d+); removed (.+)$/))) {
+    const removed = m[2] === 'none' ? '' : ` (removed ${m[2].split(',').map(nameOf).join(', ')})`;
+    return `Assigned to <b>${esc(nameOf(m[1]))}</b>${esc(removed)}`;
+  }
+  if ((m = a.match(/^already assigned to (\d+)/))) return `Already with ${esc(nameOf(m[1]))}, so nothing changed`;
+  if ((m = a.match(/^roadblock: priority raised, comment assigned to (\d+)/))) return `Roadblock: priority set to High, ${esc(nameOf(m[1]))} asked to help`;
+  if (/^roadblock: priority/.test(a)) return 'Roadblock: priority set to High';
+  if (/^left alone/.test(a)) return 'Not routed at this stage';
+  if (/^skipped: no owner/.test(a)) return 'Skipped: nobody is set for this stage';
+  if (/^error:/.test(a)) return `Something went wrong: ${esc(a.replace(/^error:\s*/, ''))}`;
+  if (/^ignored: task is in list/.test(a)) return 'Ignored: card is in a different list';
+  return esc(a.charAt(0).toUpperCase() + a.slice(1));
+}
+const TAGS = { assign: 'Reassigned', block: 'Roadblock', err: 'Error', none: 'No change' };
+function renderActivity() {
+  const rows = logFilter === 'changes' ? lastLog.filter((r) => classify(r.action) !== 'none') : lastLog;
+  $('acts').innerHTML = rows.length ? rows.slice(0, 60).map((r) => {
+    const k = classify(r.action);
+    const name = r.task_name || `Card ${r.task_id}`;
+    const link = /^[a-z0-9]+$/i.test(r.task_id) ? `<a class="cardname" href="https://app.clickup.com/t/${r.task_id}" target="_blank" rel="noopener">${esc(name)}</a>` : `<span class="cardname">${esc(name)}</span>`;
+    return `<li class="act ${k === 'err' ? 'err' : ''}"><span class="when" title="${esc(new Date(r.at).toLocaleString())}">${esc(relTime(r.at))}</span>
+      <div class="what"><span class="tag ${k}">${TAGS[k]}</span>${link}${r.status ? ` · <span class="stg">${esc(r.status)}</span>` : ''}<br>${activityText(r)}</div></li>`;
+  }).join('') : `<li class="empty">${lastLog.length ? 'No reassignments yet. Switch to “Everything” to see the skips.' : 'Nothing yet. Move a card in TikTok Production and it will show up here.'}</li>`;
+}
+function renderStatus() {
+  const s = lastSummary || {};
+  const el = $('status');
+  let dot = 'ok', text;
+  if (!s.last_at) { dot = ''; text = 'Connected to ClickUp. No cards have moved since the router went live.'; }
+  else if (Number(s.errors_24h) > 0) { dot = 'bad'; text = `Working, but ${s.errors_24h} error${s.errors_24h > 1 ? 's' : ''} in the last 24 hours. See Recent activity.`; }
+  else text = `Working · last card moved ${relTime(s.last_at)} · ${s.events_24h || 0} event${Number(s.events_24h) === 1 ? '' : 's'} in the last 24 hours`;
+  el.innerHTML = `<span class="dot ${dot}"></span><span>${esc(text)}</span>`;
+}
 async function loadLog() {
   try {
-    const { log } = await api('log?limit=50');
-    document.getElementById('log').innerHTML = log.length
-      ? log.map((r) => `<tr><td class="when">${fmtTime(r.at)}</td>
-          <td>${/^[a-z0-9]+$/i.test(r.task_id) ? `<a href="https://app.clickup.com/t/${r.task_id}" target="_blank" rel="noopener">${esc(r.task_id)}</a>` : esc(r.task_id)}</td>
-          <td>${esc(r.status || '')}</td><td>${humanAction(r.action)}</td></tr>`).join('')
-      : `<tr><td colspan="4" class="muted">Nothing yet. Move a card in TikTok Production.</td></tr>`;
-  } catch (err) { document.getElementById('log').innerHTML = `<tr><td colspan="4" class="err">${esc(err.message)}</td></tr>`; }
+    const d = await api('log?limit=150');
+    lastLog = d.log; lastSummary = d.summary;
+    renderActivity(); renderStatus();
+  } catch (err) {
+    $('acts').innerHTML = `<li class="empty">${esc(err.message)}</li>`;
+  }
 }
+document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => {
+  logFilter = b.dataset.f;
+  document.querySelectorAll('.seg button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  renderActivity();
+}));
+setInterval(() => { if (document.visibilityState === 'visible') loadLog(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadLog(); });
+
 async function loadHistory() {
   try {
     const { history } = await api('history');
-    document.getElementById('history').innerHTML = history.length
-      ? history.map((h) => `<div>${esc(fmtTime(h.at))} by ${esc(h.by || 'unknown')}</div>`).join('')
-      : '<span class="muted">No changes yet.</span>';
+    $('history').innerHTML = history.length
+      ? history.map((h) => `<div style="padding:3px 0">${esc(new Date(h.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))} · ${esc(h.by || 'unknown')}</div>`).join('')
+      : '<span class="muted">No one has changed the rules yet.</span>';
   } catch { /* non-essential */ }
 }
-document.getElementById('refreshLog').addEventListener('click', loadLog);
 
+// ---------- boot ----------
 (async function init() {
   try {
     const [r, cu] = await Promise.all([api('rules'), api('clickup').catch((e) => ({ error: e.message }))]);
-    defaults = r.defaults;
-    if (cu.error) showError('Couldn\'t load names from ClickUp (' + cu.error + '). People show as ids for now.');
+    if (cu.error) showError("Couldn't load names from ClickUp (" + cu.error + "). People show as ID numbers for now.");
     members = cu.members || [];
-    statuses = cu.statuses && cu.statuses.length ? cu.statuses : r.stages;
+    statuses = cu.statuses?.length ? cu.statuses : r.stages;
     formats = cu.formats || [];
     saved = clone(r.rules); rules = clone(r.rules);
+    // Rules saved before notify_name existed: fill it in on both copies so it doesn't count as a change.
+    if (rules.roadblock.notify != null && !rules.roadblock.notify_name) {
+      rules.roadblock.notify_name = saved.roadblock.notify_name = nameOf(rules.roadblock.notify);
+    }
     setSavedInfo(r);
-    document.getElementById('loading').classList.add('hide');
-    document.getElementById('app').classList.remove('hide');
-    render(); loadLog(); loadHistory();
+    $('loading').classList.add('hide');
+    $('app').classList.remove('hide');
+    renderSimInputs();
+    changed();
+    loadLog(); loadHistory();
   } catch (err) {
-    document.getElementById('loading').classList.add('hide');
+    $('loading').classList.add('hide');
     showError('Could not load the rules: ' + err.message);
   }
 })();
