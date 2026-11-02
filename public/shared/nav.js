@@ -37,6 +37,7 @@
     { href: "/cx-agent/", label: "CX Agent" },
     { href: "/stage/", label: "Stage Timing" },
     { href: "/clickup-automation/", label: "Automation" },
+    { href: "/tiktok-router/", label: "TikTok Router" },
     { href: "/campaign-router/", label: "Campaign Router" },
   ];
 
@@ -81,7 +82,7 @@
 
   function build() {
     // Remove any pre-existing top nav (old hard-coded ones, or a prior inject).
-    var moduleLink = /href="\/(calendar|inventory|3pl|med-supplies|tracker|video-review|social|ambassadors|growth|icp|cx-agent|stage|campaign-router|clickup-automation)\/?"/;
+    var moduleLink = /href="\/(calendar|inventory|3pl|med-supplies|tracker|video-review|social|ambassadors|growth|icp|cx-agent|stage|campaign-router|clickup-automation|tiktok-router)\/?"/;
     Array.prototype.slice.call(document.querySelectorAll("nav")).forEach(function (n) {
       if (n.classList.contains("nitm-nav")) { n.remove(); return; }
       if (n.classList.contains("top-nav") || moduleLink.test(n.innerHTML)) n.remove();

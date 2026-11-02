@@ -4,7 +4,8 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { handleTikTokRouterRoutes, WEBHOOK_PATH } from "../src/tiktok-router/index.js";
-import { PEOPLE, FIELDS, LIST_ID, ROADBLOCK } from "../src/tiktok-router/routing.js";
+import { PEOPLE, FIELDS, LIST_ID, DEFAULT_RULES, normalizeRules } from "../src/tiktok-router/routing.js";
+const ROADBLOCK = DEFAULT_RULES.roadblock;
 
 const SECRET = "test-secret";
 const FORMAT_OPTIONS = [
@@ -13,12 +14,14 @@ const FORMAT_OPTIONS = [
   { id: "opt-trend", name: "Trend", orderindex: 6 },
 ];
 
-let calls, logRows, currentTask;
+let calls, logRows, currentTask, rulesRow, ruleChanges;
 
 beforeEach(() => {
   calls = [];
   logRows = [];
   currentTask = null;
+  rulesRow = null; // no saved rules -> DEFAULT_RULES
+  ruleChanges = [];
   globalThis.fetch = async (url, opts = {}) => {
     const method = opts.method || "GET";
     calls.push({ url: String(url), method, body: opts.body ? JSON.parse(opts.body) : null });
@@ -27,21 +30,30 @@ beforeEach(() => {
   };
 });
 
-const db = {
-  prepare(sql) {
-    return {
-      bind: (...args) => ({
-        run: async () => {
-          if (sql.startsWith("INSERT INTO tiktok_routing_log")) {
-            const [at, task_id, event, status, action] = args;
-            logRows.push({ at, task_id, event, status, action });
-          }
-        },
-      }),
-      run: async () => {},
-    };
-  },
-};
+// Fake D1: just enough SQL-sniffing for the tables this module touches.
+function stmt(sql, args = []) {
+  return {
+    bind: (...a) => stmt(sql, a),
+    run: async () => {
+      if (sql.startsWith("INSERT INTO tiktok_routing_log")) {
+        const [at, task_id, event, status, action] = args;
+        logRows.push({ at, task_id, event, status, action });
+      } else if (sql.startsWith("INSERT INTO tiktok_router_rules")) {
+        const [rules, updated_at, updated_by] = args;
+        rulesRow = { rules, updated_at, updated_by };
+      } else if (sql.startsWith("INSERT INTO tiktok_router_rule_changes")) {
+        ruleChanges.push(args);
+      } else if (sql.startsWith("DELETE FROM tiktok_router_rules")) {
+        rulesRow = null;
+      }
+    },
+    first: async () => (sql.includes("FROM tiktok_router_rules") ? rulesRow : null),
+    all: async () => ({ results: sql.includes("FROM tiktok_routing_log") ? logRows.slice().reverse() : [] }),
+  };
+}
+const db = { prepare: (sql) => stmt(sql) };
+const saveRules = (r) => { rulesRow = { rules: JSON.stringify(normalizeRules(r)), updated_at: "t", updated_by: "x" }; };
+const withRules = (mutate) => { const r = structuredClone(DEFAULT_RULES); mutate(r); saveRules(r); };
 const env = { CLICKUP_TOKEN: "pk_test", TIKTOK_ROUTER_WEBHOOK_SECRET: SECRET, DB: db };
 
 function card(status, { writer = null, format, assignees = [], tags = [], list = LIST_ID } = {}) {
@@ -206,7 +218,7 @@ test("roadblock newly added -> priority High + comment assigned to Avery", async
     assignee: PEOPLE.avery,
     notify_all: false,
   });
-  assert.match(logRows.at(-1).action, /roadblock: priority high/);
+  assert.match(logRows.at(-1).action, /roadblock: priority raised/);
 });
 
 test("roadblock already present (another tag added) -> nothing", async () => {
@@ -261,4 +273,119 @@ test("ClickUp error is logged, response is still 200", async () => {
 test("other paths fall through (null)", async () => {
   const res = await handleTikTokRouterRoutes(new Request("https://x/clickup-automation/webhook"), env, {}, "/clickup-automation/webhook");
   assert.equal(res, null);
+});
+
+// ---- rules saved from the page ----------------------------------------------
+
+test("saved rules override the defaults: Voiceover -> Karli", async () => {
+  withRules((r) => { r.stages.voiceover = { mode: "person", owner: PEOPLE.karli }; });
+  await deliver(card("voiceover", { assignees: [PEOPLE.kristine] }));
+  assert.deepEqual(assignedTo(), { add: [PEOPLE.karli], rem: [PEOPLE.kristine] });
+});
+
+test("a stage switched to Leave alone is not touched", async () => {
+  withRules((r) => { r.stages.package = { mode: "off" }; });
+  await deliver(card("package", { assignees: [PEOPLE.gaby] }));
+  assert.equal(puts().length, 0);
+});
+
+test("a stage moved onto the review rule follows it", async () => {
+  withRules((r) => { r.stages.film = { mode: "review" }; });
+  await deliver(card("film", { writer: PEOPLE.diana }));
+  assert.deepEqual(assignedTo(), { add: [PEOPLE.karli], rem: [] });
+});
+
+test("edit formats are editable: adding Quiz sends Quiz to Tia", async () => {
+  withRules((r) => { r.edit.formats = ["Funny", "Trend", "Quiz"]; });
+  await deliver(card("edit", { format: "opt-quiz" }));
+  assert.deepEqual(assignedTo(), { add: [PEOPLE.tia], rem: [] });
+});
+
+test("review rule people are editable", async () => {
+  withRules((r) => { r.review = { writer: PEOPLE.karli, then: PEOPLE.diana, otherwise: PEOPLE.karli }; });
+  await deliver(card("final review", { writer: PEOPLE.tia }));
+  assert.deepEqual(assignedTo(), { add: [PEOPLE.karli], rem: [] });
+});
+
+test("roadblock switched off -> no priority change, no comment", async () => {
+  withRules((r) => { r.roadblock.enabled = false; });
+  await deliver(card("edit", { tags: ["roadblock"] }), {
+    event: "taskTagUpdated",
+    history: [{ field: "tag", before: [], after: [{ name: "roadblock" }] }],
+  });
+  assert.equal(puts().length + comments().length, 0);
+});
+
+test("roadblock notify person + comment are editable", async () => {
+  withRules((r) => { r.roadblock.notify = PEOPLE.cass; r.roadblock.comment = "Help!"; });
+  await deliver(card("edit", { tags: ["roadblock"] }), {
+    event: "taskTagUpdated",
+    history: [{ field: "tag", before: [], after: [{ name: "roadblock" }] }],
+  });
+  assert.deepEqual(comments()[0].body, { comment_text: "Help!", assignee: PEOPLE.cass, notify_all: false });
+});
+
+test("normalizeRules rejects an unknown mode and a non-user owner", () => {
+  assert.throws(() => normalizeRules({ stages: { edit: { mode: "random" } } }), /Unknown setting/);
+  assert.throws(() => normalizeRules({ stages: { edit: { mode: "person", owner: "tia" } } }), /must be a ClickUp user/);
+  assert.equal(normalizeRules(DEFAULT_RULES).stages.prep.owner, null);
+});
+
+// ---- page API ------------------------------------------------------------------
+
+async function apiCall(sub, { method = "GET", body, host = "ops.anurseinthemaking.com", type = "application/json" } = {}) {
+  const path = `/tiktok-router/api/${sub}`;
+  const res = await handleTikTokRouterRoutes(
+    new Request(`https://${host}${path}`, {
+      method,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: { "Content-Type": type, "Cf-Access-Authenticated-User-Email": "mark@anurseinthemaking.com" },
+    }),
+    env,
+    { waitUntil() {} },
+    path
+  );
+  return { status: res.status, data: await res.json() };
+}
+
+test("API GET rules returns defaults before anyone saves", async () => {
+  const { status, data } = await apiCall("rules");
+  assert.equal(status, 200);
+  assert.equal(data.is_default, true);
+  assert.deepEqual(data.rules, DEFAULT_RULES);
+});
+
+test("API PUT rules saves, records who, and routing uses it immediately", async () => {
+  const r = structuredClone(DEFAULT_RULES);
+  r.stages.schedule = { mode: "person", owner: PEOPLE.tia };
+  const { status, data } = await apiCall("rules", { method: "PUT", body: { rules: r } });
+  assert.equal(status, 200);
+  assert.equal(data.updated_by, "mark@anurseinthemaking.com");
+  assert.equal(ruleChanges.length, 1);
+  await deliver(card("schedule", { assignees: [PEOPLE.cass] }));
+  assert.deepEqual(assignedTo(), { add: [PEOPLE.tia], rem: [PEOPLE.cass] });
+});
+
+test("API PUT with invalid rules -> 400, nothing saved", async () => {
+  const { status } = await apiCall("rules", { method: "PUT", body: { rules: { stages: { edit: { mode: "nope" } } } } });
+  assert.equal(status, 400);
+  assert.equal(rulesRow, null);
+});
+
+test("API reset puts the defaults back", async () => {
+  withRules((r) => { r.stages.package = { mode: "off" }; });
+  const { data } = await apiCall("rules/reset", { method: "POST", body: {} });
+  assert.equal(data.is_default, true);
+  assert.equal(rulesRow, null);
+});
+
+test("API refuses the workers.dev hostname (no Access gate there)", async () => {
+  const { status } = await apiCall("rules", { host: "ops-hub.benjamin-976.workers.dev" });
+  assert.equal(status, 403);
+});
+
+test("API refuses a non-JSON write (cross-site form)", async () => {
+  const { status } = await apiCall("rules", { method: "PUT", body: { rules: DEFAULT_RULES }, type: "text/plain" });
+  assert.equal(status, 415);
+  assert.equal(rulesRow, null);
 });

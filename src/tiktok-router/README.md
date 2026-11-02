@@ -17,19 +17,27 @@ The new owner replaces everyone else. Draft, Film, Posted and Cancelled are left
 alone. Adding the `roadblock` tag sets priority to High and posts a comment assigned to
 Avery.
 
-## Files
-
-- `src/tiktok-router/routing.js`: **the rules.** This is the only file you edit to change who owns what.
-- `src/tiktok-router/index.js`: the webhook, signature check, ClickUp calls and run log.
-- `migrations/0007_tiktok_routing_log.sql`: the run log table.
-- `tests/tiktok-router.test.js`: tests against a fake ClickUp.
-- `tools/tiktok-router/register-webhook.mjs`: one-time webhook setup.
-
 ## Change a rule
 
-1. Edit `src/tiktok-router/routing.js`. For example, to add Amber, replace `amber: null` with her ClickUp user id.
-2. Run `npm test`. If a test asserts the old rule, update that test.
-3. Commit, push, then run `npx wrangler deploy`.
+Open **https://ops.anurseinthemaking.com/tiktok-router/** (the Ops Hub nav has a "TikTok Router" link). For each stage you can pick:
+
+- Leave alone
+- Always assign one person
+- The review rule
+- The edit rule
+
+You can also edit the review rule, the edit rule (including which Formats count), and the roadblock tag settings. Click **Save changes**. Saves take effect on the next card move, with no deploy. Every save records who made it and when, and the page shows recent router activity.
+
+The page stores rules in D1 (`tiktok_router_rules`). Until someone saves, the router uses `DEFAULT_RULES` in `routing.js`, and **Reset** goes back to those. Editing `DEFAULT_RULES` only changes the starting point and what Reset restores. It doesn't change the live rules once someone has saved from the page.
+
+## Files
+
+- `src/tiktok-router/routing.js`: the default rules, the decision logic (`ownerFor`) and validation (`normalizeRules`).
+- `src/tiktok-router/index.js`: the webhook, signature check, ClickUp calls, run log and the page's API.
+- `public/tiktok-router/index.html`: the page.
+- `migrations/0007_tiktok_routing_log.sql` and `migrations/0008_tiktok_router_rules.sql`: the database tables.
+- `tests/tiktok-router.test.js`: tests against a fake ClickUp and a fake D1.
+- `tools/tiktok-router/register-webhook.mjs`: one-time webhook setup.
 
 ## Deploy and setup
 
@@ -55,4 +63,4 @@ Avery.
 
 ## Adding handlers later (AI PM checks, creative engine sync)
 
-Write an `async ({ env, event, task, stage, log }) => {}` function in `index.js` and add it to `HANDLERS` under the event it needs. For example, a "reel cover missing before leaving Titles" check would go under `taskStatusUpdated`. Put any rule data it needs in `routing.js`, or in its own config file next to it.
+Write an `async ({ env, event, task, stage, rules, log }) => {}` function in `index.js` and add it to `HANDLERS` under the event it needs. For example, a "reel cover missing before leaving Titles" check would go under `taskStatusUpdated`. Put any rule data it needs in `routing.js`, or in its own config file next to it.

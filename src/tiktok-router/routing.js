@@ -1,12 +1,16 @@
 // ============================================================================
-// TIKTOK PRODUCTION ROUTING TABLE — the one file to edit to change a rule.
+// TIKTOK PRODUCTION ROUTING RULES
 // ----------------------------------------------------------------------------
-// Who owns each stage of Organic Social > TikTok Production. Change a rule
-// here, run `npm test`, commit, push, `npx wrangler deploy`. Nothing else in
-// src/tiktok-router/ needs to change for a routing change.
+// Who owns each stage of Organic Social > TikTok Production.
 //
-// Kept as plain data + tiny functions (no I/O) so it can be lifted into a
-// bigger system — the creative engine's ClickUp sync — without rewriting it.
+// The rules are DATA. Day to day they are edited at /tiktok-router/ and stored
+// in D1 (tiktok_router_rules); DEFAULT_RULES below is only the starting point,
+// used until someone saves from the page, and restored by "Reset to defaults".
+// If you find yourself hardcoding a person into a function here, you have
+// rebuilt the bottleneck the page exists to remove.
+//
+// Pure functions, no I/O, so this can move into the creative engine's ClickUp
+// sync unchanged.
 // ============================================================================
 
 export const WORKSPACE_ID = "9017029478";
@@ -17,7 +21,7 @@ export const FIELDS = {
   format: "1b7ca213-f3de-40f4-8f40-ef2d6e2cfdbd", // Dropdown field
 };
 
-// ClickUp user ids.
+// ClickUp user ids — used only to build the defaults.
 export const PEOPLE = {
   tia: 89106216,
   diana: 89106214,
@@ -26,40 +30,119 @@ export const PEOPLE = {
   gaby: 89133528,
   cass: 89173497,
   avery: 89106215,
-  // Not in ClickUp yet. Put her id here once she's invited; until then Prep is
-  // skipped (logged, not errored) and the card keeps whoever it had.
-  amber: null,
+  amber: null, // not in ClickUp yet
 };
 
-// Formats Tia edits. Everything else — including no Format set — goes to Gaby.
-const TIA_EDIT_FORMATS = ["funny", "trend"];
+// The list's stages in order, lowercase as ClickUp reports them. The page reads
+// the live list too; this is the fallback and the order for anything unknown.
+export const STAGES = [
+  "draft", "package", "script review", "prep", "film", "voiceover", "edit",
+  "accuracy check", "titles", "final review", "schedule", "posted", "cancelled",
+];
 
-// Reviews go to the other nurse: Diana's scripts to Karli, everyone else's to Diana.
-const reviewer = (card) => (card.writerId === PEOPLE.diana ? PEOPLE.karli : PEOPLE.diana);
+// Per stage, one of:
+//   { mode: "off" }                      leave the card alone
+//   { mode: "person", owner: <id|null> } always this person (null = skip)
+//   { mode: "review" }                   the review rule below
+//   { mode: "edit" }                     the edit rule below
+export const MODES = ["off", "person", "review", "edit"];
 
-const editor = (card) =>
-  card.format && TIA_EDIT_FORMATS.includes(card.format.toLowerCase()) ? PEOPLE.tia : PEOPLE.gaby;
+export const DEFAULT_RULES = {
+  stages: {
+    "draft": { mode: "off" },
+    "package": { mode: "person", owner: PEOPLE.tia },
+    "script review": { mode: "review" },
+    "prep": { mode: "person", owner: PEOPLE.amber },
+    "film": { mode: "off" }, // weekly rotation — the AI PM will own this
+    "voiceover": { mode: "person", owner: PEOPLE.kristine },
+    "edit": { mode: "edit" },
+    "accuracy check": { mode: "review" },
+    "titles": { mode: "edit" },
+    "final review": { mode: "review" },
+    "schedule": { mode: "person", owner: PEOPLE.cass },
+    "posted": { mode: "off" },
+    "cancelled": { mode: "off" },
+  },
+  // Reviews go to the other nurse: Diana's scripts to Karli, everyone else's to Diana.
+  review: { writer: PEOPLE.diana, then: PEOPLE.karli, otherwise: PEOPLE.diana },
+  // Funny/Trend are edited by Tia; everything else, including no Format, by Gaby.
+  edit: { formats: ["Funny", "Trend"], then: PEOPLE.tia, otherwise: PEOPLE.gaby },
+  // Adding this tag raises priority to High and pings `notify` in an assigned comment.
+  roadblock: {
+    enabled: true,
+    tag: "roadblock",
+    priority: 2, // ClickUp: 1 urgent, 2 high, 3 normal, 4 low
+    notify: PEOPLE.avery,
+    comment: "Roadblock added. Avery, can you help get this unstuck?",
+  },
+};
 
-// Stage name (lowercase, as ClickUp reports it) -> owner.
+// Who should own `stage` for this card?
+//   { action: "assign", owner }  |  { action: "skip", reason }
 // `card` is { writerId: number|null, format: string|null } (format = option NAME).
-// Stages not listed are left alone: draft, film (weekly rotation — the AI PM
-// will own that), posted, cancelled.
-export const ROUTES = {
-  "package": () => PEOPLE.tia,
-  "script review": reviewer,
-  "prep": () => PEOPLE.amber,
-  "voiceover": () => PEOPLE.kristine,
-  "edit": editor,
-  "accuracy check": reviewer,
-  "titles": editor,
-  "final review": reviewer,
-  "schedule": () => PEOPLE.cass,
-};
+export function ownerFor(rules, stage, card) {
+  const s = rules.stages?.[stage];
+  if (!s || s.mode === "off") return { action: "skip", reason: `left alone: "${stage}" is not routed` };
 
-// Adding this tag raises priority to High and pings Avery in an assigned comment.
-export const ROADBLOCK = {
-  tag: "roadblock",
-  priority: 2, // ClickUp: 1 urgent, 2 high, 3 normal, 4 low
-  notify: PEOPLE.avery,
-  comment: "Roadblock added. Avery, can you help get this unstuck?",
-};
+  let owner = null;
+  if (s.mode === "person") owner = s.owner;
+  else if (s.mode === "review") {
+    const r = rules.review;
+    owner = card.writerId != null && card.writerId === r.writer ? r.then : r.otherwise;
+  } else if (s.mode === "edit") {
+    const e = rules.edit;
+    const wanted = (e.formats || []).map((f) => String(f).toLowerCase());
+    owner = card.format && wanted.includes(card.format.toLowerCase()) ? e.then : e.otherwise;
+  }
+  if (owner == null) return { action: "skip", reason: `skipped: no owner set for "${stage}"` };
+  return { action: "assign", owner: Number(owner) };
+}
+
+// Validate + normalise rules arriving from the page. Throws Error(message) on
+// anything malformed, so a bad save can never reach the router.
+export function normalizeRules(input) {
+  if (!input || typeof input !== "object") throw new Error("Rules must be an object.");
+  const userId = (v, what) => {
+    if (v === null || v === undefined || v === "") return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n <= 0) throw new Error(`${what} must be a ClickUp user.`);
+    return n;
+  };
+
+  const stages = {};
+  for (const [rawName, cfg] of Object.entries(input.stages || {})) {
+    const name = String(rawName).trim().toLowerCase();
+    if (!name || name.length > 80) throw new Error("Stage names must be 1-80 characters.");
+    const mode = cfg?.mode;
+    if (!MODES.includes(mode)) throw new Error(`Unknown setting for "${name}".`);
+    stages[name] = mode === "person" ? { mode, owner: userId(cfg.owner, `Owner of "${name}"`) } : { mode };
+  }
+
+  const r = input.review || {};
+  const e = input.edit || {};
+  const b = input.roadblock || {};
+  const formats = Array.isArray(e.formats) ? e.formats.map((f) => String(f).trim()).filter(Boolean) : [];
+  const comment = String(b.comment ?? "").trim();
+  if (comment.length > 1000) throw new Error("The roadblock comment is too long.");
+
+  return {
+    stages,
+    review: {
+      writer: userId(r.writer, "Review rule writer"),
+      then: userId(r.then, "Review rule reviewer"),
+      otherwise: userId(r.otherwise, "Review rule default reviewer"),
+    },
+    edit: {
+      formats: [...new Set(formats)].slice(0, 50),
+      then: userId(e.then, "Edit rule editor"),
+      otherwise: userId(e.otherwise, "Edit rule default editor"),
+    },
+    roadblock: {
+      enabled: b.enabled !== false,
+      tag: String(b.tag || "roadblock").trim().toLowerCase(),
+      priority: [1, 2, 3, 4].includes(Number(b.priority)) ? Number(b.priority) : 2,
+      notify: userId(b.notify, "Roadblock person"),
+      comment: comment || DEFAULT_RULES.roadblock.comment,
+    },
+  };
+}

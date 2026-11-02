@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>TikTok Router — NITM Ops</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* nav.js owns the neutral palette (--bg/--panel/--surface/--border/--text/...).
+     Only accent + semantic colours belong here. */
+  :root {
+    --accent: #2563eb; --accent-text: #ffffff;
+    --red: #dc2626; --red-bg: #fee2e2; --amber: #b45309; --amber-bg: #fef3c7;
+    --green: #15803d; --green-bg: #dcfce7; --blue: #1d4ed8; --blue-bg: #dbeafe;
+  }
+  :root[data-theme="dark"] {
+    --accent: #60a5fa; --accent-text: #0b1a33;
+    --red: #f87171; --red-bg: #431a1a; --amber: #fbbf24; --amber-bg: #422f06;
+    --green: #4ade80; --green-bg: #10331c; --blue: #93c5fd; --blue-bg: #16264a;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 110px; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 26px 20px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.3px; }
+  h2 { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  .sub { font-size: 14px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
+  a { color: var(--accent); }
+  .muted { color: var(--muted); }
+  .tiny { font-size: 12.5px; }
+  .hide { display: none !important; }
+
+  button { padding: 10px 16px; border-radius: 9px; border: 0; background: var(--accent); color: var(--accent-text);
+           font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+  button.sm { padding: 6px 11px; font-size: 12.5px; border-radius: 8px; }
+
+  select, textarea, input[type=text] {
+    font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border2); border-radius: 8px; padding: 7px 9px; min-height: 36px; max-width: 100%;
+  }
+  textarea { width: 100%; min-height: 64px; resize: vertical; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-top: 14px; }
+  .banner { border-radius: 12px; padding: 12px 15px; font-size: 14px; margin-top: 16px; }
+  .banner.bad { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+  .banner.info { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue); }
+
+  .stage { display: grid; grid-template-columns: 150px 1fr; gap: 10px 14px; align-items: center;
+           padding: 11px 0; border-top: 1px solid var(--border); }
+  .stage:first-of-type { border-top: 0; }
+  .stage .name { font-weight: 600; text-transform: capitalize; }
+  .stage .ctl { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .stage .result { font-size: 13px; color: var(--muted); }
+  .stage.off .name { color: var(--muted); font-weight: 500; }
+  @media (max-width: 560px) { .stage { grid-template-columns: 1fr; gap: 6px; } }
+
+  .rule { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; margin-top: 10px; line-height: 2; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; padding: 5px 10px; border-radius: 99px;
+          border: 1px solid var(--border2); background: var(--surface); cursor: pointer; user-select: none; }
+  .chip.on { background: var(--blue-bg); color: var(--blue); border-color: var(--blue); font-weight: 600; }
+  .chip input { display: none; }
+  .uses { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .toggle { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
+
+  .savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--border2);
+             padding: 12px 20px; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; z-index: 50;
+             box-shadow: 0 -4px 14px rgba(0,0,0,.08); }
+  .savebar .msg { font-size: 14px; font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.when { white-space: nowrap; color: var(--muted); }
+  .err { color: var(--red); }
+  .tablewrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<script defer src="/shared/nav.js"></script>
+<div class="wrap">
+  <h1>TikTok Router</h1>
+  <p class="sub">Who gets assigned when a card moves stage in <b>Organic Social › TikTok Production</b>.
+    The new owner replaces everyone else on the card. Changes apply to the next card that moves, and cards already in a stage aren't touched.</p>
+  <p class="sub tiny" id="savedInfo"></p>
+
+  <div id="error" class="banner bad hide"></div>
+  <div id="loading" class="panel muted">Loading…</div>
+
+  <div id="app" class="hide">
+    <div class="panel">
+      <h2>Stages</h2>
+      <p class="sub tiny">For each stage, choose who gets the card when it arrives.</p>
+      <div id="stages" style="margin-top:8px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Review rule</h2>
+      <div class="uses" id="reviewUses"></div>
+      <div class="rule">If the Writer is <span id="reviewWriter"></span>, assign <span id="reviewThen"></span>.</div>
+      <div class="rule">Otherwise, assign <span id="reviewOtherwise"></span>.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Edit rule</h2>
+      <div class="uses" id="editUses"></div>
+      <div class="rule">If the Format is one of these, assign <span id="editThen"></span>:</div>
+      <div class="chips" id="editFormats"></div>
+      <div class="rule">Otherwise (including no Format), assign <span id="editOtherwise"></span>.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Roadblock tag</h2>
+      <label class="toggle" style="margin-top:8px"><input type="checkbox" id="rbEnabled"> When the <b>roadblock</b> tag is added, set priority to High and post a comment.</label>
+      <div class="rule">Assign the comment to <span id="rbNotify"></span> so they get notified.</div>
+      <div style="margin-top:8px"><textarea id="rbComment" maxlength="1000"></textarea></div>
+    </div>
+
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <h2>Recent activity</h2>
+        <button class="ghost sm" id="refreshLog">Refresh</button>
+      </div>
+      <p class="sub tiny">Everything the router did or skipped, newest first.</p>
+      <div class="tablewrap" style="margin-top:10px"><table>
+        <thead><tr><th>When</th><th>Card</th><th>Stage</th><th>What happened</th></tr></thead>
+        <tbody id="log"></tbody>
+      </table></div>
+    </div>
+
+    <div class="panel">
+      <h2>Rule changes</h2>
+      <div id="history" class="tiny" style="margin-top:8px"></div>
+      <button class="ghost sm" id="reset" style="margin-top:12px">Reset all rules to the original defaults</button>
+    </div>
+  </div>
+</div>
+
+<div class="savebar hide" id="savebar">
+  <span class="msg">You have unsaved changes</span>
+  <button class="ghost" id="discard">Discard</button>
+  <button id="save">Save changes</button>
+</div>
+
+<script>
+const API = '/tiktok-router/api/';
+const MODE_LABELS = { off: 'Leave alone', person: 'Always assign…', review: 'Review rule', edit: 'Edit rule' };
+let saved = null;     // rules as last loaded/saved
+let rules = null;     // working copy
+let members = [], statuses = [], formats = [], defaults = null;
+
+async function api(path, opts = {}) {
+  if (opts.body && typeof opts.body !== 'string') {
+    opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API + path, { credentials: 'same-origin', ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const nameOf = (id) => {
+  if (id == null) return 'nobody';
+  const m = members.find((x) => x.id === Number(id));
+  return m ? m.name : `user ${id}`;
+};
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg; el.classList.toggle('hide', !msg);
+}
+
+// A people <select>. Keeps an id that isn't in the member list visible rather than silently dropping it.
+function personSelect(value, onChange, { allowNone = true } = {}) {
+  const sel = document.createElement('select');
+  const opts = [];
+  if (allowNone) opts.push(`<option value="">— nobody (skip) —</option>`);
+  const known = members.some((m) => m.id === Number(value));
+  if (value != null && !known) opts.push(`<option value="${esc(value)}">user ${esc(value)} (not in workspace)</option>`);
+  for (const m of members) opts.push(`<option value="${m.id}">${esc(m.name)}</option>`);
+  sel.innerHTML = opts.join('');
+  sel.value = value == null ? '' : String(value);
+  sel.addEventListener('change', () => onChange(sel.value === '' ? null : Number(sel.value)));
+  return sel;
+}
+function mount(id, el) { const host = document.getElementById(id); host.replaceChildren(el); }
+
+function stageOrder() {
+  const names = [...statuses];
+  for (const s of Object.keys(rules.stages)) if (!names.includes(s)) names.push(s);
+  return names;
+}
+
+function describe(stage) {
+  const s = rules.stages[stage] || { mode: 'off' };
+  if (s.mode === 'off') return 'Assignees stay as they are.';
+  if (s.mode === 'person') return s.owner == null ? 'Skipped until someone is picked.' : '';
+  if (s.mode === 'review') return `${nameOf(rules.review.then)} if ${nameOf(rules.review.writer)} wrote it, otherwise ${nameOf(rules.review.otherwise)}.`;
+  if (s.mode === 'edit') return `${nameOf(rules.edit.then)} for ${rules.edit.formats.join(' / ') || 'no formats'}, otherwise ${nameOf(rules.edit.otherwise)}.`;
+}
+
+function render() {
+  // Stages
+  const host = document.getElementById('stages');
+  host.replaceChildren();
+  for (const stage of stageOrder()) {
+    const cfg = rules.stages[stage] || { mode: 'off' };
+    const row = document.createElement('div');
+    row.className = 'stage' + (cfg.mode === 'off' ? ' off' : '');
+    const name = document.createElement('div'); name.className = 'name'; name.textContent = stage;
+    const ctl = document.createElement('div'); ctl.className = 'ctl';
+    const mode = document.createElement('select');
+    mode.innerHTML = Object.entries(MODE_LABELS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+    mode.value = cfg.mode;
+    mode.addEventListener('change', () => {
+      rules.stages[stage] = mode.value === 'person' ? { mode: 'person', owner: cfg.owner ?? null } : { mode: mode.value };
+      changed();
+    });
+    ctl.append(mode);
+    if (cfg.mode === 'person') ctl.append(personSelect(cfg.owner, (v) => { rules.stages[stage] = { mode: 'person', owner: v }; changed(); }));
+    const result = document.createElement('span'); result.className = 'result'; result.textContent = describe(stage);
+    ctl.append(result);
+    row.append(name, ctl);
+    host.append(row);
+  }
+
+  // Review + edit rules
+  const using = (m) => stageOrder().filter((s) => rules.stages[s]?.mode === m);
+  const usesText = (m) => { const u = using(m); return u.length ? `Used by: ${u.join(', ')}` : 'Not used by any stage right now.'; };
+  document.getElementById('reviewUses').textContent = usesText('review');
+  document.getElementById('editUses').textContent = usesText('edit');
+  mount('reviewWriter', personSelect(rules.review.writer, (v) => { rules.review.writer = v; changed(); }));
+  mount('reviewThen', personSelect(rules.review.then, (v) => { rules.review.then = v; changed(); }));
+  mount('reviewOtherwise', personSelect(rules.review.otherwise, (v) => { rules.review.otherwise = v; changed(); }));
+  mount('editThen', personSelect(rules.edit.then, (v) => { rules.edit.then = v; changed(); }));
+  mount('editOtherwise', personSelect(rules.edit.otherwise, (v) => { rules.edit.otherwise = v; changed(); }));
+
+  const chips = document.getElementById('editFormats');
+  chips.replaceChildren();
+  const allFormats = [...formats];
+  for (const f of rules.edit.formats) if (!allFormats.some((x) => x.toLowerCase() === f.toLowerCase())) allFormats.push(f);
+  for (const f of allFormats) {
+    const on = rules.edit.formats.some((x) => x.toLowerCase() === f.toLowerCase());
+    const chip = document.createElement('label');
+    chip.className = 'chip' + (on ? ' on' : '');
+    chip.innerHTML = `<input type="checkbox" ${on ? 'checked' : ''}>${esc(f)}`;
+    chip.querySelector('input').addEventListener('change', (e) => {
+      rules.edit.formats = e.target.checked
+        ? [...rules.edit.formats, f]
+        : rules.edit.formats.filter((x) => x.toLowerCase() !== f.toLowerCase());
+      changed();
+    });
+    chips.append(chip);
+  }
+
+  // Roadblock
+  document.getElementById('rbEnabled').checked = rules.roadblock.enabled !== false;
+  mount('rbNotify', personSelect(rules.roadblock.notify, (v) => { rules.roadblock.notify = v; changed(); }));
+  document.getElementById('rbComment').value = rules.roadblock.comment || '';
+
+  document.getElementById('savebar').classList.toggle('hide', JSON.stringify(rules) === JSON.stringify(saved));
+}
+
+function changed() { render(); }
+
+document.getElementById('rbEnabled').addEventListener('change', (e) => { rules.roadblock.enabled = e.target.checked; changed(); });
+document.getElementById('rbComment').addEventListener('input', (e) => {
+  rules.roadblock.comment = e.target.value;
+  document.getElementById('savebar').classList.toggle('hide', JSON.stringify(rules) === JSON.stringify(saved));
+});
+
+function setSavedInfo(d) {
+  document.getElementById('savedInfo').textContent = d.is_default
+    ? 'Using the original default rules. Nobody has changed them yet.'
+    : `Last changed ${fmtTime(d.updated_at)}${d.updated_by ? ' by ' + d.updated_by : ''}.`;
+}
+
+document.getElementById('save').addEventListener('click', async (e) => {
+  e.target.disabled = true; showError('');
+  try {
+    const d = await api('rules', { method: 'PUT', body: { rules } });
+    saved = clone(d.rules); rules = clone(d.rules);
+    setSavedInfo(d); render(); loadHistory();
+  } catch (err) { showError('Could not save: ' + err.message); }
+  e.target.disabled = false;
+});
+document.getElementById('discard').addEventListener('click', () => { rules = clone(saved); render(); });
+document.getElementById('reset').addEventListener('click', async () => {
+  if (!confirm('Put every rule back to the original defaults? This replaces the current rules for everyone.')) return;
+  showError('');
+  try {
+    const d = await api('rules/reset', { method: 'POST', body: {} });
+    saved = clone(d.rules); rules = clone(d.rules);
+    setSavedInfo(d); render(); loadHistory();
+  } catch (err) { showError('Could not reset: ' + err.message); }
+});
+window.addEventListener('beforeunload', (e) => {
+  if (rules && JSON.stringify(rules) !== JSON.stringify(saved)) { e.preventDefault(); e.returnValue = ''; }
+});
+
+// Swap user ids in log lines for names: "assigned 89106216; removed 89106214".
+function humanAction(a) {
+  return esc(a)
+    .replace(/(assigned|assigned to|removed|comment assigned to) ([\d,]+)/g, (_, verb, ids) =>
+      `${verb} ${ids.split(',').map((id) => esc(nameOf(id))).join(', ')}`)
+    .replace(/^error:/, '<span class="err">error:</span>');
+}
+
+async function loadLog() {
+  try {
+    const { log } = await api('log?limit=50');
+    document.getElementById('log').innerHTML = log.length
+      ? log.map((r) => `<tr><td class="when">${fmtTime(r.at)}</td>
+          <td>${/^[a-z0-9]+$/i.test(r.task_id) ? `<a href="https://app.clickup.com/t/${r.task_id}" target="_blank" rel="noopener">${esc(r.task_id)}</a>` : esc(r.task_id)}</td>
+          <td>${esc(r.status || '')}</td><td>${humanAction(r.action)}</td></tr>`).join('')
+      : `<tr><td colspan="4" class="muted">Nothing yet. Move a card in TikTok Production.</td></tr>`;
+  } catch (err) { document.getElementById('log').innerHTML = `<tr><td colspan="4" class="err">${esc(err.message)}</td></tr>`; }
+}
+async function loadHistory() {
+  try {
+    const { history } = await api('history');
+    document.getElementById('history').innerHTML = history.length
+      ? history.map((h) => `<div>${esc(fmtTime(h.at))} by ${esc(h.by || 'unknown')}</div>`).join('')
+      : '<span class="muted">No changes yet.</span>';
+  } catch { /* non-essential */ }
+}
+document.getElementById('refreshLog').addEventListener('click', loadLog);
+
+(async function init() {
+  try {
+    const [r, cu] = await Promise.all([api('rules'), api('clickup').catch((e) => ({ error: e.message }))]);
+    defaults = r.defaults;
+    if (cu.error) showError('Couldn\'t load names from ClickUp (' + cu.error + '). People show as ids for now.');
+    members = cu.members || [];
+    statuses = cu.statuses && cu.statuses.length ? cu.statuses : r.stages;
+    formats = cu.formats || [];
+    saved = clone(r.rules); rules = clone(r.rules);
+    setSavedInfo(r);
+    document.getElementById('loading').classList.add('hide');
+    document.getElementById('app').classList.remove('hide');
+    render(); loadLog(); loadHistory();
+  } catch (err) {
+    document.getElementById('loading').classList.add('hide');
+    showError('Could not load the rules: ' + err.message);
+  }
+})();
+</script>
+</body>
+</html>

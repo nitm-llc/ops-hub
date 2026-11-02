@@ -8591,7 +8591,7 @@ export default {
     const stageResp = await handleStageRoutes(request, env, ctx, path);
     if (stageResp) return stageResp;
 
-    // ===== TIKTOK ROUTER (handles POST /clickup-automation/webhook/tiktok only) =====
+    // ===== TIKTOK ROUTER (POST /clickup-automation/webhook/tiktok + /tiktok-router/api/*) =====
     // Above the ClickUp Automation mount; it sits under that module's Access bypass.
     const ttResp = await handleTikTokRouterRoutes(request, env, ctx, path);
     if (ttResp) return ttResp;
@@ -8830,6 +8830,7 @@ export default {
     if (path === "/med-supplies") return Response.redirect(url.origin + "/med-supplies/", 301);
     if (path === "/video-review") return Response.redirect(url.origin + "/video-review/", 301);
     if (path === "/clickup-automation") return Response.redirect(url.origin + "/clickup-automation/", 301);
+    if (path === "/tiktok-router") return Response.redirect(url.origin + "/tiktok-router/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }
     // ===== AMBASSADOR API =====
@@ -8948,6 +8949,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,-app
       <a href="/social/" class="app-card"><div class="app-icon">\u{1F4F1}</div><div class="app-text"><div class="app-name">Social Attribution</div><div class="app-desc">Tie revenue back to social posts</div></div></a>
       <a href="/stage/" class="app-card"><div class="app-icon">\u{23F1}</div><div class="app-text"><div class="app-name">Stage Timing</div><div class="app-desc">How long tasks sit in each stage</div></div></a>
       <a href="/clickup-automation/" class="app-card"><div class="app-icon">\u{1F4C2}</div><div class="app-text"><div class="app-name">ClickUp Automation</div><div class="app-desc">Auto-code tasks &amp; build Drive folders</div></div></a>
+      <a href="/tiktok-router/" class="app-card"><div class="app-icon">\u{1F3AC}</div><div class="app-text"><div class="app-name">TikTok Router</div><div class="app-desc">Who gets each TikTok stage</div></div></a>
     </div>
   </div>
 
