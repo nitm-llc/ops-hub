@@ -13,6 +13,7 @@ import INSTRUCTIONS from "./ai-pm-instructions.md";
 import { findCards, getCard, calendar, prepareAction, describeAction, loadListTask, readCard, RefusedError } from "./clickup.js";
 import { createPending, listPending, logAction, loadInstructions } from "./store.js";
 import { applyNumbers, isApprover } from "./approvals.js";
+import { messagePerson, findLead } from "./outreach.js";
 import { todayYmd, weekdayName, LIST_URL } from "./config.js";
 
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
@@ -33,7 +34,9 @@ Ground rules, enforced by the tools as well:
 - "Run the daily check": follow the daily routine in suggest mode. Call find_cards with overdue=true and with_comments=true, decide per card, then call propose_change once per suggested change (in parallel). Reply with one numbered line per proposal, plus a short list of cards you're leaving alone and why.
 - "What's stuck": overdue cards (find_cards overdue=true, with_comments=true), each with the likely reason from the routine (active comment thread, owner/stage mismatch, post date close, unused stage). No proposals unless asked.
 - Calendar balance: use the calendar tool, apply the rules, and suggest swaps for Cass in words. Only propose the swap as changes if the person asks you to make it.
-- Messages you can't do (Instagram, Metricool, messaging someone directly): say so in a line.
+- Reaching people: message_person sends someone a Google Chat DM (by first name). Use it for the routine's check-ins with a card's owner (Post Date close, daily step 5), escalations to Avery (step 6), calendar suggestions for Cass, and when a person asks you to tell or ask someone something. One card per message: friendly, 1 to 3 short lines, with the card link and the ask. If they can't be reached directly, the tool sends it to Avery and Mark to pass on, so just report what it says. Don't message the person you're already talking to. The ClickUp comment the routine asks for is still a propose_change.
+- If the sender isn't an approver, their proposals are sent to an approver automatically; tell them who it went to.
+- Things you can't do (Instagram, Metricool): say so in a line.
 
 Formatting (Google Chat, not Markdown):
 - Short. No headings, no tables, no Markdown links or **double asterisks**.
@@ -117,6 +120,22 @@ export const TOOLS = [
     },
   },
   {
+    name: "message_person",
+    description:
+      "Send a teammate a Google Chat DM. person: first name (Diana, Karli, Kristine, Tia, Gaby, Cass, Avery, Mark...). If they haven't opened a chat with Flo yet, it goes to Avery and Mark to pass on. Limited to one message per person per card per day. Returns what happened.",
+    input_schema: {
+      type: "object",
+      properties: {
+        person: { type: "string" },
+        text: { type: "string", description: "The message, in Chat formatting (*bold*, <url|text>)" },
+        task_id: { type: "string", description: "The card it's about, if any" },
+        kind: { type: "string", enum: ["check_in", "escalation", "calendar", "other"] },
+      },
+      required: ["person", "text"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "apply_approved",
     description:
       "Carry out pending proposals the sender approved in their current message. Only works for approvers and only for the numbers they typed. Returns what happened to each.",
@@ -156,10 +175,47 @@ async function runTool(env, turn, name, input) {
       const task = await loadListTask(env, action.task_id);
       const card = readCard(task, turn.tz, turn.today);
       const summary = describeAction(action, card.name, resolved) + (input.reason ? ` (${String(input.reason).slice(0, 140)})` : "");
+      // A non-approver's proposal can't be approved in their own DM (no
+      // approver is in it), so it's filed in the lead approver's DM and sent
+      // to them. Scheduled runs already happen in the lead's DM.
+      if (!turn.scheduled && !isApprover(env, turn.sender.email)) {
+        const lead = await findLead(env);
+        if (lead) {
+          const leadConv = { space: lead.dmSpace, thread: "" };
+          const asker = String(turn.sender.displayName || turn.sender.email).split(/\s+/)[0];
+          const row = await createPending(env, leadConv, { proposedBy: turn.sender.email, action, summary });
+          await logAction(env, { conv: leadConv, number: row.number, actor: turn.sender.email, event: "proposed", action, result: summary });
+          const sent = await messagePerson(env, {
+            person: lead.email,
+            kind: "approval",
+            taskId: action.task_id,
+            tz: turn.tz,
+            text: `${asker} asked for a change:\n*#${row.number}*: ${summary} <${card.url}|card>\nReply "approve ${row.number}" to make it, or "reject ${row.number}".`,
+          });
+          turn.proposed.push(row.number);
+          return {
+            number: row.number,
+            summary,
+            card_url: card.url,
+            status: sent.sent
+              ? `pending — sent to ${String(lead.name).split(/\s+/)[0]} to approve (${sent.message}). Nothing has changed yet.`
+              : `pending, but I couldn't reach an approver: ${sent.message}`,
+          };
+        }
+      }
       const row = await createPending(env, turn.conv, { proposedBy: turn.sender.email, action, summary });
       turn.proposed.push(row.number);
       await logAction(env, { conv: turn.conv, number: row.number, actor: turn.sender.email, event: "proposed", action, result: summary });
       return { number: row.number, summary, card_url: card.url, status: "pending — nothing has changed yet" };
+    }
+    case "message_person": {
+      return messagePerson(env, {
+        person: input.person,
+        text: input.text,
+        taskId: input.task_id || null,
+        kind: input.kind || "other",
+        tz: turn.tz,
+      });
     }
     case "apply_approved": {
       const asked = (input.numbers || []).map(Number);
@@ -229,6 +285,7 @@ function contextBlock(env, turn, pending) {
     `Today: ${weekdayName(turn.today)} (${turn.today}), ${turn.tz}`,
     `Sender: ${turn.sender.displayName || "?"} <${turn.sender.email}>; approver: ${isApprover(env, turn.sender.email) ? "yes" : "no"}`,
     `Numbers this message approves: ${turn.approvedNumbers.length ? turn.approvedNumbers.join(", ") : "none"}`,
+    ...(turn.scheduled ? ["This is a scheduled run, not a person: nobody approves anything in this turn. Propose and message people as the task says."] : []),
     `Pending proposals in this conversation:\n${p}`,
     "</context>",
   ].join("\n");

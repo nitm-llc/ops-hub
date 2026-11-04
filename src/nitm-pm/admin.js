@@ -11,7 +11,9 @@
 import { isTrustedHost, verifyAccessJwt } from "../access.js";
 import { DEFAULT_INSTRUCTIONS, GUARDRAILS, DEFAULT_MODEL } from "./brain.js";
 import { approvers, isApprover } from "./approvals.js";
-import { LIST_ID, LIST_URL, DEFAULT_TZ } from "./config.js";
+import { LIST_ID, LIST_URL, DEFAULT_TZ, PERSON_NAME } from "./config.js";
+import { resolvePerson, fallbackNames, findLead } from "./outreach.js";
+import { DAILY_HOUR, WEEKLY_HOUR } from "./scheduler.js";
 import {
   ensureTables,
   expireOld,
@@ -21,6 +23,11 @@ import {
   listInstructionChanges,
   getInstructionChange,
   PENDING_TTL_MS,
+  getPerson,
+  listOutreach,
+  listRuns,
+  getSetting,
+  setSetting,
 } from "./store.js";
 
 export const API_PREFIX = "/flo/api/";
@@ -52,6 +59,10 @@ const EVENT_LABELS = {
   async_post_failed: "Couldn't post answer",
   added_to_space: "Added to a space",
   removed_from_space: "Removed from a space",
+  run_daily: "Ran the daily check",
+  run_weekly: "Ran weekly planning",
+  run_skipped: "Scheduled run skipped",
+  outreach_undelivered: "Couldn't reach anyone",
 };
 function shapeLog(row) {
   const action = parseJson(row.action);
@@ -67,6 +78,24 @@ function shapeLog(row) {
     card_url: taskId ? `https://app.clickup.com/t/${encodeURIComponent(taskId)}` : null,
     dm: row.thread === "",
   };
+}
+
+// Everyone Flo might need to reach: the TikTok team plus the fallback people,
+// and whether each has opened a chat with Flo (so it can DM them).
+async function reachability(env) {
+  const names = [...new Set([...Object.values(PERSON_NAME), ...fallbackNames(env)])];
+  const out = [];
+  for (const n of names) {
+    let p = null;
+    try {
+      p = await resolvePerson(env, n);
+    } catch {
+      /* ClickUp unavailable: show the name without status */
+    }
+    const row = p ? await getPerson(env, p.email) : null;
+    out.push({ name: n, email: p?.email || null, reachable: !!row?.dm_space, last_seen: row?.last_seen || null, fallback: fallbackNames(env).includes(n) });
+  }
+  return out;
 }
 
 async function overview(env, viewer) {
@@ -105,6 +134,16 @@ async function overview(env, viewer) {
       clickup: !!env.CLICKUP_TOKEN,
     },
     pending: pending || [],
+    outreach: {
+      proactive: (await getSetting(env, "proactive", "on")) !== "off",
+      run_requested: !!(await getSetting(env, "run_request")),
+      schedule: { daily: `Weekdays from ${DAILY_HOUR}:00`, weekly: `Wednesdays from ${WEEKLY_HOUR}:00`, timezone: env.PM_TIMEZONE || DEFAULT_TZ },
+      lead: await findLead(env).then((l) => (l ? { name: l.name, email: l.email } : null)).catch(() => null),
+      fallback: fallbackNames(env),
+      people: await reachability(env),
+      runs: await listRuns(env, 10),
+      recent: await listOutreach(env, 25),
+    },
     stats: { ...(stats || {}), last_question_at: lastQuestion?.at || null },
   };
 }
@@ -152,6 +191,26 @@ export async function handleFloApi(request, env, path) {
       if (denied) return denied;
       await resetInstructions(env, viewer);
       return json({ ok: true });
+    }
+
+    if (sub === "settings" && method === "PUT") {
+      const denied = mustEdit();
+      if (denied) return denied;
+      const body = await request.json().catch(() => null);
+      if (typeof body?.proactive !== "boolean") return json({ error: "Send {proactive: true|false}." }, 400);
+      await setSetting(env, "proactive", body.proactive ? "on" : "off", viewer);
+      return json({ ok: true, proactive: body.proactive });
+    }
+
+    if (sub === "run" && method === "POST") {
+      const denied = mustEdit();
+      if (denied) return denied;
+      const body = await request.json().catch(() => null);
+      if (!["daily", "weekly"].includes(body?.kind)) return json({ error: "kind must be daily or weekly." }, 400);
+      // The cron (every 2 minutes, up to 15 minutes per run) does the work;
+      // a page request only has ~30 seconds.
+      await setSetting(env, "run_request", JSON.stringify({ kind: body.kind, by: viewer }), viewer);
+      return json({ ok: true, message: "Queued. It starts within about 2 minutes." });
     }
 
     if (sub === "history" && method === "GET") {

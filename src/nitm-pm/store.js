@@ -50,6 +50,42 @@ export async function ensureTables(env) {
        note  TEXT,
        text  TEXT
      )`,
+    `CREATE TABLE IF NOT EXISTS pm_people (
+       email        TEXT PRIMARY KEY,
+       display_name TEXT,
+       chat_user    TEXT,
+       dm_space     TEXT,
+       last_seen    TEXT NOT NULL
+     )`,
+    `CREATE TABLE IF NOT EXISTS pm_outreach (
+       id           INTEGER PRIMARY KEY AUTOINCREMENT,
+       at           TEXT NOT NULL,
+       day          TEXT NOT NULL,
+       to_email     TEXT,
+       to_name      TEXT,
+       task_id      TEXT,
+       kind         TEXT,
+       text         TEXT,
+       delivered_to TEXT,
+       status       TEXT NOT NULL,
+       detail       TEXT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_pm_outreach_day ON pm_outreach (day, to_email)`,
+    `CREATE TABLE IF NOT EXISTS pm_runs (
+       kind        TEXT NOT NULL,
+       day         TEXT NOT NULL,
+       started_at  TEXT NOT NULL,
+       finished_at TEXT,
+       trigger     TEXT,
+       result      TEXT,
+       PRIMARY KEY (kind, day)
+     )`,
+    `CREATE TABLE IF NOT EXISTS pm_settings (
+       key        TEXT PRIMARY KEY,
+       value      TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       updated_by TEXT
+     )`,
     `CREATE TABLE IF NOT EXISTS pm_action_log (
        id      INTEGER PRIMARY KEY AUTOINCREMENT,
        at      TEXT NOT NULL,
@@ -227,4 +263,85 @@ export async function listInstructionChanges(env, limit = 30) {
 
 export async function getInstructionChange(env, id) {
   return env.DB.prepare("SELECT id, at, by, note, text FROM pm_instruction_changes WHERE id = ?").bind(id).first();
+}
+
+// ---- people Flo can reach -----------------------------------------------------
+// Learned from inbound messages. Google won't let an app start a DM or look a
+// person up by email, so a DM space is only known once the person has
+// messaged Flo at least once.
+export async function recordPerson(env, { email, displayName, chatUser, dmSpace }) {
+  if (!email) return;
+  await env.DB.prepare(
+    `INSERT INTO pm_people (email, display_name, chat_user, dm_space, last_seen) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(email) DO UPDATE SET
+       display_name = COALESCE(excluded.display_name, pm_people.display_name),
+       chat_user    = COALESCE(excluded.chat_user, pm_people.chat_user),
+       dm_space     = COALESCE(excluded.dm_space, pm_people.dm_space),
+       last_seen    = excluded.last_seen`
+  ).bind(String(email).toLowerCase(), displayName || null, chatUser || null, dmSpace || null, nowIso()).run();
+}
+
+export async function getPerson(env, email) {
+  return env.DB.prepare("SELECT * FROM pm_people WHERE email = ?").bind(String(email || "").toLowerCase()).first();
+}
+
+export async function listPeople(env) {
+  const { results } = await env.DB.prepare("SELECT email, display_name, dm_space IS NOT NULL AS reachable, last_seen FROM pm_people ORDER BY display_name").all();
+  return results || [];
+}
+
+// ---- outreach log -------------------------------------------------------------
+export async function logOutreach(env, row) {
+  await env.DB.prepare(
+    `INSERT INTO pm_outreach (at, day, to_email, to_name, task_id, kind, text, delivered_to, status, detail)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(nowIso(), row.day, row.to_email || null, row.to_name || null, row.task_id || null, row.kind || null,
+    String(row.text || "").slice(0, 2000), row.delivered_to || null, row.status, row.detail ? String(row.detail).slice(0, 500) : null).run();
+}
+
+export async function countOutreach(env, day, { toEmail = null, taskId = null } = {}) {
+  let sql = "SELECT COUNT(*) AS n FROM pm_outreach WHERE day = ? AND status IN ('sent','fallback')";
+  const args = [day];
+  if (toEmail) { sql += " AND to_email = ?"; args.push(toEmail); }
+  if (taskId) { sql += " AND task_id = ?"; args.push(taskId); }
+  const r = await env.DB.prepare(sql).bind(...args).first();
+  return Number(r?.n || 0);
+}
+
+export async function listOutreach(env, limit = 50) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, at, to_email, to_name, task_id, kind, text, delivered_to, status, detail FROM pm_outreach ORDER BY id DESC LIMIT ?"
+  ).bind(limit).all();
+  return results || [];
+}
+
+// ---- scheduled runs -------------------------------------------------------------
+// Claim (kind, day) exactly once: the 2-minute cron can't double-run a check.
+export async function claimRun(env, kind, day, trigger) {
+  const r = await env.DB.prepare("INSERT OR IGNORE INTO pm_runs (kind, day, started_at, trigger) VALUES (?, ?, ?, ?)")
+    .bind(kind, day, nowIso(), trigger).run();
+  return Number(r?.meta?.changes || 0) === 1;
+}
+export async function finishRun(env, kind, day, result) {
+  await env.DB.prepare("UPDATE pm_runs SET finished_at = ?, result = ? WHERE kind = ? AND day = ?")
+    .bind(nowIso(), String(result).slice(0, 2000), kind, day).run();
+}
+export async function listRuns(env, limit = 14) {
+  const { results } = await env.DB.prepare("SELECT kind, day, started_at, finished_at, trigger, result FROM pm_runs ORDER BY started_at DESC LIMIT ?").bind(limit).all();
+  return results || [];
+}
+
+// ---- settings -----------------------------------------------------------------
+export async function getSetting(env, key, fallback = null) {
+  const r = await env.DB.prepare("SELECT value FROM pm_settings WHERE key = ?").bind(key).first();
+  return r ? r.value : fallback;
+}
+export async function setSetting(env, key, value, by) {
+  await env.DB.prepare(
+    `INSERT INTO pm_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+  ).bind(key, String(value), nowIso(), by || null).run();
+}
+export async function deleteSetting(env, key) {
+  await env.DB.prepare("DELETE FROM pm_settings WHERE key = ?").bind(key).run();
 }

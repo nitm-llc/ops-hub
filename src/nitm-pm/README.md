@@ -74,8 +74,14 @@ Then enter `mark@anurseinthemaking.com,avery@anurseinthemaking.com,cassandra@anu
 npx wrangler d1 execute content-calendar --remote --command "SELECT at, actor, event, number, result FROM pm_action_log ORDER BY id DESC LIMIT 30"
 ```
 
+## Reaching people and scheduled runs
+
+- **Reaching people:** Flo DMs the person it needs (`message_person`) for check-ins, escalations to Avery, calendar suggestions for Cass, and when someone asks it to pass something on. Google won't let an app start a DM or look a person up by email, so Flo can only DM someone who has messaged it once (stored in `pm_people`). For anyone else, the message goes to the fallback people (`PM_FALLBACK`, default "Avery,Mark") to pass on. Limits: once per person per card per day, 6 per person per day, 40 a day. Every message is logged in `pm_outreach`.
+- **Non-approvers' proposals** are filed in the lead approver's DM (the first reachable fallback person) and sent to them, since no approver is in the asker's DM.
+- **Schedule** (`scheduler.js`, on the existing 2-minute cron): the daily check on weekdays 9am to noon (New York) and weekly planning on Wednesdays 10am to 1pm, each once per day (`pm_runs`). The window means a deploy at 3pm or an outage never fires a late run. Summaries and proposals go to the lead's DM. The Flo page has the on/off switch and "Run now". ClickUp changes still need an approver.
+
 ## Later (not built)
 
-- Step 2: the daily check, weekly planning and Monday report on Cron Triggers, posting to a "TikTok PM" space.
+- The Monday report (needs Metricool).
 - Metricool tools for performance questions.
 - The new 12-stage list: swap `LIST_ID`, `FIELDS` and the stage map in `config.js`.

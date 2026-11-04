@@ -5,6 +5,7 @@ import { handleStrategyRoutes } from "./strategy.js";
 import { handleTikTokRouterRoutes } from "./tiktok-router/index.js";
 import { handleNitmPmRoutes } from "./nitm-pm/index.js";
 import { handleFloApi } from "./nitm-pm/admin.js";
+import { floCron } from "./nitm-pm/scheduler.js";
 import { cxModelPricing, cxReadPrompt, cxFinProfilePrompt, cxProfileLength, HAIKU_55_TIER_TOKENS } from "./cx-product-kb.js";
 import { zdDateRange, zdSearchQuery, zdAnalysisPrompt, zdAnalysisUserPrompt, zdNormalizeAnalysis, zdSummarize, zdToCsv } from "./cx-ticket-export.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
@@ -8859,6 +8860,8 @@ export default {
   },
   async scheduled(event, env, ctx) {
     ctx.waitUntil(fullSync(env));
+    // Flo: weekday daily check + Wednesday planning, and "Run now" requests from /flo/.
+    ctx.waitUntil((async () => { try { await floCron(env); } catch (e) { console.error("flo cron:", e); } })());
     // Retry ClickUp Automation runs that failed for a recoverable reason. We
     // never 5xx at ClickUp, so it never retries us — this is the only retry.
     ctx.waitUntil((async () => { try { await clickUpAutomationCron(env); } catch (e) { /* non-fatal */ } })());

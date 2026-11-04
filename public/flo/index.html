@@ -95,6 +95,10 @@
 
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .chip { background: var(--surface); border: 1px solid var(--border2); border-radius: 99px; padding: 5px 12px; font-size: 13.5px; }
+  .chip.ok { border-color: var(--green); } .chip.no { border-style: dashed; color: var(--muted); }
+  .chip .dot { display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .switch { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .switch input { width: 18px; height: 18px; accent-color: var(--accent); }
   .kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; font-size: 14px; margin-top: 10px; }
   .kv dt { color: var(--muted); }
 
@@ -116,6 +120,23 @@
 
   <div id="app" class="hide">
     <div class="stats" id="stats"></div>
+
+    <!-- Reaching people -->
+    <section class="card" aria-labelledby="h-reach">
+      <div class="card-head">
+        <div>
+          <h2 id="h-reach">Reaching people</h2>
+          <div class="tiny muted" id="reachInfo" style="margin-top:4px"></div>
+        </div>
+        <div class="actions" id="reachActions"></div>
+      </div>
+      <p class="sub tiny">Flo DMs the person it needs: check-ins with a card's owner, escalations to Avery, and calendar suggestions for Cass. Google only lets Flo message someone who has opened a chat with it once. For anyone else, the message goes to <span id="fallbackNames">Avery and Mark</span> to pass on.</p>
+      <div class="chips" id="people"></div>
+      <h3 style="font-size:14.5px;margin-top:18px">Scheduled runs</h3>
+      <ul class="lists" id="runs"></ul>
+      <h3 style="font-size:14.5px;margin-top:18px">Messages Flo sent</h3>
+      <ul class="lists" id="outreach"></ul>
+    </section>
 
     <!-- Instructions -->
     <section class="card" aria-labelledby="h-instr">
@@ -332,6 +353,41 @@ function renderPending() {
     : '';
   if (!p.length) $('pending').innerHTML = '<li class="empty" style="border:0">Nothing waiting.</li>';
 }
+function renderReach() {
+  const o = data.outreach;
+  const lead = o.lead ? firstName(o.lead.email) : null;
+  $('fallbackNames').textContent = o.fallback.join(' and ');
+  $('reachInfo').innerHTML = `${o.proactive ? '<span class="pill edited">On</span>' : '<span class="pill code">Off</span>'} ` +
+    `${esc(o.schedule.daily)} (daily check) and ${esc(o.schedule.weekly)} (weekly planning), ${esc(o.schedule.timezone)}. ` +
+    (lead ? `Summaries and proposals go to <b>${esc(lead)}</b>.` : `<b style="color:var(--amber)">Nobody to send summaries to yet: Avery or Mark needs to open a chat with Flo.</b>`);
+  $('reachActions').innerHTML = data.can_edit
+    ? `<label class="switch"><input type="checkbox" id="proactive" ${o.proactive ? 'checked' : ''}> Scheduled runs</label>
+       <button class="ghost" id="runDaily" ${o.run_requested ? 'disabled' : ''}>${o.run_requested ? 'Run queued…' : 'Run daily check now'}</button>
+       <button class="ghost" id="runWeekly" ${o.run_requested ? 'disabled' : ''}>Run weekly planning now</button>`
+    : '';
+  if (data.can_edit) {
+    $('proactive').onchange = async (e) => {
+      try { await api('settings', { method: 'PUT', body: { proactive: e.target.checked } }); toast(e.target.checked ? 'Scheduled runs are on.' : 'Scheduled runs are off. Flo still answers messages.'); await refresh(); }
+      catch (err) { toast(`Not changed: ${err.message}`); e.target.checked = !e.target.checked; }
+    };
+    const run = async (kind) => {
+      try { const r = await api('run', { method: 'POST', body: { kind } }); toast(r.message); await refresh(); }
+      catch (err) { toast(`Not started: ${err.message}`); }
+    };
+    $('runDaily').onclick = () => run('daily');
+    $('runWeekly').onclick = () => run('weekly');
+  }
+  $('people').innerHTML = o.people.map((p) =>
+    `<span class="chip ${p.reachable ? 'ok' : 'no'}" title="${esc(p.reachable ? `Can DM. Last message ${relTime(p.last_seen)}` : 'Hasn\'t opened a chat with Flo yet')}"><span class="dot ${p.reachable ? 'ok' : ''}"></span>${esc(p.name)}${p.fallback ? ' (fallback)' : ''}</span>`).join('');
+  const kindName = (k) => ({ daily: 'Daily check', weekly: 'Weekly planning', 'daily:manual': 'Daily check (run now)', 'weekly:manual': 'Weekly planning (run now)' }[k] || k);
+  $('runs').innerHTML = o.runs.length
+    ? o.runs.map((r) => `<li><span class="when">${esc(relTime(r.started_at))}</span><span class="what"><b>${esc(kindName(r.kind))}</b> ${r.finished_at ? esc(r.result || '') : '<span class="muted">running…</span>'}<div class="who">${esc(r.trigger || '')}</div></span></li>`).join('')
+    : '<li class="empty" style="border:0">No runs yet.</li>';
+  const statusLabel = { sent: 'Sent', fallback: 'Passed to fallback', undelivered: "Couldn't deliver", failed: 'Failed' };
+  $('outreach').innerHTML = o.recent.length
+    ? o.recent.map((m) => `<li><span class="when">${esc(relTime(m.at))}</span><span class="what"><span class="ev ${m.status === 'sent' ? 'applied' : m.status === 'fallback' ? 'approval_refused' : 'apply_failed'}">${esc(statusLabel[m.status] || m.status)}</span> to <b>${esc(firstName(m.to_email))}</b>${m.status === 'fallback' ? ` via ${esc(m.delivered_to)}` : ''}${m.task_id ? ` · <a href="https://app.clickup.com/t/${encodeURIComponent(m.task_id)}" target="_blank" rel="noopener">card</a>` : ''}<div class="who">${inline(m.text)}</div></span></li>`).join('')
+    : '<li class="empty" style="border:0">Nothing sent yet.</li>';
+}
 function renderSetup() {
   const c = data.configured;
   const yes = (ok, label) => `<span class="dot ${ok ? 'ok' : 'bad'}" style="display:inline-block;margin-right:6px"></span>${label}`;
@@ -425,7 +481,7 @@ function exitVersion() {
 
 async function refresh() {
   data = await api('overview');
-  renderStatus(); renderStats(); renderInstructions(); renderRules(); renderPending(); renderSetup();
+  renderStatus(); renderStats(); renderReach(); renderInstructions(); renderRules(); renderPending(); renderSetup();
   await Promise.all([loadLog(), loadHistory()]);
 }
 

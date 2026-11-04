@@ -10,6 +10,9 @@ import { _resetReady, createPending } from "../src/nitm-pm/store.js";
 import { validateAction, applyAction, RefusedError, _clearFieldCache } from "../src/nitm-pm/clickup.js";
 import { parseApproval } from "../src/nitm-pm/approvals.js";
 import { LIST_ID, FIELDS, PEOPLE, todayYmd, addDays, ymdToClickUpMs } from "../src/nitm-pm/config.js";
+import { _clearTeamCache, messagePerson } from "../src/nitm-pm/outreach.js";
+import { dueRuns, floCron } from "../src/nitm-pm/scheduler.js";
+import { recordPerson } from "../src/nitm-pm/store.js";
 
 const PROJECT = "123456789";
 const HOST = "https://ops.anurseinthemaking.com";
@@ -124,7 +127,20 @@ LIST_FIELDS[0].type_config.options = [
   { id: "st-ready", name: "Ready to Schedule", orderindex: 15 },
 ];
 
+// ClickUp workspace members (GET /team), for name -> email.
+const TEAM = [
+  [89106215, "Avery Pless", AVERY.email],
+  [50405997, "Mark Podlas", "mark@anurseinthemaking.com"],
+  [89106214, "Diana Boyle", DIANA.email],
+  [89133528, "Gabriela Eisenbraun", "gaby@anurseinthemaking.com"],
+  [89173497, "Cassandra Van Nostrand", "cassandra@anurseinthemaking.com"],
+  [89106213, "Kristine Tuttle", "kristine.tuttle@anurseinthemaking.com"],
+];
+const dmOf = (email) => `spaces/DM-${email.split("@")[0]}`;
+const sayHi = (email, name) => recordPerson(env, { email, displayName: name, chatUser: "users/1", dmSpace: dmOf(email) });
+
 beforeEach(() => {
+  _clearTeamCache();
   _clearFieldCache();
   _clearJwksCache();
   _clearTokenCache();
@@ -186,6 +202,9 @@ beforeEach(() => {
       const path = url.slice("https://api.clickup.com/api/v2".length).split("?")[0];
       let m;
       if (method === "GET" && path === `/list/${LIST_ID}/field`) return ok({ fields: LIST_FIELDS });
+      if (method === "GET" && path === "/team") {
+        return ok({ teams: [{ id: "9017029478", members: TEAM.map(([id, username, email]) => ({ user: { id, username, email } })) }] });
+      }
       if ((m = path.match(/^\/task\/([^/]+)\/field\/([^/]+)$/))) return ok({});
       if (method === "GET" && path === `/list/${LIST_ID}/task`) {
         // Honor the due-date window like ClickUp does (so a too-tight bound is
@@ -377,7 +396,7 @@ test("the system prompt carries the instructions + guardrails, cached, with cont
   assert.match(req.system[0].text, /TikTok AI PM: Operating Instructions/);
   assert.match(req.system[0].text, /When a person explicitly asks for one, propose exactly what they asked/);
   assert.deepEqual(req.system[0].cache_control, { type: "ephemeral" });
-  assert.deepEqual(req.tools.map((t) => t.name), ["find_cards", "get_card", "calendar", "propose_change", "apply_approved"]);
+  assert.deepEqual(req.tools.map((t) => t.name), ["find_cards", "get_card", "calendar", "propose_change", "message_person", "apply_approved"]);
   assert.match(req.messages.at(-1).content, /<context>[\s\S]*approver: yes[\s\S]*<\/context>\s+What's posting next week\?/);
 });
 
@@ -863,4 +882,179 @@ test("activity log is shaped for the page, with card links", async () => {
   const ov = (await floApi("overview")).json;
   assert.equal(ov.stats.changed_7d, 1);
   assert.equal(ov.pending.length, 0);
+});
+
+// ===========================================================================
+// Reaching people
+// ===========================================================================
+const postsTo = (space) => chatPosts.filter((p) => p.url.startsWith(`https://chat.googleapis.com/v1/${space}/messages`));
+
+test("a DM to Flo records how to reach that person", async () => {
+  claudeScript = [{ reply: say("hi") }];
+  await send(addonMessage("hello", { dm: true }));
+  const row = env.DB.raw.prepare("SELECT * FROM pm_people WHERE email = ?").get(AVERY.email);
+  assert.equal(row.dm_space, SPACE);
+  assert.equal(row.display_name, "Avery Pless");
+});
+
+test("message_person DMs someone who has said hi, logs it, and keeps it in their history", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi("gaby@anurseinthemaking.com", "Gabriela Eisenbraun");
+  const r = await messagePerson(env, { person: "Gaby", text: "Checking in on the peds quiz, it posts Friday. Anything blocking it?", taskId: "peds-quiz", kind: "check_in" });
+  assert.equal(r.sent, true);
+  assert.equal(r.to, "Gabriela");
+  const posts = postsTo(dmOf("gaby@anurseinthemaking.com"));
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].body.text, /Anything blocking it\?/);
+  const out = env.DB.raw.prepare("SELECT status, to_email, task_id FROM pm_outreach").all();
+  assert.deepEqual(out.map((o) => ({ ...o })), [{ status: "sent", to_email: "gaby@anurseinthemaking.com", task_id: "peds-quiz" }]);
+  const hist = JSON.parse(env.DB.raw.prepare("SELECT messages FROM pm_threads WHERE space = ?").get(dmOf("gaby@anurseinthemaking.com")).messages);
+  assert.equal(hist.at(-1).role, "assistant");
+});
+
+test("someone Flo can't reach: the message goes to Avery and Mark to pass on", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  await sayHi("mark@anurseinthemaking.com", "Mark Podlas");
+  const r = await messagePerson(env, { person: "Kristine", text: "Can you record the VO for the peds quiz today?", taskId: "peds-quiz", kind: "check_in" });
+  assert.equal(r.sent, true);
+  assert.equal(r.via_fallback, true);
+  assert.match(r.message, /hasn't opened a chat with me yet/);
+  for (const email of [AVERY.email, "mark@anurseinthemaking.com"]) {
+    const posts = postsTo(dmOf(email));
+    assert.equal(posts.length, 1, email);
+    assert.match(posts[0].body.text, /^For \*Kristine\*: .*pass this on\?[\s\S]*record the VO/);
+  }
+  assert.equal(env.DB.raw.prepare("SELECT status FROM pm_outreach").get().status, "fallback");
+});
+
+test("if nobody can be reached, nothing is sent and Flo says so", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  const r = await messagePerson(env, { person: "Kristine", text: "hello", kind: "check_in" });
+  assert.equal(r.sent, false);
+  assert.match(r.message, /Nothing was sent/);
+  assert.equal(chatPosts.length, 0);
+});
+
+test("one message per person per card per day, and unknown names are refused", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi("gaby@anurseinthemaking.com", "Gabriela Eisenbraun");
+  await messagePerson(env, { person: "Gaby", text: "first", taskId: "peds-quiz", kind: "check_in" });
+  const again = await messagePerson(env, { person: "Gaby", text: "second", taskId: "peds-quiz", kind: "check_in" });
+  assert.equal(again.sent, false);
+  assert.match(again.message, /Already messaged Gabriela about this card today/);
+  const nobody = await messagePerson(env, { person: "Zed", text: "hi" });
+  assert.match(nobody.message, /don't know who "Zed" is/);
+});
+
+test("Claude can message a person, and short names match (Cass -> Cassandra)", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi("cassandra@anurseinthemaking.com", "Cassandra Van Nostrand");
+  claudeScript = [
+    { reply: toolUse("message_person", { person: "Cass", text: "Nov 11 to 13 are three Sim Teaching in a row. Swap the 12th with Friday's quiz?", kind: "calendar" }) },
+    { reply: say("Sent Cass a swap suggestion.") },
+  ];
+  await send(addonMessage("Tell Cass about the Sim Teaching pile-up"));
+  assert.equal(postsTo(dmOf("cassandra@anurseinthemaking.com")).length, 1);
+  assert.equal(JSON.parse(lastToolResults(claudeRequests.at(-1))[0].content).sent, true);
+});
+
+test("a non-approver's proposal is filed with the lead approver and sent to them", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  claudeScript = [
+    { reply: toolUse("propose_change", { type: "due_date", task_id: "peds-quiz", date: addDays(TODAY, 2) }) },
+    { reply: say("Sent to Avery to approve.") },
+  ];
+  await send(addonMessage("Can the peds quiz be due Friday?", { sender: DIANA }));
+  const rows = pendingRows();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].space, dmOf(AVERY.email), "filed in Avery's DM");
+  assert.equal(rows[0].thread, "");
+  assert.equal(rows[0].proposed_by, DIANA.email);
+  const tr = JSON.parse(lastToolResults(claudeRequests.at(-1))[0].content);
+  assert.match(tr.status, /sent to Avery to approve/);
+  const toAvery = postsTo(dmOf(AVERY.email));
+  assert.equal(toAvery.length, 1);
+  assert.match(toAvery[0].body.text, /^Diana asked for a change:\n\*#1\*: .*approve 1/s);
+
+  // Avery approves in her DM.
+  const avDm = { commonEventObject: { hostApp: "CHAT" }, chat: { user: AVERY, space: { name: dmOf(AVERY.email), spaceType: "DIRECT_MESSAGE" },
+    messagePayload: { space: { name: dmOf(AVERY.email), spaceType: "DIRECT_MESSAGE" }, message: { text: "approve 1", argumentText: "approve 1", sender: { name: "users/9", ...AVERY }, thread: { name: `${dmOf(AVERY.email)}/threads/x` } } } } };
+  const { text } = await send(avDm);
+  assert.match(text, /✅ #1/);
+  assert.equal(puts().length, 1);
+});
+
+// ===========================================================================
+// Schedule
+// ===========================================================================
+const nyTime = (isoLocal) => Date.parse(isoLocal + "-05:00"); // Nov = EST
+
+test("dueRuns: weekday mornings for the daily check, Wednesday for planning, never late", () => {
+  assert.deepEqual(dueRuns("America/New_York", nyTime("2026-11-04T08:59:00")), []);
+  assert.deepEqual(dueRuns("America/New_York", nyTime("2026-11-04T09:05:00")), ["daily"]);
+  assert.deepEqual(dueRuns("America/New_York", nyTime("2026-11-04T10:30:00")), ["daily", "weekly"]);
+  assert.deepEqual(dueRuns("America/New_York", nyTime("2026-11-04T15:00:00")), [], "a 3pm deploy doesn't fire a late run");
+  assert.deepEqual(dueRuns("America/New_York", nyTime("2026-11-05T10:30:00")), ["daily"]);
+  assert.deepEqual(dueRuns("America/New_York", nyTime("2026-11-07T10:00:00")), [], "Saturday");
+});
+
+test("the cron runs the daily check once, in the lead's DM, and posts the summary there", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  const before = claudeRequests.length;
+  claudeScript = [
+    { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) },
+    { reply: say("*#1*: set the peds quiz to high. Nothing else is stuck.") },
+  ];
+  const nine = nyTime(`${todayYmd()}T09:10:00`);
+  await floCron(env, nine);
+  assert.equal(claudeRequests.length, before + 2);
+  assert.match(claudeRequests.at(-1).messages[0].content, /Scheduled run: the weekday daily check/);
+  const posts = postsTo(dmOf(AVERY.email));
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].body.text, /^\*Daily check, .+\*\n\*#1\*/);
+  assert.equal(pendingRows()[0].space, dmOf(AVERY.email));
+  assert.equal(writes().length, 0, "still nothing changed in ClickUp");
+
+  await floCron(env, nine + 120000); // next tick
+  assert.equal(claudeRequests.length, before + 2, "not run twice");
+});
+
+test("the schedule can be switched off; a run-now request still runs", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  const off = await floApi("settings", { method: "PUT", body: { proactive: false } });
+  assert.equal(off.status, 200);
+  const before = claudeRequests.length;
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  assert.equal(claudeRequests.length, before, "off means no scheduled run");
+
+  assert.equal((await floApi("run", { method: "POST", body: { kind: "daily" }, as: DIANA.email })).status, 403);
+  assert.equal((await floApi("run", { method: "POST", body: { kind: "daily" } })).status, 200);
+  claudeScript = [{ reply: say("Nothing is stuck today.") }];
+  await floCron(env, nyTime(`${todayYmd()}T15:00:00`));
+  assert.equal(claudeRequests.length, before + 1, "run-now ran despite the time and the switch");
+  assert.match(postsTo(dmOf(AVERY.email)).at(-1).body.text, /Nothing is stuck today/);
+});
+
+test("with no reachable lead the scheduled run is skipped and logged", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  const before = claudeRequests.length;
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  assert.equal(claudeRequests.length, before);
+  assert.ok(logRows().some((r) => r.event === "run_skipped"));
+});
+
+test("the page overview shows who Flo can reach", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi("gaby@anurseinthemaking.com", "Gabriela Eisenbraun");
+  const o = (await floApi("overview")).json.outreach;
+  const gaby = o.people.find((p) => p.name === "Gaby");
+  const kristine = o.people.find((p) => p.name === "Kristine");
+  assert.equal(gaby.reachable, true);
+  assert.equal(kristine.reachable, false);
+  assert.ok(o.people.find((p) => p.name === "Mark").fallback);
+  assert.equal(o.proactive, true);
 });

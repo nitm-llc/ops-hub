@@ -23,7 +23,7 @@
 // ============================================================================
 
 import { verifyChatRequest, postChatMessage } from "./google.js";
-import { ensureTables, expireOld, loadHistory, appendHistory, logAction } from "./store.js";
+import { ensureTables, expireOld, loadHistory, appendHistory, logAction, recordPerson } from "./store.js";
 import { parseApproval, handlePureApproval, isApprover } from "./approvals.js";
 import { runTurn } from "./brain.js";
 import { DEFAULT_TZ } from "./config.js";
@@ -120,6 +120,18 @@ async function handleMessage(env, ev, started) {
     await logAction(env, { conv, actor: sender.email || null, event: "refused_sender", result: "outside the allowed domain" });
     return { text: "Sorry, I only work with the NITM team." };
   }
+  // Remember how to reach this person: an app can't open a DM itself, so
+  // their DM with Flo is only known once they've messaged it.
+  try {
+    await recordPerson(env, {
+      email: sender.email,
+      displayName: sender.displayName,
+      chatUser: ev.message?.sender?.name || ev.user?.name || null,
+      dmSpace: conv.dm ? conv.space : null,
+    });
+  } catch (e) {
+    console.error("nitm-pm: recordPerson failed:", e);
+  }
   if (!text) return { text: HELLO };
 
   await expireOld(env);
@@ -179,7 +191,12 @@ export async function handleNitmPmRoutes(request, env, ctx, path, { syncMs = SYN
   try {
     await ensureTables(env);
     if (ev.type === "ADDED_TO_SPACE") {
-      await logAction(env, { conv: conversationOf(ev), actor: ev.user?.email || null, event: "added_to_space" });
+      const c = conversationOf(ev);
+      await logAction(env, { conv: c, actor: ev.user?.email || null, event: "added_to_space" });
+      const email = String(ev.user?.email || "").toLowerCase();
+      if (c.dm && email.endsWith("@" + allowedDomain(env))) {
+        await recordPerson(env, { email, displayName: ev.user?.displayName, chatUser: ev.user?.name, dmSpace: c.space }).catch(() => {});
+      }
       return syncReply(ev, HELLO);
     }
     if (ev.type === "REMOVED_FROM_SPACE") {
