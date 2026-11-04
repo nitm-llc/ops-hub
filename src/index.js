@@ -3,6 +3,7 @@ import { handleVideoReviewAPI } from "./video-review.js";
 import { handleClickUpAutomationRoutes, clickUpAutomationCron } from "./clickup-automation.js";
 import { handleStrategyRoutes } from "./strategy.js";
 import { handleTikTokRouterRoutes } from "./tiktok-router/index.js";
+import { handleNitmPmRoutes } from "./nitm-pm/index.js";
 import { cxModelPricing, cxReadPrompt, cxFinProfilePrompt, cxProfileLength, HAIKU_55_TIER_TOKENS } from "./cx-product-kb.js";
 import { zdDateRange, zdSearchQuery, zdAnalysisPrompt, zdAnalysisUserPrompt, zdNormalizeAnalysis, zdSummarize, zdToCsv } from "./cx-ticket-export.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
@@ -8595,6 +8596,11 @@ export default {
     // Above the ClickUp Automation mount; it sits under that module's Access bypass.
     const ttResp = await handleTikTokRouterRoutes(request, env, ctx, path);
     if (ttResp) return ttResp;
+
+    // ===== NITM PM Google Chat app (POST /clickup-automation/webhook/nitm-pm) =====
+    // Same Access bypass as the router; the Google token check is its guard.
+    const pmResp = await handleNitmPmRoutes(request, env, ctx, path);
+    if (pmResp) return pmResp;
 
     // ===== CLICKUP AUTOMATION (handles /clickup-automation/* ; returns null otherwise) =====
     // Mounted here, above the global OPTIONS handler below, because this module

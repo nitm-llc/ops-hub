@@ -29,8 +29,15 @@
     "CLICKUP_TEAM_ID": "9017029478",
     // The Cloudflare Access hostname. The admin API refuses any request that
     // arrived on a different host, because *.workers.dev skips the Access gate.
-    "APP_HOSTNAME": "ops.anurseinthemaking.com"
+    "APP_HOSTNAME": "ops.anurseinthemaking.com",
+    // NITM PM Google Chat app (src/nitm-pm). The model is config so it's easy
+    // to change. Secrets (NOT here): GOOGLE_CHAT_SA_KEY, PM_APPROVERS,
+    // PM_CHAT_PROJECT_NUMBER; ANTHROPIC_API_KEY and CLICKUP_TOKEN are shared.
+    "PM_MODEL": "claude-sonnet-5-5",
+    "PM_TIMEZONE": "America/New_York"
   },
+  // src/nitm-pm imports its operating instructions as plain text.
+  "rules": [{ "type": "Text", "globs": ["**/ai-pm-instructions.md"], "fallthrough": true }],
   "d1_databases": [
     {
       "binding": "DB",
