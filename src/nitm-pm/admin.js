@@ -98,6 +98,24 @@ async function reachability(env) {
   return out;
 }
 
+// Who ClickUp shows as the author of Flo's changes (cached; one GET /user).
+let _writer = null;
+async function writerIdentity(env) {
+  if (!env.PM_CLICKUP_TOKEN) return { as_flo: false, name: null, error: null };
+  if (_writer && Date.now() - _writer.at < 10 * 60 * 1000) return _writer.v;
+  let v;
+  try {
+    const res = await fetch("https://api.clickup.com/api/v2/user", { headers: { Authorization: env.PM_CLICKUP_TOKEN } });
+    const body = await res.json().catch(() => ({}));
+    v = res.ok ? { as_flo: true, name: body.user?.username || body.user?.email || "?", email: body.user?.email || null, error: null }
+               : { as_flo: true, name: null, error: `ClickUp said ${res.status}: the token may be wrong` };
+  } catch (e) {
+    v = { as_flo: true, name: null, error: e.message };
+  }
+  _writer = { at: Date.now(), v };
+  return v;
+}
+
 async function overview(env, viewer) {
   await expireOld(env);
   const instr = await loadInstructions(env, DEFAULT_INSTRUCTIONS);
@@ -133,6 +151,7 @@ async function overview(env, viewer) {
       claude: !!env.ANTHROPIC_API_KEY,
       clickup: !!env.CLICKUP_TOKEN,
     },
+    clickup_writer: await writerIdentity(env),
     pending: pending || [],
     outreach: {
       proactive: (await getSetting(env, "proactive", "on")) !== "off",

@@ -397,7 +397,11 @@ function renderSetup() {
     <dt>AI model</dt><dd>${esc(data.model)} (effort: ${esc(data.effort)})</dd>
     <dt>Time zone</dt><dd>${esc(data.timezone)}</dd>
     <dt>Google Chat</dt><dd>${yes(c.google_project && c.google_key, c.google_project && c.google_key ? 'Project number and service account set' : 'Missing project number or service-account key')}</dd>
-    <dt>Claude and ClickUp</dt><dd>${yes(c.claude && c.clickup, c.claude && c.clickup ? 'Keys set' : 'A key is missing')}</dd>`;
+    <dt>Claude and ClickUp</dt><dd>${yes(c.claude && c.clickup, c.claude && c.clickup ? 'Keys set' : 'A key is missing')}</dd>
+    <dt>Changes appear as</dt><dd>${(() => { const w = data.clickup_writer || {};
+      if (!w.as_flo) return yes(false, 'The shared ClickUp account (Flo has no token of its own yet)');
+      if (w.error) return yes(false, esc(w.error));
+      return yes(true, `<b>${esc(w.name)}</b> in ClickUp`); })()}</dd>`;
 }
 async function loadLog() {
   try {

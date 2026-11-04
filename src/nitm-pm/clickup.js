@@ -40,11 +40,17 @@ import {
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const MAX_PAGES = 10;
 
+// Changes and comments go out as Flo's own ClickUp account (PM_CLICKUP_TOKEN)
+// so everyone can tell they came from Flo. Reads keep the shared token, which
+// sees the whole workspace (member list, all lists) whatever Flo's role is.
+export const writesAsFlo = (env) => !!env.PM_CLICKUP_TOKEN;
+
 export async function clickup(env, method, path, body) {
-  if (!env.CLICKUP_TOKEN) throw new Error("CLICKUP_TOKEN is not set");
+  const token = method !== "GET" && env.PM_CLICKUP_TOKEN ? env.PM_CLICKUP_TOKEN : env.CLICKUP_TOKEN;
+  if (!token) throw new Error("CLICKUP_TOKEN is not set");
   const res = await fetch(`${CLICKUP_API}${path}`, {
     method,
-    headers: { Authorization: env.CLICKUP_TOKEN, "Content-Type": "application/json" },
+    headers: { Authorization: token, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();

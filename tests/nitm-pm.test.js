@@ -1087,3 +1087,23 @@ test("the page overview shows who Flo can reach", async () => {
   assert.ok(o.people.find((p) => p.name === "Mark").fallback);
   assert.equal(o.proactive, true);
 });
+
+test("with PM_CLICKUP_TOKEN, changes and comments go out as Flo; reads keep the shared token", async () => {
+  env.PM_CLICKUP_TOKEN = "pk_flo";
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o = {}) => {
+    if (String(u).includes("api.clickup.com")) seen.push({ method: o.method || "GET", auth: (o.headers || {}).Authorization, url: String(u) });
+    if (String(u) === "https://api.clickup.com/api/v2/user") return new Response(JSON.stringify({ user: { username: "Flo", email: "flo@anurseinthemaking.com" } }));
+    return realFetch(u, o);
+  };
+  claudeScript = [{ reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) }, { reply: say("#1") }];
+  await send(addonMessage("bump the peds quiz"));
+  await send(addonMessage("yes"));
+  const w = seen.filter((c) => c.method !== "GET");
+  assert.ok(w.length >= 2, "a change and a comment");
+  assert.ok(w.every((c) => c.auth === "pk_flo"), "every write uses Flo's token");
+  assert.ok(seen.filter((c) => c.method === "GET" && !c.url.endsWith("/user")).every((c) => c.auth === "pk_test"), "reads use the shared token");
+  const ov = (await floApi("overview")).json;
+  assert.deepEqual(ov.clickup_writer, { as_flo: true, name: "Flo", email: "flo@anurseinthemaking.com", error: null });
+});
