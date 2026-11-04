@@ -86,6 +86,9 @@
   "ai": {
     "binding": "AI"
   },
+  // Keep Worker logs (console + exceptions) queryable in the dashboard, so a
+  // failure can be diagnosed after the fact rather than only via a live tail.
+  "observability": { "enabled": true },
   "triggers": {
     "crons": ["*/2 * * * *"]
   }

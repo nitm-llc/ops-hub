@@ -98,7 +98,10 @@ export async function ensureTables(env) {
        result  TEXT
      )`,
   ];
-  for (const s of stmts) await env.DB.prepare(s).run();
+  // One round trip: run serially, 13 statements to remote D1 on a fresh
+  // isolate took seconds out of Chat's 30-second reply window.
+  if (typeof env.DB.batch === "function") await env.DB.batch(stmts.map((q) => env.DB.prepare(q)));
+  else for (const q of stmts) await env.DB.prepare(q).run();
   _ready = true;
 }
 export const _resetReady = () => {

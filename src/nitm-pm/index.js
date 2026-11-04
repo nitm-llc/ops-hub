@@ -30,7 +30,9 @@ import { DEFAULT_TZ } from "./config.js";
 import { DEFAULT_APP_HOSTNAME } from "../access.js";
 
 export const CHAT_PATH = "/clickup-automation/webhook/nitm-pm";
-export const SYNC_MS = 20000;
+// Reply "On it…" after this long. Google allows ~30 s; 10 s leaves a wide
+// margin for D1, verification and network time before and after the race.
+export const SYNC_MS = 10000;
 export const DEADLINE_MS = 45000;
 const MAX_CHARS = 3900; // Chat's text limit is 4,096 characters
 
@@ -208,19 +210,30 @@ export async function handleNitmPmRoutes(request, env, ctx, path, { syncMs = SYN
     const r = await handleMessage(env, ev, started);
     if (r.text !== undefined) return syncReply(ev, r.text);
 
-    // Race the answer against the sync window.
+    // Race the answer against the sync window. Timing marks go to the action
+    // log (event "turn") so a "not responding" can be diagnosed afterwards.
+    const conv0 = conversationOf(ev);
+    const mark = (result) => logAction(env, { conv: conv0, actor: ev.message?.sender?.email || ev.user?.email || null, event: "turn", result });
+    const t0 = Date.now();
     let handle;
     const timer = new Promise((resolve) => {
-      handle = setTimeout(() => resolve(null), syncMs);
+      // Counted from when the request ARRIVED, not from here: verification and
+      // table setup already used part of Google's 30 seconds.
+      handle = setTimeout(() => resolve(null), Math.max(0, syncMs - (Date.now() - started)));
     });
     const winner = await Promise.race([r.work.then((t) => ({ t })), timer]);
     clearTimeout(handle);
-    if (winner) return syncReply(ev, winner.t);
+    if (winner) {
+      ctx.waitUntil(mark(`answered directly after ${((Date.now() - started) / 1000).toFixed(1)}s (pre-work ${((t0 - started) / 1000).toFixed(1)}s)`));
+      return syncReply(ev, winner.t);
+    }
 
     const conv = conversationOf(ev);
+    ctx.waitUntil(mark(`replied "On it" after ${((Date.now() - started) / 1000).toFixed(1)}s (pre-work ${((t0 - started) / 1000).toFixed(1)}s)`));
     ctx.waitUntil(
       r.work
         .then((t) => postChatMessage(env, { space: conv.space, thread: conv.dm ? null : conv.thread, text: toChatFormat(t) }))
+        .then(() => mark(`posted the answer after ${((Date.now() - started) / 1000).toFixed(1)}s`))
         .catch(async (e) => {
           console.error("nitm-pm async post failed:", e);
           await logAction(env, { conv, event: "async_post_failed", result: String(e.message || e) });

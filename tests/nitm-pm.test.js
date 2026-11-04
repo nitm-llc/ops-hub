@@ -38,7 +38,11 @@ function makeD1() {
     first: async () => db.prepare(sql).get(...args) ?? null,
     all: async () => ({ results: db.prepare(sql).all(...args) }),
   });
-  return { raw: db, prepare: (sql) => stmt(sql) };
+  return {
+    raw: db,
+    prepare: (sql) => stmt(sql),
+    batch: async (stmts) => Promise.all(stmts.map((st) => st.run())),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -704,8 +708,10 @@ test("a slow answer replies \"On it…\" and then posts in the same thread", asy
   claudeScript = [{ reply: say("Here's the *daily check*: all clear."), delay: 150 }];
   const { text, waits } = await send(addonMessage("Run the daily check"), { syncMs: 20 });
   assert.equal(text, "On it…");
-  assert.equal(waits.length, 1);
   await Promise.all(waits);
+  const marks = logRows().filter((r) => r.event === "turn").map((r) => r.result);
+  assert.ok(marks.some((m) => /^replied "On it" after/.test(m)), "timing mark for the On it reply");
+  assert.ok(marks.some((m) => /^posted the answer after/.test(m)), "timing mark for the async answer");
   assert.equal(chatPosts.length, 1);
   assert.equal(chatPosts[0].url, `https://chat.googleapis.com/v1/${SPACE}/messages?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD`);
   assert.deepEqual(chatPosts[0].body, { text: "Here's the *daily check*: all clear.", thread: { name: THREAD } });
@@ -725,12 +731,35 @@ test("a slow answer replies \"On it…\" and then posts in the same thread", asy
   assert.equal(ok, true, "assertion is RS256-signed with the service account key");
 });
 
+test("the On it deadline counts from when the request arrived", async () => {
+  // Slow setup (e.g. a fresh server) must not push the reply past Google's window.
+  const realPrepare = env.DB.prepare;
+  let slowed = false;
+  env.DB.prepare = (sql) => {
+    const st = realPrepare(sql);
+    if (!slowed && /FROM pm_threads/.test(sql)) {
+      slowed = true;
+      const first = st.bind;
+      return { ...st, bind: (...a) => { const b = first(...a); return { ...b, first: async () => { await new Promise((r) => setTimeout(r, 120)); return b.first(); } }; } };
+    }
+    return st;
+  };
+  claudeScript = [{ reply: say("late answer"), delay: 200 }];
+  const t = Date.now();
+  const { text, waits } = await send(addonMessage("What's stuck today?"), { syncMs: 100 });
+  assert.equal(text, "On it…");
+  assert.ok(Date.now() - t < 200, `replied within the window (took ${Date.now() - t}ms)`);
+  await Promise.all(waits);
+  env.DB.prepare = realPrepare;
+});
+
 test("a fast answer is returned directly with no async post", async () => {
   claudeScript = [{ reply: say("Quick one.") }];
   const { text, waits } = await send(addonMessage("What's stuck today?"));
   assert.equal(text, "Quick one.");
-  assert.equal(waits.length, 0);
+  await Promise.all(waits);
   assert.equal(chatPosts.length, 0);
+  assert.match(logRows().find((r) => r.event === "turn").result, /^answered directly after/);
 });
 
 test("in a DM the async answer posts to the space with no thread", async () => {
