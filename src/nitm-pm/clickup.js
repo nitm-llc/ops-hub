@@ -143,9 +143,12 @@ export async function findCards(env, input = {}, { tz, today = todayYmd(tz) } = 
 
   let tasks;
   if (input.overdue) {
-    // Bounded look-back: anything due before today in the last ~4 months.
+    // Bounded look-back, deliberately generous: ClickUp stores date-only due
+    // dates at different hours (04:00Z, 09:00Z...), and 04:00Z on today's UTC
+    // date is YESTERDAY evening in New York. So ask for everything up to the
+    // end of today and let readCard() decide "overdue" by New York day.
     tasks = await fetchTasks(env, {
-      due_date_lt: String(rangeStartMs(today) + 6 * 3600e3),
+      due_date_lt: String(rangeEndMs(today)),
       due_date_gt: String(rangeStartMs(addDays(today, -120))),
       ...(from ? { custom_fields: postDateRange(from, to) } : {}),
     });

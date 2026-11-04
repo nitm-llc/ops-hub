@@ -188,8 +188,13 @@ beforeEach(() => {
       if (method === "GET" && path === `/list/${LIST_ID}/field`) return ok({ fields: LIST_FIELDS });
       if ((m = path.match(/^\/task\/([^/]+)\/field\/([^/]+)$/))) return ok({});
       if (method === "GET" && path === `/list/${LIST_ID}/task`) {
-        // Ignore server-side filters: the code must re-apply them itself.
-        return ok({ tasks: Object.values(tasks), last_page: true });
+        // Honor the due-date window like ClickUp does (so a too-tight bound is
+        // caught); other filters are ignored and must be re-applied in code.
+        const q = new URL(url).searchParams;
+        const lt = q.get("due_date_lt") ? Number(q.get("due_date_lt")) : Infinity;
+        const gt = q.get("due_date_gt") ? Number(q.get("due_date_gt")) : -Infinity;
+        const inWindow = (t) => (lt === Infinity && gt === -Infinity) || (t.due_date && Number(t.due_date) < lt && Number(t.due_date) > gt);
+        return ok({ tasks: Object.values(tasks).filter(inWindow), last_page: true });
       }
       if ((m = path.match(/^\/task\/([^/]+)\/comment$/))) {
         if (method === "GET") return ok({ comments: comments[m[1]] || [] });
@@ -345,6 +350,22 @@ test("\"What's stuck today?\" returns only overdue cards that aren't done or pau
   assert.equal(funny.expected_owner, "Diana"); // review stage -> Diana, currently Tia
   assert.equal(funny.owner_matches, false);
   assert.equal(writes().length, 0);
+});
+
+test("a due date stored at 04:00 UTC today counts as yesterday in New York (overdue)", async () => {
+  // Real case, Nov 4 2026: "Match each medication to its antidote" had
+  // due_date 2026-11-04T04:00Z = Nov 3, 11pm in New York, and was missed.
+  const t = card("antidote", { name: "Match each medication to its antidote", stage: "st-edit", post: addDays(TODAY, 3), assignees: [PEOPLE.tia] });
+  t.due_date = String(Date.parse(TODAY + "T04:00:00Z"));
+  tasks.antidote = t;
+  claudeScript = [{ reply: toolUse("find_cards", { overdue: true }) }, { reply: say("ok") }];
+  await send(addonMessage("What's stuck today?"));
+  const out = JSON.parse(lastToolResults(claudeRequests[1])[0].content);
+  const c = out.cards.find((x) => x.id === "antidote");
+  assert.ok(c, "the 04:00Z card is reported as overdue");
+  assert.equal(c.due_date, addDays(TODAY, -1));
+  assert.equal(c.expected_owner, "Gaby"); // a Quiz in an edit stage
+  assert.equal(c.owner_matches, false);
 });
 
 test("the system prompt carries the instructions + guardrails, cached, with context on the message", async () => {
