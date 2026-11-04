@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Flo — NITM Ops</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* nav.js owns the neutral palette (--bg/--panel/--surface/--border/--text/...).
+     Only accent + semantic colours belong here. */
+  :root {
+    --accent: #0f766e; --accent-text: #ffffff; --accent-bg: #e6f4f2;
+    --red: #dc2626; --red-bg: #fee2e2; --amber: #b45309; --amber-bg: #fef3c7;
+    --green: #15803d; --green-bg: #dcfce7;
+  }
+  :root[data-theme="dark"] {
+    --accent: #5eead4; --accent-text: #042f2b; --accent-bg: #10302c;
+    --red: #f87171; --red-bg: #431a1a; --amber: #fbbf24; --amber-bg: #422f06;
+    --green: #4ade80; --green-bg: #10331c;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 80px; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 26px 16px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.3px; }
+  h2 { font-size: 17px; font-weight: 700; }
+  .sub { font-size: 14px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .tiny { font-size: 12.5px; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .hide { display: none !important; }
+
+  button { padding: 9px 15px; border-radius: 9px; border: 0; background: var(--accent); color: var(--accent-text);
+           font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; min-height: 38px; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+  button.link { background: none; color: var(--accent); padding: 2px 4px; min-height: 0; font-weight: 600; }
+  button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  textarea, input[type=text] {
+    font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border2); border-radius: 8px; padding: 9px 10px; width: 100%;
+  }
+  textarea { min-height: 520px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-top: 16px; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .status { display: flex; gap: 8px 18px; align-items: center; font-size: 13.5px; margin-top: 14px; color: var(--text2); flex-wrap: wrap; }
+  .status span { display: inline-flex; gap: 7px; align-items: center; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+  .dot.ok { background: var(--green); } .dot.warn { background: var(--amber); } .dot.bad { background: var(--red); }
+
+  .banner { border-radius: 12px; padding: 12px 15px; font-size: 14px; margin-top: 16px; line-height: 1.45; }
+  .banner.bad { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+  .banner.info { background: var(--accent-bg); color: var(--text); border: 1px solid var(--border2); }
+
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; }
+  .pill.code { background: var(--surface); color: var(--muted); border: 1px solid var(--border2); }
+  .pill.edited { background: var(--accent-bg); color: var(--accent); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .stat b { display: block; font-size: 22px; font-weight: 700; }
+  .stat span { font-size: 12.5px; color: var(--muted); }
+
+  /* rendered instructions */
+  .doc { margin-top: 12px; font-size: 14.5px; line-height: 1.6; color: var(--text); max-height: 640px; overflow: auto; padding-right: 6px; }
+  .doc.open { max-height: none; }
+  .doc h1 { font-size: 20px; margin: 4px 0 8px; }
+  .doc h2 { font-size: 16.5px; margin: 20px 0 6px; }
+  .doc h3 { font-size: 15px; margin: 14px 0 4px; }
+  .doc p { margin: 8px 0; }
+  .doc ul, .doc ol { margin: 6px 0 8px 22px; padding: 0; }
+  .doc li { margin: 3px 0; }
+  .doc code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; background: var(--surface); padding: 1px 5px; border-radius: 5px; }
+  .doc table { border-collapse: collapse; margin: 10px 0; font-size: 13.5px; width: 100%; }
+  .doc th, .doc td { border: 1px solid var(--border2); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .doc th { background: var(--surface); font-weight: 700; }
+  .fade-more { margin-top: 8px; }
+
+  .lists { list-style: none; padding: 0; margin-top: 10px; }
+  .lists li { border-top: 1px solid var(--border); padding: 10px 2px; font-size: 14px; line-height: 1.45; display: flex; gap: 12px; align-items: baseline; }
+  .lists li:first-child { border-top: 0; }
+  .lists .when { flex: 0 0 92px; color: var(--muted); font-size: 12.5px; }
+  .lists .what { flex: 1; min-width: 0; }
+  .lists .who { color: var(--muted); font-size: 12.5px; }
+  .empty { color: var(--muted); font-size: 14px; margin-top: 10px; }
+  .ev { font-weight: 700; }
+  .ev.applied { color: var(--green); } .ev.apply_failed, .ev.async_post_failed { color: var(--red); }
+  .ev.approval_refused, .ev.approval_expired, .ev.proposal_refused, .ev.refused_sender { color: var(--amber); }
+
+  .seg { display: inline-flex; border: 1px solid var(--border2); border-radius: 9px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--text2); border-radius: 0; min-height: 32px; padding: 5px 12px; font-size: 13px; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chip { background: var(--surface); border: 1px solid var(--border2); border-radius: 99px; padding: 5px 12px; font-size: 13.5px; }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; font-size: 14px; margin-top: 10px; }
+  .kv dt { color: var(--muted); }
+
+  details.more summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--text2); margin-top: 18px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111827; color: #f9fafb;
+           padding: 11px 16px; border-radius: 10px; font-size: 14px; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.25); max-width: calc(100% - 32px); }
+  @media (max-width: 560px) { .kv { grid-template-columns: 1fr; } .lists li { flex-direction: column; gap: 2px; } .lists .when { flex: none; } }
+</style>
+</head>
+<body>
+<script defer src="/shared/nav.js"></script>
+<div class="wrap">
+  <h1>Flo</h1>
+  <p class="sub">Flo is the marketing team's project-management helper in Google Chat. People DM it or @mention it to ask what's due, what's stuck and who has what. It proposes changes, and nothing in ClickUp changes until an approver says yes.</p>
+  <div class="status" id="status" aria-live="polite"><span><span class="dot"></span>Checking…</span></div>
+
+  <div id="error" class="banner bad hide" role="alert"></div>
+  <div id="loading" class="card muted">Loading…</div>
+
+  <div id="app" class="hide">
+    <div class="stats" id="stats"></div>
+
+    <!-- Instructions -->
+    <section class="card" aria-labelledby="h-instr">
+      <div class="card-head">
+        <div>
+          <h2 id="h-instr">Instructions</h2>
+          <div class="tiny muted" id="instrInfo" style="margin-top:4px"></div>
+        </div>
+        <div class="actions" id="instrActions"></div>
+      </div>
+      <p class="sub tiny">What Flo follows: roles, stages and owners, the daily and weekly routines, and the calendar rules. Edits here take effect on Flo's next message, with no deploy.</p>
+
+      <div id="viewing" class="banner info hide"></div>
+      <div id="docView">
+        <div class="doc" id="doc"></div>
+        <button class="link fade-more" id="toggleDoc">Show everything</button>
+      </div>
+
+      <div id="editView" class="hide" style="margin-top:12px">
+        <label class="tiny muted" for="editor">Markdown: <code>##</code> for headings, <code>-</code> for bullets, <code>**bold**</code>, and <code>| a | b |</code> rows for tables.</label>
+        <textarea id="editor" spellcheck="true" style="margin-top:6px"></textarea>
+        <label class="tiny muted" for="note" style="display:block;margin-top:10px">What changed? (optional, shows in the history)</label>
+        <input type="text" id="note" maxlength="300" placeholder="e.g. Kristine's follow-up window is now 6 workdays" style="margin-top:4px">
+        <div class="actions" style="margin-top:12px">
+          <button id="save">Save instructions</button>
+          <button class="ghost" id="cancel">Cancel</button>
+          <span class="tiny muted" id="charCount"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Built-in rules -->
+    <section class="card" aria-labelledby="h-rules">
+      <div class="card-head">
+        <h2 id="h-rules">Built-in chat rules</h2>
+        <span class="pill code">Set in code</span>
+      </div>
+      <p class="sub tiny">These are Flo's safety and formatting rules, added after the instructions. They can only be changed in code, so an edit above can't switch off the approval step.</p>
+      <div class="doc" id="rules"></div>
+    </section>
+
+    <!-- Pending -->
+    <section class="card" aria-labelledby="h-pend">
+      <h2 id="h-pend">Waiting for approval</h2>
+      <p class="sub tiny">Proposals expire after 48 hours. Approve them in the Chat conversation where they were made ("yes" or "approve 1 and 3").</p>
+      <ul class="lists" id="pending"></ul>
+    </section>
+
+    <!-- Activity -->
+    <section class="card" aria-labelledby="h-act">
+      <div class="card-head">
+        <h2 id="h-act">Activity</h2>
+        <div class="seg" role="group" aria-label="Filter activity">
+          <button type="button" data-f="changes" aria-pressed="true">Proposals and changes</button>
+          <button type="button" data-f="all" aria-pressed="false">Everything</button>
+        </div>
+      </div>
+      <ul class="lists" id="acts"></ul>
+    </section>
+
+    <!-- Setup -->
+    <section class="card" aria-labelledby="h-setup">
+      <h2 id="h-setup">Setup</h2>
+      <dl class="kv" id="setup"></dl>
+      <p class="sub tiny" style="margin-top:12px">To add or remove approvers, run <code>npx wrangler secret put PM_APPROVERS</code> with a comma-separated list of emails, or ask Claude to do it.</p>
+    </section>
+
+    <details class="more" id="historyBox">
+      <summary>Instruction history</summary>
+      <div class="card" style="margin-top:8px">
+        <ul class="lists" id="history"></ul>
+        <div id="resetWrap" class="hide" style="margin-top:14px">
+          <button class="ghost" id="reset">Reset to the version in code</button>
+        </div>
+      </div>
+    </details>
+  </div>
+</div>
+<div class="toast hide" id="toast" role="status"></div>
+
+<script>
+const API = '/flo/api/';
+let data = null, logFilter = 'changes', viewingVersion = null;
+
+async function api(path, opts = {}) {
+  if (opts.body && typeof opts.body !== 'string') {
+    opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API + path, { credentials: 'same-origin', ...opts });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const firstName = (email) => {
+  if (!email) return 'someone';
+  const n = String(email).split('@')[0].split(/[._-]/)[0];
+  return n.charAt(0).toUpperCase() + n.slice(1);
+};
+function relTime(ts) {
+  if (!ts) return '';
+  const mins = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return `${h} hr ago`;
+  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.remove('hide');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hide'), 3500);
+}
+function showError(msg) { $('error').textContent = msg || ''; $('error').classList.toggle('hide', !msg); }
+
+// ---------- a small, safe Markdown renderer (escape first, then format) ----------
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,:;!?]|$)/g, '$1<b>$2</b>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/&lt;(https?:\/\/[^|&\s]+)\|([^&]+?)&gt;/g, '<a href="$1" target="_blank" rel="noopener">$2</a>');
+}
+function renderMd(md) {
+  const lines = String(md || '').replace(/\r\n/g, '\n').split('\n');
+  let out = '', i = 0;
+  const listStack = []; // [{type, indent}]
+  const closeLists = (toIndent = -1) => {
+    while (listStack.length && listStack[listStack.length - 1].indent > toIndent) out += `</li></${listStack.pop().type}>`;
+  };
+  while (i < lines.length) {
+    const line = lines[i];
+    const t = line.trim();
+    if (!t) { closeLists(); i++; continue; }
+    const h = t.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { closeLists(); const n = Math.min(h[1].length, 3); out += `<h${n}>${inline(h[2])}</h${n}>`; i++; continue; }
+    if (t.startsWith('|')) {
+      closeLists();
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) { rows.push(lines[i].trim()); i++; }
+      const cells = (r) => r.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+      const isSep = (r) => /^\|?\s*:?-{2,}/.test(r);
+      out += '<table>';
+      rows.forEach((r, idx) => {
+        if (isSep(r)) return;
+        const tag = idx === 0 && rows[1] && isSep(rows[1]) ? 'th' : 'td';
+        out += '<tr>' + cells(r).map((c) => `<${tag}>${inline(c)}</${tag}>`).join('') + '</tr>';
+      });
+      out += '</table>';
+      continue;
+    }
+    const li = line.match(/^(\s*)([-*•]|\d+\.)\s+(.*)$/);
+    if (li) {
+      const indent = li[1].replace(/\t/g, '    ').length;
+      const type = /\d/.test(li[2]) ? 'ol' : 'ul';
+      const top = listStack[listStack.length - 1];
+      if (!top || indent > top.indent) { out += `<${type}><li>`; listStack.push({ type, indent }); }
+      else {
+        closeLists(indent);
+        const cur = listStack[listStack.length - 1];
+        if (!cur) { out += `<${type}><li>`; listStack.push({ type, indent }); }
+        else out += '</li><li>';
+      }
+      out += inline(li[3]);
+      i++; continue;
+    }
+    closeLists();
+    const para = [t];
+    i++;
+    while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\||\s*([-*•]|\d+\.)\s)/.test(lines[i])) { para.push(lines[i].trim()); i++; }
+    out += `<p>${inline(para.join(' '))}</p>`;
+  }
+  closeLists();
+  return out;
+}
+
+// ---------- rendering ----------
+function renderStatus() {
+  const c = data.configured;
+  const allSet = c.google_project && c.google_key && c.claude && c.clickup;
+  const last = data.stats.last_question_at;
+  $('status').innerHTML =
+    `<span><span class="dot ${allSet ? 'ok' : 'bad'}"></span>${allSet ? 'Connected to Google Chat, Claude and ClickUp' : 'Setup incomplete (see Setup below)'}</span>` +
+    `<span><span class="dot ${last ? 'ok' : ''}"></span>${last ? `Last message ${relTime(last)}` : 'No messages yet'}</span>` +
+    (data.stats.errors_7d ? `<span><span class="dot warn"></span>${data.stats.errors_7d} error${data.stats.errors_7d > 1 ? 's' : ''} this week</span>` : '');
+}
+function renderStats() {
+  const s = data.stats;
+  $('stats').innerHTML = [
+    [s.proposed_7d || 0, 'proposals in the last 7 days'],
+    [s.changed_7d || 0, 'changes made in the last 7 days'],
+    [data.pending.length, 'waiting for approval'],
+  ].map(([n, label]) => `<div class="stat"><b>${n}</b><span>${label}</span></div>`).join('');
+}
+function renderInstructions() {
+  const ins = data.instructions;
+  $('instrInfo').innerHTML = ins.is_default
+    ? `<span class="pill code">Version in code</span> Not edited from this page yet.`
+    : `<span class="pill edited">Edited</span> Last saved by ${esc(firstName(ins.updated_by))}, ${esc(relTime(ins.updated_at))}.`;
+  $('instrActions').innerHTML = data.can_edit
+    ? `<button id="edit">Edit</button>`
+    : `<span class="tiny muted">Only approvers can edit</span>`;
+  if (data.can_edit) $('edit').onclick = startEdit;
+  if (!viewingVersion) $('doc').innerHTML = renderMd(ins.text);
+  $('resetWrap').classList.toggle('hide', !data.can_edit || ins.is_default);
+}
+function renderRules() { $('rules').innerHTML = renderMd(data.guardrails); }
+function renderPending() {
+  const p = data.pending;
+  $('pending').innerHTML = p.length
+    ? p.map((x) => `<li><span class="when">${esc(relTime(x.created_at))}</span><span class="what"><b>#${x.number}</b> ${inline(x.summary || '')}<div class="who">Asked by ${esc(firstName(x.proposed_by))}${x.dm ? ' in a DM' : ' in a space'}</div></span></li>`).join('')
+    : '';
+  if (!p.length) $('pending').innerHTML = '<li class="empty" style="border:0">Nothing waiting.</li>';
+}
+function renderSetup() {
+  const c = data.configured;
+  const yes = (ok, label) => `<span class="dot ${ok ? 'ok' : 'bad'}" style="display:inline-block;margin-right:6px"></span>${label}`;
+  $('setup').innerHTML = `
+    <dt>Approvers</dt><dd><div class="chips" style="margin-top:0">${data.approvers.map((e) => `<span class="chip">${esc(e)}</span>`).join('') || '<span class="muted">None set, so nothing can be approved</span>'}</div></dd>
+    <dt>ClickUp list</dt><dd><a href="${esc(data.list.url)}" target="_blank" rel="noopener">${esc(data.list.name)}</a></dd>
+    <dt>AI model</dt><dd>${esc(data.model)} (effort: ${esc(data.effort)})</dd>
+    <dt>Time zone</dt><dd>${esc(data.timezone)}</dd>
+    <dt>Google Chat</dt><dd>${yes(c.google_project && c.google_key, c.google_project && c.google_key ? 'Project number and service account set' : 'Missing project number or service-account key')}</dd>
+    <dt>Claude and ClickUp</dt><dd>${yes(c.claude && c.clickup, c.claude && c.clickup ? 'Keys set' : 'A key is missing')}</dd>`;
+}
+async function loadLog() {
+  try {
+    const { log } = await api(`log?limit=120${logFilter === 'changes' ? '&filter=changes' : ''}`);
+    $('acts').innerHTML = log.length
+      ? log.map((r) => `<li><span class="when" title="${esc(new Date(r.at).toLocaleString())}">${esc(relTime(r.at))}</span><span class="what"><span class="ev ${esc(r.event)}">${esc(r.label)}${r.number ? ` #${r.number}` : ''}</span> ${r.result ? inline(r.result) : ''}${r.card_url ? ` <a href="${esc(r.card_url)}" target="_blank" rel="noopener">card</a>` : ''}<div class="who">${r.actor ? esc(firstName(r.actor)) : 'Flo'}${r.dm ? ' · DM' : ''}</div></span></li>`).join('')
+      : '<li class="empty" style="border:0">Nothing yet.</li>';
+  } catch (e) { $('acts').innerHTML = `<li class="empty" style="border:0">Couldn't load activity: ${esc(e.message)}</li>`; }
+}
+async function loadHistory() {
+  try {
+    const { history } = await api('history');
+    $('history').innerHTML = history.length
+      ? history.map((h) => `<li><span class="when">${esc(relTime(h.at))}</span><span class="what">${h.chars == null ? '<b>Reset to the version in code</b>' : esc(h.note || 'Edited')}<div class="who">${esc(firstName(h.by))}${h.chars != null ? ` · <button class="link" data-v="${h.id}">View this version</button>` : ''}</div></span></li>`).join('')
+      : '<li class="empty" style="border:0">No edits yet. The instructions are the version in code, copied from the TikTok AI PM doc.</li>';
+    document.querySelectorAll('[data-v]').forEach((b) => (b.onclick = () => viewVersion(Number(b.dataset.v))));
+  } catch (e) { $('history').innerHTML = `<li class="empty" style="border:0">Couldn't load history: ${esc(e.message)}</li>`; }
+}
+
+// ---------- actions ----------
+function startEdit() {
+  exitVersion();
+  $('editor').value = data.instructions.text;
+  $('note').value = '';
+  updateCount();
+  $('docView').classList.add('hide');
+  $('editView').classList.remove('hide');
+  $('instrActions').classList.add('hide');
+  $('editor').focus();
+}
+function stopEdit() {
+  $('editView').classList.add('hide');
+  $('docView').classList.remove('hide');
+  $('instrActions').classList.remove('hide');
+}
+function updateCount() {
+  const n = $('editor').value.length;
+  const changed = $('editor').value.trim() !== data.instructions.text.trim();
+  $('charCount').textContent = `${n.toLocaleString()} characters${changed ? ' · unsaved changes' : ''}`;
+  $('save').disabled = !changed;
+}
+async function save() {
+  $('save').disabled = true;
+  try {
+    await api('instructions', { method: 'PUT', body: { text: $('editor').value, note: $('note').value } });
+    toast('Saved. Flo uses these from its next message.');
+    stopEdit();
+    await refresh();
+  } catch (e) { toast(`Not saved: ${e.message}`); $('save').disabled = false; }
+}
+async function reset() {
+  if (!confirm('Go back to the version of the instructions that ships in code? Your edits stay in the history.')) return;
+  try {
+    await api('instructions/reset', { method: 'POST', body: {} });
+    toast('Reset to the version in code.');
+    await refresh();
+  } catch (e) { toast(`Not reset: ${e.message}`); }
+}
+async function viewVersion(id) {
+  try {
+    const v = await api(`history?id=${id}`);
+    viewingVersion = v;
+    stopEdit();
+    $('doc').innerHTML = renderMd(v.text);
+    $('doc').classList.add('open');
+    $('viewing').innerHTML = `Viewing the version ${esc(firstName(v.by))} saved ${esc(relTime(v.at))}. ` +
+      `<button class="link" id="backLive">Back to current</button>` +
+      (data.can_edit ? ` · <button class="link" id="loadVersion">Load into the editor</button>` : '');
+    $('viewing').classList.remove('hide');
+    $('backLive').onclick = () => { exitVersion(); renderInstructions(); };
+    if (data.can_edit) $('loadVersion').onclick = () => { const t = v.text; startEdit(); $('editor').value = t; updateCount(); };
+    $('h-instr').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) { toast(`Couldn't load that version: ${e.message}`); }
+}
+function exitVersion() {
+  viewingVersion = null;
+  $('viewing').classList.add('hide');
+  $('doc').classList.remove('open');
+  $('toggleDoc').textContent = 'Show everything';
+}
+
+async function refresh() {
+  data = await api('overview');
+  renderStatus(); renderStats(); renderInstructions(); renderRules(); renderPending(); renderSetup();
+  await Promise.all([loadLog(), loadHistory()]);
+}
+
+$('toggleDoc').onclick = () => {
+  const open = $('doc').classList.toggle('open');
+  $('toggleDoc').textContent = open ? 'Show less' : 'Show everything';
+};
+$('editor').addEventListener('input', updateCount);
+$('save').onclick = save;
+$('cancel').onclick = () => {
+  if ($('editor').value.trim() !== data.instructions.text.trim() && !confirm('Discard your changes?')) return;
+  stopEdit();
+};
+$('reset').onclick = reset;
+document.querySelectorAll('.seg button').forEach((b) => (b.onclick = () => {
+  logFilter = b.dataset.f;
+  document.querySelectorAll('.seg button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  loadLog();
+}));
+window.addEventListener('beforeunload', (e) => {
+  if (!$('editView').classList.contains('hide') && data && $('editor').value.trim() !== data.instructions.text.trim()) { e.preventDefault(); e.returnValue = ''; }
+});
+
+refresh()
+  .then(() => { $('loading').classList.add('hide'); $('app').classList.remove('hide'); })
+  .catch((e) => { $('loading').classList.add('hide'); showError(`Couldn't load Flo: ${e.message}`); });
+</script>
+</body>
+</html>

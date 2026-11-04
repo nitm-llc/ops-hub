@@ -11,7 +11,7 @@
 
 import INSTRUCTIONS from "./ai-pm-instructions.md";
 import { findCards, getCard, calendar, prepareAction, describeAction, loadListTask, readCard, RefusedError } from "./clickup.js";
-import { createPending, listPending, logAction } from "./store.js";
+import { createPending, listPending, logAction, loadInstructions } from "./store.js";
 import { applyNumbers, isApprover } from "./approvals.js";
 import { todayYmd, weekdayName, LIST_URL } from "./config.js";
 
@@ -43,7 +43,12 @@ Formatting (Google Chat, not Markdown):
 - The list itself: <${LIST_URL}|TikTok Production>.
 `.trim();
 
-export const SYSTEM_PROMPT = `${INSTRUCTIONS.trim()}\n\n${GUARDRAILS}`;
+// The instructions are editable at /flo/ (stored in D1); the file is the
+// default and what "Reset" goes back to. GUARDRAILS are code-only on purpose.
+export const DEFAULT_INSTRUCTIONS = INSTRUCTIONS.trim();
+export { GUARDRAILS };
+export const buildSystemPrompt = (instructions) => `${String(instructions || DEFAULT_INSTRUCTIONS).trim()}\n\n${GUARDRAILS}`;
+export const SYSTEM_PROMPT = buildSystemPrompt(DEFAULT_INSTRUCTIONS);
 
 // Stable order: changing this list invalidates the prompt cache.
 export const TOOLS = [
@@ -179,12 +184,12 @@ async function runTool(env, turn, name, input) {
 // ---------------------------------------------------------------------------
 export class ClaudeError extends Error {}
 
-async function callClaude(env, messages, { signal }) {
+async function callClaude(env, messages, { signal, system }) {
   if (!env.ANTHROPIC_API_KEY) throw new ClaudeError("ANTHROPIC_API_KEY is not set");
   const body = {
     model: env.PM_MODEL || DEFAULT_MODEL,
     max_tokens: 8000,
-    system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: system || SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
     tools: TOOLS,
     messages,
     output_config: { effort: env.PM_EFFORT || "medium" },
@@ -253,6 +258,13 @@ export async function runTurn(env, turn) {
     pending = [];
   }
 
+  let system = SYSTEM_PROMPT;
+  try {
+    system = buildSystemPrompt((await loadInstructions(env, DEFAULT_INSTRUCTIONS)).text);
+  } catch (e) {
+    console.error("nitm-pm: instructions load failed, using the version in code:", e);
+  }
+
   const messages = historyToMessages(turn.history || []);
   const userText = `${contextBlock(env, turn, pending)}\n\n${turn.text}`;
   const last = messages[messages.length - 1];
@@ -263,7 +275,7 @@ export async function runTurn(env, turn) {
   try {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       if (remaining() < 3000) return timeoutReply(turn);
-      const resp = await callClaude(env, messages, { signal: AbortSignal.timeout(Math.max(1000, remaining() - 1500)) });
+      const resp = await callClaude(env, messages, { system, signal: AbortSignal.timeout(Math.max(1000, remaining() - 1500)) });
 
       if (resp.stop_reason === "refusal") return "Sorry, I can't help with that one.";
       if (resp.stop_reason !== "tool_use") {

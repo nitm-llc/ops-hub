@@ -766,3 +766,101 @@ test("Markdown in a reply is converted to Chat formatting", async () => {
   const { text } = await send(addonMessage("What's stuck today?"));
   assert.equal(text, "*Stuck:* <https://app.clickup.com/t/peds-quiz|Peds quiz>");
 });
+
+// ===========================================================================
+// /flo/ page API
+// ===========================================================================
+import { handleFloApi } from "../src/nitm-pm/admin.js";
+import { DEFAULT_INSTRUCTIONS } from "../src/nitm-pm/brain.js";
+
+async function floApi(path, { method = "GET", body, as = "avery@anurseinthemaking.com", host = HOST } = {}) {
+  const res = await handleFloApi(
+    new Request(`${host}/flo/api/${path}`, {
+      method,
+      headers: {
+        ...(as ? { "Cf-Access-Authenticated-User-Email": as } : {}),
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+    env,
+    `/flo/api/${path.split("?")[0]}` // the Worker passes url.pathname, without the query
+  );
+  return { status: res.status, json: await res.json() };
+}
+const NEW_TEXT = "# Flo test instructions\n\n" + "Always mention the follow-up window. ".repeat(10);
+
+test("overview shows the code version, the built-in rules, approvers and setup", async () => {
+  const { status, json } = await floApi("overview");
+  assert.equal(status, 200);
+  assert.equal(json.instructions.is_default, true);
+  assert.equal(json.instructions.text, DEFAULT_INSTRUCTIONS);
+  assert.match(json.guardrails, /You are "Flo"/);
+  assert.deepEqual(json.approvers, ["mark@anurseinthemaking.com", "avery@anurseinthemaking.com"]);
+  assert.equal(json.can_edit, true);
+  assert.deepEqual(json.configured, { google_project: true, google_key: true, claude: true, clickup: true });
+  assert.equal((await floApi("overview", { as: DIANA.email })).json.can_edit, false);
+});
+
+test("the page API is refused on any other hostname", async () => {
+  const { status } = await floApi("overview", { host: "https://ops-hub.example.workers.dev" });
+  assert.equal(status, 403);
+});
+
+test("only approvers can edit instructions; a save takes effect on Flo's next message", async () => {
+  const denied = await floApi("instructions", { method: "PUT", body: { text: NEW_TEXT }, as: DIANA.email });
+  assert.equal(denied.status, 403);
+  assert.match(denied.json.error, /Only approvers/);
+
+  const ok = await floApi("instructions", { method: "PUT", body: { text: NEW_TEXT, note: "testing" } });
+  assert.equal(ok.status, 200);
+  const ov = (await floApi("overview")).json;
+  assert.equal(ov.instructions.is_default, false);
+  assert.equal(ov.instructions.updated_by, AVERY.email);
+
+  claudeScript = [{ reply: say("ok") }];
+  await send(addonMessage("What's stuck today?"));
+  const system = claudeRequests[0].system[0].text;
+  assert.ok(system.startsWith("# Flo test instructions"), "edited instructions are used");
+  assert.match(system, /# How you work in Google Chat/, "built-in rules are still appended");
+  assert.doesNotMatch(system, /TikTok AI PM: Operating Instructions/);
+});
+
+test("too-short instructions are refused, and non-JSON writes are refused", async () => {
+  const short = await floApi("instructions", { method: "PUT", body: { text: "be nice" } });
+  assert.equal(short.status, 400);
+  const res = await handleFloApi(
+    new Request(`${HOST}/flo/api/instructions`, { method: "PUT", headers: { "Cf-Access-Authenticated-User-Email": AVERY.email, "Content-Type": "text/plain" }, body: "x" }),
+    env,
+    "/flo/api/instructions"
+  );
+  assert.equal(res.status, 415);
+});
+
+test("history records each save with its text, and reset goes back to the code version", async () => {
+  await floApi("instructions", { method: "PUT", body: { text: NEW_TEXT, note: "first edit" } });
+  const reset = await floApi("instructions/reset", { method: "POST", body: {} });
+  assert.equal(reset.status, 200);
+  assert.equal((await floApi("overview")).json.instructions.is_default, true);
+
+  const { history } = (await floApi("history")).json;
+  assert.equal(history.length, 2);
+  assert.equal(history[0].note, "Reset to the version in code");
+  assert.equal(history[0].chars, null);
+  assert.equal(history[1].note, "first edit");
+  const v = (await floApi(`history?id=${history[1].id}`)).json;
+  assert.equal(v.text, NEW_TEXT.trim());
+});
+
+test("activity log is shaped for the page, with card links", async () => {
+  claudeScript = [{ reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) }, { reply: say("#1") }];
+  await send(addonMessage("bump the peds quiz"));
+  await send(addonMessage("yes"));
+  const { log } = (await floApi("log?filter=changes")).json;
+  assert.deepEqual(log.map((r) => r.event), ["applied", "proposed"]);
+  assert.equal(log[0].label, "Changed");
+  assert.equal(log[0].card_url, "https://app.clickup.com/t/peds-quiz");
+  const ov = (await floApi("overview")).json;
+  assert.equal(ov.stats.changed_7d, 1);
+  assert.equal(ov.pending.length, 0);
+});

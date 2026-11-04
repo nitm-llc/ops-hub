@@ -37,6 +37,19 @@ export async function ensureTables(env) {
        UNIQUE (space, thread, number)
      )`,
     `CREATE INDEX IF NOT EXISTS idx_pm_pending_conv ON pm_pending_actions (space, thread, status)`,
+    `CREATE TABLE IF NOT EXISTS pm_instructions (
+       id         INTEGER PRIMARY KEY CHECK (id = 1),
+       text       TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       updated_by TEXT
+     )`,
+    `CREATE TABLE IF NOT EXISTS pm_instruction_changes (
+       id    INTEGER PRIMARY KEY AUTOINCREMENT,
+       at    TEXT NOT NULL,
+       by    TEXT,
+       note  TEXT,
+       text  TEXT
+     )`,
     `CREATE TABLE IF NOT EXISTS pm_action_log (
        id      INTEGER PRIMARY KEY AUTOINCREMENT,
        at      TEXT NOT NULL,
@@ -176,4 +189,42 @@ export async function logAction(env, { conv, number = null, actor = null, event,
   } catch (e) {
     console.error("nitm-pm log write failed:", e);
   }
+}
+
+// ---- instructions (edited at /flo/) ----------------------------------------
+// One row, id = 1. No row = use the version in code (ai-pm-instructions.md).
+export async function loadInstructions(env, defaultText) {
+  const row = await env.DB.prepare("SELECT text, updated_at, updated_by FROM pm_instructions WHERE id = 1").first();
+  if (!row) return { text: defaultText, isDefault: true, updatedAt: null, updatedBy: null };
+  return { text: row.text, isDefault: false, updatedAt: row.updated_at, updatedBy: row.updated_by };
+}
+
+export async function saveInstructions(env, text, by, note) {
+  const at = nowIso();
+  await env.DB.prepare(
+    `INSERT INTO pm_instructions (id, text, updated_at, updated_by) VALUES (1, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+  ).bind(text, at, by).run();
+  await env.DB.prepare("INSERT INTO pm_instruction_changes (at, by, note, text) VALUES (?, ?, ?, ?)")
+    .bind(at, by, note || null, text).run();
+  return at;
+}
+
+export async function resetInstructions(env, by) {
+  const at = nowIso();
+  await env.DB.prepare("DELETE FROM pm_instructions WHERE id = 1").run();
+  await env.DB.prepare("INSERT INTO pm_instruction_changes (at, by, note, text) VALUES (?, ?, ?, NULL)")
+    .bind(at, by, "Reset to the version in code").run();
+  return at;
+}
+
+export async function listInstructionChanges(env, limit = 30) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, at, by, note, LENGTH(text) AS chars FROM pm_instruction_changes ORDER BY id DESC LIMIT ?"
+  ).bind(limit).all();
+  return results || [];
+}
+
+export async function getInstructionChange(env, id) {
+  return env.DB.prepare("SELECT id, at, by, note, text FROM pm_instruction_changes WHERE id = ?").bind(id).first();
 }

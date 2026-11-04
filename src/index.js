@@ -4,6 +4,7 @@ import { handleClickUpAutomationRoutes, clickUpAutomationCron } from "./clickup-
 import { handleStrategyRoutes } from "./strategy.js";
 import { handleTikTokRouterRoutes } from "./tiktok-router/index.js";
 import { handleNitmPmRoutes } from "./nitm-pm/index.js";
+import { handleFloApi } from "./nitm-pm/admin.js";
 import { cxModelPricing, cxReadPrompt, cxFinProfilePrompt, cxProfileLength, HAIKU_55_TIER_TOKENS } from "./cx-product-kb.js";
 import { zdDateRange, zdSearchQuery, zdAnalysisPrompt, zdAnalysisUserPrompt, zdNormalizeAnalysis, zdSummarize, zdToCsv } from "./cx-ticket-export.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
@@ -8601,6 +8602,9 @@ export default {
     // Same Access bypass as the router; the Google token check is its guard.
     const pmResp = await handleNitmPmRoutes(request, env, ctx, path);
     if (pmResp) return pmResp;
+    // Flo page API (/flo/api/*), behind the normal Access login.
+    const floResp = await handleFloApi(request, env, path);
+    if (floResp) return floResp;
 
     // ===== CLICKUP AUTOMATION (handles /clickup-automation/* ; returns null otherwise) =====
     // Mounted here, above the global OPTIONS handler below, because this module
@@ -8837,6 +8841,7 @@ export default {
     if (path === "/video-review") return Response.redirect(url.origin + "/video-review/", 301);
     if (path === "/clickup-automation") return Response.redirect(url.origin + "/clickup-automation/", 301);
     if (path === "/tiktok-router") return Response.redirect(url.origin + "/tiktok-router/", 301);
+    if (path === "/flo") return Response.redirect(url.origin + "/flo/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }
     // ===== AMBASSADOR API =====
@@ -8956,6 +8961,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,-app
       <a href="/stage/" class="app-card"><div class="app-icon">\u{23F1}</div><div class="app-text"><div class="app-name">Stage Timing</div><div class="app-desc">How long tasks sit in each stage</div></div></a>
       <a href="/clickup-automation/" class="app-card"><div class="app-icon">\u{1F4C2}</div><div class="app-text"><div class="app-name">ClickUp Automation</div><div class="app-desc">Auto-code tasks &amp; build Drive folders</div></div></a>
       <a href="/tiktok-router/" class="app-card"><div class="app-icon">\u{1F3AC}</div><div class="app-text"><div class="app-name">TikTok Router</div><div class="app-desc">Who gets each TikTok stage</div></div></a>
+      <a href="/flo/" class="app-card"><div class="app-icon">\u{1FA7A}</div><div class="app-text"><div class="app-name">Flo</div><div class="app-desc">Marketing PM helper in Google Chat</div></div></a>
     </div>
   </div>
 
