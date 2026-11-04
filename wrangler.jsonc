@@ -34,7 +34,10 @@
     // to change. Secrets (NOT here): GOOGLE_CHAT_SA_KEY, PM_APPROVERS,
     // PM_CHAT_PROJECT_NUMBER; ANTHROPIC_API_KEY and CLICKUP_TOKEN are shared.
     "PM_MODEL": "claude-sonnet-5-5",
-    "PM_TIMEZONE": "America/New_York"
+    "PM_TIMEZONE": "America/New_York",
+    // Who also gets each morning summary (first names, comma-separated). They
+    // can approve its proposals from their copy; first approval wins.
+    "PM_DIGEST_CC": "Tia"
   },
   // src/nitm-pm imports its operating instructions as plain text.
   "rules": [{ "type": "Text", "globs": ["**/ai-pm-instructions.md"], "fallthrough": true }],

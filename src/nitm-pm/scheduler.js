@@ -16,10 +16,10 @@
 // ============================================================================
 
 import { runTurn } from "./brain.js";
-import { findLead } from "./outreach.js";
+import { findLead, resolvePerson } from "./outreach.js";
 import { postChatMessage } from "./google.js";
 import { toChatFormat } from "./index.js";
-import { ensureTables, expireOld, claimRun, finishRun, getSetting, deleteSetting, appendHistory, logAction } from "./store.js";
+import { ensureTables, expireOld, claimRun, finishRun, getSetting, deleteSetting, appendHistory, logAction, getPerson, linkConversation } from "./store.js";
 import { DEFAULT_TZ, todayYmd, addDays, weekdayName } from "./config.js";
 
 export const DAILY_HOUR = 9;
@@ -105,8 +105,30 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
     await logAction(env, { conv, event: "async_post_failed", action: { kind }, result: e.message });
     return { ok: false, message: `Ran, but couldn't post to ${leadFirst}: ${e.message}` };
   }
-  await logAction(env, { conv, actor: "flo-scheduled", event: `run_${kind}`, action: { trigger }, result: `sent to ${leadFirst}` });
-  return { ok: true, message: `Sent to ${leadFirst}.`, text };
+  // Copies (PM_DIGEST_CC, e.g. "Tia"), linked to the lead's conversation so
+  // they can approve the same numbers. Whoever approves first makes the change.
+  const copied = [];
+  for (const name of String(env.PM_DIGEST_CC || "").split(/[\s,;]+/).filter(Boolean)) {
+    try {
+      const p = await resolvePerson(env, name);
+      if (!p || p.email === lead.email) continue;
+      const dm = (await getPerson(env, p.email))?.dm_space;
+      if (!dm) {
+        await logAction(env, { conv: null, event: "digest_copy_skipped", action: { to: p.email, kind }, result: "hasn't opened a chat with Flo" });
+        continue;
+      }
+      const copy = toChatFormat(`*${TITLES[kind]}, ${weekdayName(today)}* (copy: ${leadFirst} has it too, either of you can approve)\n${reply}`);
+      await postChatMessage(env, { space: dm, thread: null, text: copy });
+      await appendHistory(env, { space: dm, thread: "" }, [{ role: "assistant", text: copy }]);
+      await linkConversation(env, dm, conv);
+      copied.push(String(p.name).split(/\s+/)[0]);
+    } catch (e) {
+      await logAction(env, { conv: null, event: "digest_copy_failed", action: { to: name, kind }, result: e.message });
+    }
+  }
+  const to = [leadFirst, ...copied].join(" and ");
+  await logAction(env, { conv, actor: "flo-scheduled", event: `run_${kind}`, action: { trigger }, result: `sent to ${to}` });
+  return { ok: true, message: `Sent to ${to}.`, text };
 }
 
 /** Called from the Worker's scheduled() every 2 minutes. Cheap when idle. */

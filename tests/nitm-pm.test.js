@@ -1107,3 +1107,34 @@ test("with PM_CLICKUP_TOKEN, changes and comments go out as Flo; reads keep the 
   const ov = (await floApi("overview")).json;
   assert.deepEqual(ov.clickup_writer, { as_flo: true, name: "Flo", email: "flo@anurseinthemaking.com", error: null });
 });
+
+test("Tia gets a copy of the morning summary and can approve from it; first approval wins", async () => {
+  env.PM_DIGEST_CC = "Tia";
+  await send(addonMessage("warm up")).catch(() => {});
+  TEAM.push([89106216, "Tia Freeman", "tia@anurseinthemaking.com"]);
+  _clearTeamCache();
+  await sayHi(AVERY.email, "Avery Pless");
+  await sayHi("tia@anurseinthemaking.com", "Tia Freeman");
+  claudeScript = [
+    { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) },
+    { reply: say("*#1* Peds quiz: priority → high\nReply \"yes\".") },
+  ];
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  TEAM.pop();
+  const tiaDm = dmOf("tia@anurseinthemaking.com");
+  const copy = postsTo(tiaDm);
+  assert.equal(copy.length, 1);
+  assert.match(copy[0].body.text, /^\*Daily check, .+\* \(copy: Avery has it too, either of you can approve\)\n\*#1\*/);
+  assert.equal(postsTo(dmOf(AVERY.email)).length, 1);
+
+  const fromDm = (who, space, text) => ({ commonEventObject: { hostApp: "CHAT" }, chat: { user: who, space: { name: space, spaceType: "DIRECT_MESSAGE" },
+    messagePayload: { space: { name: space, spaceType: "DIRECT_MESSAGE" }, message: { text, argumentText: text, sender: { name: "users/7", ...who }, thread: { name: `${space}/threads/z` } } } } });
+  const TIA = { email: "tia@anurseinthemaking.com", displayName: "Tia Freeman" };
+  env.PM_APPROVERS += ",tia@anurseinthemaking.com";
+  const first = await send(fromDm(TIA, tiaDm, "approve 1"));
+  assert.match(first.text, /✅ #1 done/);
+  assert.equal(puts().length, 1);
+  const second = await send(fromDm(AVERY, dmOf(AVERY.email), "approve 1"));
+  assert.match(second.text, /already approved \(by tia@/);
+  assert.equal(puts().length, 1, "applied once");
+});

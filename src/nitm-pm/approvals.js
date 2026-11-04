@@ -5,7 +5,16 @@
 // ============================================================================
 
 import { applyAction, RefusedError } from "./clickup.js";
-import { PENDING_TTL_MS, getPending, claimPending, finishPending, rejectPending, markExpired, listPending, logAction } from "./store.js";
+import { PENDING_TTL_MS, getPending, claimPending, finishPending, rejectPending, markExpired, listPending, logAction, getLinkedConv } from "./store.js";
+
+// This conversation first; then the conversation it's linked to (a copy of
+// the lead's morning summary), so either person can approve its numbers.
+async function findPending(env, conv, n) {
+  const own = await getPending(env, conv, n);
+  if (own) return own;
+  const linked = conv.thread === "" ? await getLinkedConv(env, conv.space) : null;
+  return linked ? getPending(env, linked, n) : null;
+}
 
 export function approvers(env) {
   return String(env.PM_APPROVERS || "")
@@ -75,7 +84,7 @@ export async function applyNumbers(env, conv, sender, numbers) {
   const cutoff = new Date(Date.now() - PENDING_TTL_MS).toISOString();
 
   for (const n of numbers) {
-    const row = await getPending(env, conv, n);
+    const row = await findPending(env, conv, n);
     if (!row) {
       lines.push(`#${n}: I don't have a proposal with that number in this conversation.`);
       continue;
@@ -117,7 +126,7 @@ export async function rejectNumbers(env, conv, sender, numbers) {
   }
   const lines = [];
   for (const n of numbers) {
-    const row = await getPending(env, conv, n);
+    const row = await findPending(env, conv, n);
     if (!row) lines.push(`#${n}: no proposal with that number here.`);
     else if (await rejectPending(env, row.id, sender.email)) {
       await logAction(env, { conv, number: n, actor: sender.email, event: "rejected", action: row.action });

@@ -348,3 +348,22 @@ export async function setSetting(env, key, value, by) {
 export async function deleteSetting(env, key) {
   await env.DB.prepare("DELETE FROM pm_settings WHERE key = ?").bind(key).run();
 }
+
+// ---- linked conversations ---------------------------------------------------
+// A copy of the morning summary sent to someone other than the lead points
+// back at the lead's conversation, so "approve 2" in the copy finds proposal
+// #2 there. Links last as long as proposals do (48 h).
+export async function linkConversation(env, fromSpace, toConv) {
+  await setSetting(env, `link:${fromSpace}`, JSON.stringify({ space: toConv.space, thread: toConv.thread, at: nowIso() }), "flo");
+}
+export async function getLinkedConv(env, space) {
+  const v = await getSetting(env, `link:${space}`);
+  if (!v) return null;
+  try {
+    const l = JSON.parse(v);
+    if (Date.now() - Date.parse(l.at) > PENDING_TTL_MS) return null;
+    return { space: l.space, thread: l.thread };
+  } catch {
+    return null;
+  }
+}

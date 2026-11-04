@@ -359,7 +359,7 @@ function renderReach() {
   $('fallbackNames').textContent = o.fallback.join(' and ');
   $('reachInfo').innerHTML = `${o.proactive ? '<span class="pill edited">On</span>' : '<span class="pill code">Off</span>'} ` +
     `${esc(o.schedule.daily)} (daily check) and ${esc(o.schedule.weekly)} (weekly planning), ${esc(o.schedule.timezone)}. ` +
-    (lead ? `Summaries and proposals go to <b>${esc(lead)}</b>.` : `<b style="color:var(--amber)">Nobody to send summaries to yet: Avery or Mark needs to open a chat with Flo.</b>`);
+    (lead ? `Summaries and proposals go to <b>${esc(lead)}</b>${o.copies && o.copies.length ? `, with a copy to <b>${esc(o.copies.join(' and '))}</b> (either can approve)` : ''}.` : `<b style="color:var(--amber)">Nobody to send summaries to yet: Avery or Mark needs to open a chat with Flo.</b>`);
   $('reachActions').innerHTML = data.can_edit
     ? `<label class="switch"><input type="checkbox" id="proactive" ${o.proactive ? 'checked' : ''}> Scheduled runs</label>
        <button class="ghost" id="runDaily" ${o.run_requested ? 'disabled' : ''}>${o.run_requested ? 'Run queued…' : 'Run daily check now'}</button>

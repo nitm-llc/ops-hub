@@ -158,6 +158,7 @@ async function overview(env, viewer) {
       run_requested: !!(await getSetting(env, "run_request")),
       schedule: { daily: `Weekdays from ${DAILY_HOUR}:00`, weekly: `Wednesdays from ${WEEKLY_HOUR}:00`, timezone: env.PM_TIMEZONE || DEFAULT_TZ },
       lead: await findLead(env).then((l) => (l ? { name: l.name, email: l.email } : null)).catch(() => null),
+      copies: String(env.PM_DIGEST_CC || "").split(/[\s,;]+/).filter(Boolean),
       fallback: fallbackNames(env),
       people: await reachability(env),
       runs: await listRuns(env, 10),
