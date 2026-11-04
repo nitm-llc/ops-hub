@@ -35,7 +35,8 @@ Things it handles:
 - `approvals.js`: parses "yes" and "approve 1 and 3", and applies or rejects.
 - `store.js`: D1 tables `pm_threads`, `pm_pending_actions` and `pm_action_log` (also `migrations/0010_nitm_pm.sql`).
 - `config.js`: list and field ids, people, the stage → owner map, and New York date helpers.
-- `ai-pm-instructions.md`: the "AI PM Instructions" tab of the TikTok AI PM doc, used as the system prompt. Paste a new version here when the doc changes, then deploy.
+- `ai-pm-instructions.md`: the *default* instructions, copied from the "AI PM Instructions" tab of the TikTok AI PM doc. Day to day they are edited on the **Flo page** (`/flo/`, approvers only) and stored in D1 (`pm_instructions`, with every save in `pm_instruction_changes`). This file is the fallback and what "Reset" goes back to. Editing the Claude Doc does **not** change Flo.
+- `admin.js` + `public/flo/index.html`: the Flo page and its API (`/flo/api/*`, behind the Access login). It shows the instructions, the built-in chat rules (read-only), pending proposals, activity and setup.
 - `tests/nitm-pm.test.js`: mocked Google, ClickUp and Claude, with SQLite standing in for D1.
 
 ## Config
