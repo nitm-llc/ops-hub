@@ -1138,3 +1138,12 @@ test("Tia gets a copy of the morning summary and can approve from it; first appr
   assert.match(second.text, /already approved \(by tia@/);
   assert.equal(puts().length, 1, "applied once");
 });
+
+test("Reaching people also lists anyone else who has messaged Flo", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi("newperson@anurseinthemaking.com", "Jordan Lee");
+  const people = (await floApi("overview")).json.outreach.people;
+  const j = people.find((p) => p.email === "newperson@anurseinthemaking.com");
+  assert.deepEqual({ name: j.name, reachable: j.reachable }, { name: "Jordan", reachable: true });
+  assert.ok(people.some((p) => p.name === "Samantha"), "Samantha is on the team list");
+});

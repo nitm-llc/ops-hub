@@ -26,6 +26,7 @@ export const PEOPLE = {
   gaby: 89133528,
   cass: 89173497,
   avery: 89106215,
+  samantha: 95373697,
 };
 export const PERSON_NAME = Object.fromEntries(
   Object.entries(PEOPLE).map(([k, id]) => [id, k[0].toUpperCase() + k.slice(1)])

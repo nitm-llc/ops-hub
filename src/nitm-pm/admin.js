@@ -24,6 +24,7 @@ import {
   getInstructionChange,
   PENDING_TTL_MS,
   getPerson,
+  listPeople,
   listOutreach,
   listRuns,
   getSetting,
@@ -94,6 +95,12 @@ async function reachability(env) {
     }
     const row = p ? await getPerson(env, p.email) : null;
     out.push({ name: n, email: p?.email || null, reachable: !!row?.dm_space, last_seen: row?.last_seen || null, fallback: fallbackNames(env).includes(n) });
+  }
+  // Plus anyone else who has messaged Flo, so new people show up on their own.
+  const known = new Set(out.map((x) => x.email).filter(Boolean));
+  for (const r of await listPeople(env)) {
+    if (known.has(r.email)) continue;
+    out.push({ name: String(r.display_name || r.email).split(/\s+/)[0], email: r.email, reachable: !!r.reachable, last_seen: r.last_seen, fallback: false });
   }
   return out;
 }
