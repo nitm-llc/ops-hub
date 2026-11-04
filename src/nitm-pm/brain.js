@@ -372,5 +372,5 @@ function proposedNote(turn) {
 }
 
 function timeoutReply(turn) {
-  return "That took longer than I'm allowed to run (about 45 seconds), so I stopped. Try a narrower question, like one stage or one week." + proposedNote(turn);
+  return "That took longer than I can spend on one message (about 35 seconds), so I stopped. Try a narrower question, like one stage or one week." + proposedNote(turn);
 }

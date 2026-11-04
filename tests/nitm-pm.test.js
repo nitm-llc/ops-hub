@@ -787,7 +787,7 @@ test("past the deadline the bot says it stopped, and lists proposals it made", a
     approvedNumbers: [],
     deadline: Date.now() + 4000,
   });
-  assert.match(reply, /longer than I'm allowed to run/);
+  assert.match(reply, /longer than I can spend on one message/);
   assert.match(reply, /proposal #1 before stopping\. Nothing has changed/);
   assert.equal(writes().length, 0);
 });

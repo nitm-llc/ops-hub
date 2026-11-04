@@ -33,7 +33,9 @@ export const CHAT_PATH = "/clickup-automation/webhook/nitm-pm";
 // Reply "On it…" after this long. Google allows ~30 s; 10 s leaves a wide
 // margin for D1, verification and network time before and after the race.
 export const SYNC_MS = 10000;
-export const DEADLINE_MS = 45000;
+// After the "On it" reply Cloudflare allows ~30 s of waitUntil work, so a
+// turn must finish (and post) by SYNC_MS + ~30 s. Leave a few seconds to post.
+export const DEADLINE_MS = SYNC_MS + 26000;
 const MAX_CHARS = 3900; // Chat's text limit is 4,096 characters
 
 export const endpointUrl = (env) => `https://${env.APP_HOSTNAME || DEFAULT_APP_HOSTNAME}${CHAT_PATH}`;
