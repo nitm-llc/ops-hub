@@ -461,7 +461,7 @@ export async function applyAction(env, rawAction, approverName) {
 
   if (action.type === "comment") {
     await clickup(env, "POST", `${path}/comment`, {
-      comment_text: `${action.text}\n\n(Posted by NITM PM, approved by ${approverName} in Chat.)`,
+      comment_text: `${action.text}\n\n(Posted by Flo, approved by ${approverName} in Chat.)`,
       notify_all: false,
     });
     return { changed: true, commented: true, detail: "comment posted" };

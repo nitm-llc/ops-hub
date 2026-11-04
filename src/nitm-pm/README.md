@@ -1,6 +1,8 @@
-# NITM PM (Google Chat app), step 1: Q&A and approvals
+# Flo (Google Chat app), step 1: Q&A and approvals
 
-People DM **NITM PM** or @mention it in a space and ask about TikTok production. It answers from ClickUp (TikTok space › Production, list `901704217808`), proposes changes as numbered pending actions, and only changes a card after an approved person says yes.
+*Flo* is the marketing team's project-management helper, named after Florence Nightingale and for keeping work flowing. It started out as "NITM PM", which is why the folder, the endpoint and the D1 tables still use `nitm-pm` / `pm_`. Don't rename those: the endpoint URL is saved in Google's Chat app configuration.
+
+People DM **Flo** or @mention it in a space. TikTok Production is the first ClickUp list it's connected to. It answers from ClickUp (TikTok space › Production, list `901704217808`), proposes changes as numbered pending actions, and only changes a card after an approved person says yes.
 
 Things it handles:
 

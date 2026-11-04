@@ -301,7 +301,8 @@ test("legacy Project Number token is accepted and gets a legacy-shaped reply", a
   const legacy = { type: "ADDED_TO_SPACE", user: AVERY, space: { name: SPACE, type: "ROOM" } };
   const { res, json } = await send(legacy, { token });
   assert.equal(res.status, 200);
-  assert.match(json.text, /NITM PM/);
+  assert.match(json.text, /I'm \*Flo\*/);
+  assert.match(json.text, /marketing project management/);
   assert.equal(json.hostAppDataAction, undefined);
 });
 

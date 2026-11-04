@@ -1,7 +1,9 @@
 // ============================================================================
-// NITM PM  —  Google Chat app for TikTok production (step 1: Q&A + approvals)
+// FLO  —  marketing project-management helper in Google Chat
+// (step 1: Q&A + approvals; TikTok Production is the first list connected)
 // ----------------------------------------------------------------------------
-// People DM "NITM PM" or @mention it. It answers from ClickUp (TikTok space >
+// People DM "Flo" or @mention it. (Folder and endpoint keep the original
+// nitm-pm name so the Google Chat config never has to change.) It answers from ClickUp (TikTok space >
 // Production), proposes changes as numbered pending actions, and only changes
 // a card when someone on PM_APPROVERS says yes. See README.md in this folder.
 //
@@ -69,7 +71,7 @@ export function conversationOf(ev) {
 
 function messageText(message) {
   const t = message?.argumentText ?? message?.text ?? "";
-  return String(t).replace(/^\s*@?NITM PM\b[:,]?/i, "").trim();
+  return String(t).replace(/^\s*@?(?:Flo|NITM PM)\b[:,]?/i, "").trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -93,7 +95,8 @@ function syncReply(ev, text) {
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 export const HELLO =
-  "Hi, I'm *NITM PM*. I keep an eye on the TikTok Production list in ClickUp. Ask me things like:\n" +
+  "Hi, I'm *Flo*. I keep an eye on marketing project management in ClickUp: what's due, what's stuck, and who has it. " +
+  "TikTok production is the first board I'm connected to, with more on the way.\n\nAsk me things like:\n" +
   "• What's stuck today?\n" +
   "• What's posting next week?\n" +
   "• Is the calendar balanced for the next 3 weeks?\n" +
