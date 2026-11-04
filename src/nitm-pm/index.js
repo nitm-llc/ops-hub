@@ -99,14 +99,9 @@ function syncReply(ev, text) {
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 export const HELLO =
-  "Hi, I'm *Flo*. I keep an eye on marketing project management in ClickUp: what's due, what's stuck, and who has it. " +
-  "TikTok production is the first board I'm connected to, with more on the way.\n\nAsk me things like:\n" +
-  "• What's stuck today?\n" +
-  "• What's posting next week?\n" +
-  "• Is the calendar balanced for the next 3 weeks?\n" +
-  "• Move the peds quiz due date to Friday\n" +
-  "• Run the daily check\n\n" +
-  "I never change anything on my own. I propose numbered changes, and an approver replies \"yes\" or \"approve 1 and 3\".";
+  "Hi, I'm *Flo*, marketing project management in ClickUp (TikTok first, more coming).\n" +
+  "Try: \"What's stuck today?\" · \"What's posting next week?\" · \"Run the daily check\"\n" +
+  "I propose changes; an approver replies \"yes\" or \"approve 1 and 3\".";
 
 // ---------------------------------------------------------------------------
 // The turn

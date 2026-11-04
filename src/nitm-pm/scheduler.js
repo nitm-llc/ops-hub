@@ -61,7 +61,7 @@ export function promptFor(kind, { leadFirst, today }) {
       `1. Find every card with a Post Date next week (${weekdayName(w.from)} to ${weekdayName(w.to)}, ${w.from} to ${w.to}) that isn't done.\n` +
       `2. Propose due dates (propose_change type due_date): Post Date minus 8 to 9 days, never on a weekend (use the Friday before), spread so no day piles up. Nothing beyond next week. Skip cards whose due date already fits.\n` +
       `3. Check the calendar balance for the next 3 weeks (calendar tool). If anything breaks a rule, send Cass ONE message (message_person, kind calendar) with the problems and suggested swaps. Don't propose Post Date changes.\n` +
-      `Then reply with the numbered proposals (one line each, with the card link) and what you sent Cass. If nothing needs doing, say so in one line.`
+      `Then reply, as briefly as possible: the numbered proposals (one line each) and, in one line, what you sent Cass. If nothing needs doing, one line.`
     );
   }
   return (
@@ -70,7 +70,7 @@ export function promptFor(kind, { leadFirst, today }) {
     `- ClickUp changes (due date to today, priority High, fixing an owner who doesn't match the stage, the public check-in comment): propose_change.\n` +
     `- Check-ins the routine calls for (Post Date within the follow-up window and no active conversation on the card): message_person to the card's owner, kind check_in.\n` +
     `- Escalations (posts within 3 workdays and still stuck after an earlier follow-up, a card in an unused stage, or a workload question): message_person to Avery, kind escalation.\n` +
-    `Then reply with: the numbered proposals (one line each, with the card link), who you messaged and why, and the cards you left alone (one short line). If nothing is stuck, say so in one line.`
+    `Then reply, as briefly as possible: the numbered proposals (one line each), one line for who you messaged, one line for cards left alone. If nothing is stuck, one line.`
   );
 }
 

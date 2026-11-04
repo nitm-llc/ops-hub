@@ -149,7 +149,7 @@ async function fallback(env, { base, p, body, reason }) {
     if (!f || f.email === p.email) continue;
     const dm = await dmTo(env, f.email);
     if (!dm) continue;
-    const text = `For *${firstOf(p.name)}*: ${reason}. Could you pass this on?\n\n${body}\n\n(${firstOf(p.name)} can DM Flo once so I can reach them directly next time.)`;
+    const text = `For *${firstOf(p.name)}* (can't reach them yet, please pass on):\n${body}`;
     try {
       await deliver(env, { dmSpace: dm, text });
       reached.push(firstOf(f.name));

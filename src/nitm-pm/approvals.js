@@ -69,7 +69,7 @@ export async function applyNumbers(env, conv, sender, numbers) {
   if (!isApprover(env, sender.email)) {
     await logAction(env, { conv, actor: sender.email, event: "approval_refused", action: { numbers }, result: "not an approver" });
     return [
-      `Thanks, ${who}! Only people on the approver list can approve changes, so I've left ${numbers.map((n) => `#${n}`).join(", ")} as pending. Ask Mark or Avery to reply "approve ${numbers.join(" and ")}".`,
+      `Thanks, ${who}. Only approvers can approve, so ${numbers.map((n) => `#${n}`).join(", ")} stays pending.`,
     ];
   }
   const cutoff = new Date(Date.now() - PENDING_TTL_MS).toISOString();
@@ -100,7 +100,7 @@ export async function applyNumbers(env, conv, sender, numbers) {
       const r = await applyAction(env, action, who);
       await finishPending(env, row.id, "approved", r.detail);
       await logAction(env, { conv, number: n, actor: sender.email, event: "applied", action, result: r.detail });
-      lines.push(r.commented ? `✅ #${n}: ${row.summary}. Done, and noted on the card.` : `⚠️ #${n}: ${row.summary}. The change went through, but ${r.detail.replace(/^changed, but /, "")}`);
+      lines.push(r.commented ? `✅ #${n} done: ${row.summary}` : `⚠️ #${n} done, but ${r.detail.replace(/^changed, but /, "")}`);
     } catch (e) {
       const msg = e instanceof RefusedError ? e.message : `ClickUp error: ${e.message}`;
       await finishPending(env, row.id, "failed", msg);
@@ -138,7 +138,7 @@ export async function handlePureApproval(env, conv, sender, parsed) {
   if (parsed.kind === "yes" || parsed.kind === "no") {
     if (!pending.length) return null; // probably answering a question; let Claude read it
     if (pending.length > 1) {
-      return `There are ${pending.length} pending proposals here (${pending.map((p) => `#${p.number}`).join(", ")}). Which ones? For example, reply "approve ${pending[0].number}" or "approve all".`;
+      return `Which ones? ${pending.map((p) => `#${p.number}`).join(", ")} are pending. Reply "approve ${pending[0].number}" or "approve all".`;
     }
     const lines = parsed.kind === "yes"
       ? await applyNumbers(env, conv, sender, [pending[0].number])

@@ -38,10 +38,19 @@ Ground rules, enforced by the tools as well:
 - If the sender isn't an approver, their proposals are sent to an approver automatically; tell them who it went to.
 - Things you can't do (Instagram, Metricool): say so in a line.
 
+Be as concise as possible. People read you on their phones between tasks.
+- Answer first. No greeting, no preamble ("Sure!", "Here's..."), no restating the question, no recap at the end.
+- Normal answers: 1 to 4 lines. Lists: one line per card, and the note after the card is at most ~8 words.
+- Don't explain your reasoning or the rules unless asked. Don't pad with "Let me know if...".
+- Offer a next step only when there's a real decision, in a few words ("Send to Cass?").
+- Proposals: one line each: "*#1* <url|Peds quiz>: due → Fri Nov 6". Then once, at the end: Reply "yes" (or "approve 1 and 3").
+- Nothing to report: one line ("Nothing stuck today.").
+- Messages to teammates (message_person): 1 to 2 lines, the card link and the ask. Example: "<url|Peds quiz> posts Fri. Anything blocking it?"
+
 Formatting (Google Chat, not Markdown):
-- Short. No headings, no tables, no Markdown links or **double asterisks**.
+- No headings, no tables, no Markdown links or **double asterisks**.
 - *single asterisks* for bold. Links as <url|text>.
-- Lists: one line per card: <card url|card name>, Stage, Post Date (e.g. Fri Nov 6), and what's wrong or proposed.
+- Card lines: <card url|short card name> · Stage · Post Date · the issue. Drop parts that don't matter for the question. Shorten long card names (drop the ID prefix like "86e3g380g - " or "2026.3298 - ").
 - Dates as "Fri Nov 6", not ISO.
 - The list itself: <${LIST_URL}|TikTok Production>.
 `.trim();
@@ -190,7 +199,7 @@ async function runTool(env, turn, name, input) {
             kind: "approval",
             taskId: action.task_id,
             tz: turn.tz,
-            text: `${asker} asked for a change:\n*#${row.number}*: ${summary} <${card.url}|card>\nReply "approve ${row.number}" to make it, or "reject ${row.number}".`,
+            text: `${asker} asks: *#${row.number}* ${summary} <${card.url}|card>\nReply "approve ${row.number}" or "reject ${row.number}".`,
           });
           turn.proposed.push(row.number);
           return {

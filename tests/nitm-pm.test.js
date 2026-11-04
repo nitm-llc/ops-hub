@@ -334,6 +334,7 @@ test("ADDED_TO_SPACE (add-on) says hello and explains itself", async () => {
   const { text } = await send(payload);
   assert.match(text, /What's stuck today/);
   assert.match(text, /approve 1 and 3/);
+  assert.ok(text.split("\n").length <= 3, "the greeting stays short");
 });
 
 test("REMOVED_FROM_SPACE returns an empty response and is logged", async () => {
@@ -520,8 +521,7 @@ test("an approval from someone not on the list is refused politely and changes n
   claudeScript = [{ reply: say("hello") }];
   await seedThree();
   const { text } = await send(addonMessage("approve 1 and 3", { sender: DIANA }));
-  assert.match(text, /Thanks, Diana!/);
-  assert.match(text, /approver list/);
+  assert.match(text, /Thanks, Diana\. Only approvers can approve/);
   assert.equal(writes().length, 0);
   assert.deepEqual(pendingRows().map((r) => r.status), ["pending", "pending", "pending"]);
   assert.equal(logRows().at(-1).event, "approval_refused");
@@ -545,7 +545,7 @@ test("\"yes\" with several pending asks which ones instead of guessing", async (
   claudeScript = [{ reply: say("hello") }];
   await seedThree();
   const { text } = await send(addonMessage("yes"));
-  assert.match(text, /3 pending proposals/);
+  assert.match(text, /^Which ones\? #1, #2, #3 are pending/);
   assert.equal(writes().length, 0);
 });
 
@@ -678,7 +678,7 @@ test("a Post Date change still waits for an approver: Diana's yes changes nothin
   claudeScript = [{ reply: toolUse("propose_change", { type: "post_date", task_id: "peds-quiz", date: addDays(TODAY, 9) }) }, { reply: say("#1") }];
   await send(addonMessage("move the post date", { sender: DIANA }));
   const { text } = await send(addonMessage("yes", { sender: DIANA }));
-  assert.match(text, /approver list/);
+  assert.match(text, /Only approvers can approve/);
   assert.equal(writes().length, 0);
 });
 
@@ -952,7 +952,7 @@ test("someone Flo can't reach: the message goes to Avery and Mark to pass on", a
   for (const email of [AVERY.email, "mark@anurseinthemaking.com"]) {
     const posts = postsTo(dmOf(email));
     assert.equal(posts.length, 1, email);
-    assert.match(posts[0].body.text, /^For \*Kristine\*: .*pass this on\?[\s\S]*record the VO/);
+    assert.match(posts[0].body.text, /^For \*Kristine\* \(can't reach them yet, please pass on\):\nCan you record the VO/);
   }
   assert.equal(env.DB.raw.prepare("SELECT status FROM pm_outreach").get().status, "fallback");
 });
@@ -1005,7 +1005,7 @@ test("a non-approver's proposal is filed with the lead approver and sent to them
   assert.match(tr.status, /sent to Avery to approve/);
   const toAvery = postsTo(dmOf(AVERY.email));
   assert.equal(toAvery.length, 1);
-  assert.match(toAvery[0].body.text, /^Diana asked for a change:\n\*#1\*: .*approve 1/s);
+  assert.match(toAvery[0].body.text, /^Diana asks: \*#1\* .*\nReply "approve 1" or "reject 1"\.$/s);
 
   // Avery approves in her DM.
   const avDm = { commonEventObject: { hostApp: "CHAT" }, chat: { user: AVERY, space: { name: dmOf(AVERY.email), spaceType: "DIRECT_MESSAGE" },
