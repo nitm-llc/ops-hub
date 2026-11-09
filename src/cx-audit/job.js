@@ -24,6 +24,7 @@ import { extract, classify } from "./extract.js";
 import { windowFor, localMidnight, todayYmd, addDaysYmd, DEFAULT_TZ } from "./config.js";
 import { makeClient, scoreMany, scorerSettings, scorerKey, scoredIds } from "./scorer.js";
 import * as store from "./store.js";
+import { digestAfterRun } from "./digest.js";
 
 export const RUN_HOUR = 7;
 const WINDOW_HOURS = 3;
@@ -205,7 +206,7 @@ async function finishIfDone(env, run, usage) {
 // ---------------------------------------------------------------------------
 // tick(): called every 2 minutes. Returns what it did (for logs and tests).
 // ---------------------------------------------------------------------------
-export async function tick(env, { now = Date.now(), client, budgetMs = TICK_BUDGET_MS } = {}) {
+export async function tick(env, { now = Date.now(), client, budgetMs = TICK_BUDGET_MS, send } = {}) {
   await store.ensureTables(env);
   const d = store.db(env);
   const tz = tzOf(env);
@@ -224,7 +225,7 @@ export async function tick(env, { now = Date.now(), client, budgetMs = TICK_BUDG
     let snap = run.settings_json ? JSON.parse(run.settings_json) : null;
     if (run.status === "queued") {
       snap = await startRun(env, run);
-      if (!snap) return { run: run.id, failed: true };
+      if (!snap) { await digestAfterRun(env, run, { send }); return { run: run.id, failed: true }; }
     }
     const days = daysIn(run.day_from, run.day_to);
     while (Date.now() < deadline && fetched < FETCH_CAP) {
@@ -235,7 +236,7 @@ export async function tick(env, { now = Date.now(), client, budgetMs = TICK_BUDG
     const left = await d.prepare("SELECT COUNT(*) AS n FROM cxa_queue WHERE run_id = ? AND stage = 'fetch'").bind(run.id).first("n");
     if (!left) {
       const g = await d.prepare("SELECT version, text FROM cxa_guideline_versions WHERE version = ?").bind(snap.guidelines_version).first();
-      if (!g) { await failRun(env, run.id, `Guidelines ${snap.guidelines_version} were deleted mid-run.`); return { run: run.id, failed: true }; }
+      if (!g) { await failRun(env, run.id, `Guidelines ${snap.guidelines_version} were deleted mid-run.`); await digestAfterRun(env, run, { send }); return { run: run.id, failed: true }; }
       const c = client || makeClient(env);
       while (Date.now() < deadline && scored < SCORE_CAP) {
         const n = await scoreBatch(env, run, snap, g, c, usage);
@@ -244,13 +245,15 @@ export async function tick(env, { now = Date.now(), client, budgetMs = TICK_BUDG
       }
     }
     const done = await finishIfDone(env, run, usage);
-    return { run: run.id, fetched, scored, done };
+    // Scheduled runs only: the morning digest to the digest_to people via Flo.
+    const digest = done ? await digestAfterRun(env, run, { send }) : null;
+    return { run: run.id, fetched, scored, done, digest };
   } catch (e) {
     // Intercom/Anthropic outages: leave the run as is; the next tick retries.
     // A run that keeps failing for a day is marked failed so it stops blocking.
     console.error("cx-audit tick:", e);
     const ageMs = now - Date.parse(run.created_at);
-    if (ageMs > 24 * 3600 * 1000) await failRun(env, run.id, String(e.message || e).slice(0, 500));
+    if (ageMs > 24 * 3600 * 1000) { await failRun(env, run.id, String(e.message || e).slice(0, 500)); await digestAfterRun(env, run, { send }); }
     return { run: run.id, error: String(e.message || e) };
   } finally {
     await releaseLease(env, run.id);

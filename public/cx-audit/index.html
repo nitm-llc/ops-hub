@@ -228,6 +228,21 @@
       <table class="t" id="runsTable"></table>
     </section>
 
+    <section class="card" aria-labelledby="h-digest">
+      <h2 id="h-digest">Morning digest</h2>
+      <p class="sub tiny">After each scheduled run, Flo DMs these people in Google Chat: pass rate for Ivy and the team, the weakest check, and the worst replies with a suggested rewrite and an Intercom link. Someone must have opened a chat with Flo once for it to reach them.</p>
+      <form class="row" id="digestToForm" style="margin-top:12px">
+        <label class="f" style="flex:1;min-width:220px">Send to (first names, comma-separated)<input type="text" id="digestTo" placeholder="Mark"></label>
+        <button type="submit">Save</button>
+      </form>
+      <div class="row" style="margin-top:14px">
+        <label class="f">Day<input type="date" id="digestDay"></label>
+        <button class="ghost" id="digestPreview" type="button">Preview</button>
+        <button class="ghost" id="digestSend" type="button">Send now</button>
+      </div>
+      <pre id="digestText" class="hide" style="white-space:pre-wrap;margin-top:12px;font-family:inherit;font-size:13.5px;line-height:1.5;background:var(--surface);border-radius:10px;padding:12px"></pre>
+    </section>
+
     <section class="card" aria-labelledby="h-toggles">
       <div class="card-head"><h2 id="h-toggles">Checks and schedule</h2><button id="saveToggles">Save</button></div>
       <h3>Schedule</h3>
@@ -362,8 +377,12 @@
     // Weakest check: lowest pass rate with at least 5 scored results.
     const agg = {};
     for (const r of s.per_check) { const a = (agg[r.check_id] ||= { pass: 0, fail: 0 }); a.pass += r.pass; a.fail += r.fail; }
-    const ranked = Object.entries(agg).filter(([, a]) => a.pass + a.fail >= 5).map(([id, a]) => [id, pct(a.pass, a.fail), a]).sort((x, y) => x[1] - y[1]);
-    tiles.push(tile("Weakest check", ranked[0] ? fmtPct(ranked[0][1]) : "—", ranked[0] ? `${checkName(ranked[0][0])} (${ranked[0][2].fail} fails)` : "Needs at least 5 scored replies"));
+    // Checks with at least 5 results first (same rule as the digest), else any failing check.
+    const all = Object.entries(agg).filter(([, a]) => a.fail > 0).map(([id, a]) => [id, pct(a.pass, a.fail), a]);
+    const byRate = (x, y) => x[1] - y[1] || y[2].fail - x[2].fail;
+    const big = all.filter(([, , a]) => a.pass + a.fail >= 5).sort(byRate);
+    const ranked = big.length ? big : all.sort(byRate);
+    tiles.push(tile("Weakest check", ranked[0] ? fmtPct(ranked[0][1]) : "—", ranked[0] ? `${checkName(ranked[0][0])} (${ranked[0][2].fail} of ${ranked[0][2].pass + ranked[0][2].fail} failed)` : "No failed checks"));
     const lr = s.last_run;
     tiles.push(tile("Last finished run", lr ? short(lr.day_to) : "—", lr ? `${lr.scored ?? 0} scored · ${lr.kind}` : "No run yet"));
     $("stats").replaceChildren(...tiles);
@@ -540,6 +559,7 @@
     $("voiceToggles").replaceChildren(...s.voice_rules.map((v) => el("label", { class: "switch" },
       el("input", { type: "checkbox", "data-voice": v.id, checked: s.toggles.voice[v.id] }), el("span", {}, v.name, el("small", { text: v.rule })))));
     for (const b of $("schedule").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === s.schedule));
+    $("digestTo").value = (s.digest_to || []).join(", ");
     $("scheduleNote").textContent = s.schedule === "daily" ? "Scheduled: every day around 7am New York time, for the day before."
       : s.schedule === "weekly" ? "Scheduled: Mondays around 7am New York time, for the previous Monday to Sunday." : "Scheduled runs are off. Only runs started here happen.";
   }
@@ -601,6 +621,22 @@
       toast(`Run ${r.id} queued`); loadSettingsTab(); } catch (err) { showError(err); }
   };
   $("refreshRuns").onclick = loadSettingsTab;
+  $("digestToForm").onsubmit = async (e) => {
+    e.preventDefault();
+    try { const r = await api("settings", { method: "PUT", body: JSON.stringify({ digest_to: $("digestTo").value }) }); $("digestTo").value = r.digest_to.join(", "); toast("Saved"); } catch (err) { showError(err); }
+  };
+  async function digest(send) {
+    if (send && !confirm(`Send the digest for ${$("digestDay").value} to ${$("digestTo").value || "the recipients"} now?`)) return;
+    try {
+      const r = await api("digest", { method: "POST", body: JSON.stringify({ from: $("digestDay").value, send }) });
+      // Show it roughly as Chat will: *bold* and <url|label> links as plain text.
+      $("digestText").textContent = r.text.replace(/<([^|>]+)\|([^>]+)>/g, "$2 ($1)").replace(/\*([^*\n]+)\*/g, "$1");
+      $("digestText").classList.remove("hide");
+      if (send) toast(r.sent.map((x) => `${x.person}: ${x.sent ? "sent" : x.message}`).join(" · "));
+    } catch (err) { showError(err); }
+  }
+  $("digestPreview").onclick = () => digest(false);
+  $("digestSend").onclick = () => digest(true);
   for (const b of $("schedule").querySelectorAll("button")) b.onclick = () => { for (const o of $("schedule").querySelectorAll("button")) o.setAttribute("aria-pressed", String(o === b)); };
   $("saveToggles").onclick = async () => {
     const toggles = { checks: {}, voice: {} };
@@ -620,7 +656,7 @@
   (async () => {
     const h = readHash();
     const yesterday = addDays(nyToday(), -1);
-    $("finDay").value = yesterday; $("runFrom").value = yesterday; $("runTo").value = yesterday;
+    $("finDay").value = yesterday; $("runFrom").value = yesterday; $("runTo").value = yesterday; $("digestDay").value = yesterday;
     if (h.from && h.to) { $("from").value = h.from; $("to").value = h.to; } else setPreset(30);
     $("author").value = h.author || "";
     try { await loadSettings(); } catch (e) { showError(e); return; }

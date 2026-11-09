@@ -91,6 +91,24 @@ export async function summary(env, f) {
   };
 }
 
+// The worst-scoring replies: most failed checks first, then the lowest pass
+// share. One row per conversation/day/author, with every failed check.
+export async function worstReplies(env, f, n = 3) {
+  const d = db(env);
+  const [cte, b] = scoresCte(f);
+  const { results: rows } = await d.prepare(`${cte}
+    SELECT id, audit_day AS day, author_type, conversation_id, link, issue_type, failed, passed, applicable, overall_note
+    FROM s WHERE failed > 0
+    ORDER BY failed DESC, CAST(passed AS REAL) / MAX(applicable, 1) ASC, audit_day DESC LIMIT ?`).bind(...b, n).all();
+  for (const r of rows) {
+    const { results } = await d.prepare(
+      "SELECT check_id, evidence, rewrite, failed_rules FROM cxa_check_results WHERE score_id = ? AND result = 'fail'"
+    ).bind(r.id).all();
+    r.fails = results.map((x) => ({ ...x, failed_rules: x.failed_rules ? JSON.parse(x.failed_rules) : [] }));
+  }
+  return rows;
+}
+
 export async function failures(env, f, { limit = 50, offset = 0 } = {}) {
   const d = db(env);
   const [cte, b] = scoresCte(f);

@@ -13,6 +13,7 @@
 //   refused on any other hostname (workers.dev skips Access).
 //   GET  summary?from&to&author&check&issue&version   dashboard aggregates
 //   GET  failures?...&limit&offset                     failed checks, newest first
+//   POST digest               {from, to?, send?}  preview the digest text; send: true DMs it now
 //   GET  runs                 recent runs
 //   GET  runs/:id             one run, with queue counts and errors
 //   POST runs                 {from, to, force?}  manual run (processed by cron)
@@ -38,6 +39,7 @@ import { windowFor, DEFAULT_TZ } from "./config.js";
 import { CHECKS, VOICE_RULES, DEFAULT_TOGGLES } from "./checks.js";
 import { makeClient, scoreMany, scorerSettings } from "./scorer.js";
 import { summary, failures, parseFilters } from "./report.js";
+import { buildDigest, sendToRecipients, recipients } from "./digest.js";
 
 export { cxAuditCron };
 
@@ -99,9 +101,17 @@ export async function handleCxAuditRoutes(request, env, ctx, path) {
 
     if (head === "dry-run" && method === "POST") return json(await dryRun(env, body));
 
+    if (head === "digest" && method === "POST") {
+      const from = body.from, to = body.to || body.from;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from || "") || !/^\d{4}-\d{2}-\d{2}$/.test(to || "") || from > to) return json({ error: "from and to must be YYYY-MM-DD" }, 400);
+      const text = await buildDigest(env, from, to);
+      const sent = body.send ? await sendToRecipients(env, text) : null;
+      return json({ text, chars: text.length, sent });
+    }
+
     if (head === "settings" && method === "GET") {
       return json({ toggles: await store.getToggles(env), schedule: await store.getSchedule(env), checks: CHECKS, voice_rules: VOICE_RULES, defaults: DEFAULT_TOGGLES,
-        model: env.CX_AUDIT_MODEL || null, guidelines: await store.getActiveGuidelines(env).then((g) => g?.version || null) });
+        model: env.CX_AUDIT_MODEL || null, guidelines: await store.getActiveGuidelines(env).then((g) => g?.version || null), digest_to: await recipients(env) });
     }
     if (head === "settings" && method === "PUT") {
       if (body.toggles) await store.setSetting(env, "toggles", body.toggles, by);
@@ -109,7 +119,11 @@ export async function handleCxAuditRoutes(request, env, ctx, path) {
         if (!["daily", "weekly", "off"].includes(body.schedule)) return json({ error: "schedule must be daily, weekly or off" }, 400);
         await store.setSetting(env, "schedule", body.schedule, by);
       }
-      return json({ toggles: await store.getToggles(env), schedule: await store.getSchedule(env) });
+      if (body.digest_to !== undefined) {
+        const names = (Array.isArray(body.digest_to) ? body.digest_to : String(body.digest_to).split(/[,;]+/)).map((x) => String(x).trim()).filter(Boolean).slice(0, 10);
+        await store.setSetting(env, "digest_to", names, by);
+      }
+      return json({ toggles: await store.getToggles(env), schedule: await store.getSchedule(env), digest_to: await recipients(env) });
     }
 
     if (head === "exclusions") {
