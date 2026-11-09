@@ -5,11 +5,11 @@
 //   * a header ("Daily check" / "Mon, Nov 9")
 //   * one section per paragraph, titled by its lead-in ("Proposals",
 //     "Messaged", "Left alone")
-//   * every line that links a ClickUp card becomes a row that opens the card:
-//     a small grey line with its numbers and Stage, then a square in
-//     ClickUp's own Stage color and Flo's words
-//   * long lists fold after 5 rows
-// Approving is unchanged: people still type "approve 1 and 3".
+//   * cards are grouped under their Stage (a square in ClickUp's own Stage
+//     color), so each Stage is said once; each row opens its card
+//   * no proposal numbers: people approve by name ("approve Spot the Med"),
+//     or "approve all"; approvals.js matches the names in code
+//   * long lists fold after a few rows
 // If Chat rejects the card, the scheduler falls back to the plain text.
 // ============================================================================
 
@@ -84,56 +84,61 @@ function splitHeading(line) {
  */
 export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl }) {
   const sections = [];
+  const proposed = []; // card names with numbered changes, for the reply hint
   for (const block of String(body || "").trim().split(/\n\s*\n/)) {
     const lines = block.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
     if (!lines.length) continue;
     let { header, rest } = splitHeading(lines[0]);
-    // A heading's "(reply "approve 16 to 29", or pick numbers):" becomes a
-    // quiet note under the list instead of a line above it.
-    let note = null;
-    const aside = rest.match(/^\((.+)\):?$/);
-    if (aside) {
-      note = aside[1].charAt(0).toUpperCase() + aside[1].slice(1);
-      rest = "";
-    }
-    const widgets = [];
-    let para = [];
-    let rows = 0;
-    const flush = () => {
-      if (para.length) widgets.push({ textParagraph: { text: para.join("<br>") } });
-      para = [];
-    };
+    // Flo's "(reply "approve 16 to 29", or pick numbers):" and "Reply "yes" or
+    // "approve 1 and 3"…" lines are about numbers, which the card doesn't
+    // show; a name-based hint replaces them.
+    if (/^\(.*\):?$/.test(rest)) rest = "";
+    const before = [];
+    const after = [];
+    const groups = new Map(); // stage → { color, rows: [] }, in order seen
+    const loose = [];
+    let numbered = false;
     for (const line of [rest, ...lines.slice(1)].filter(Boolean)) {
+      if (APPROVE_HINT.test(line)) continue;
       const link = line.match(CARD_LINK);
       if (!link) {
-        para.push(toCardHtml(line));
+        (groups.size || loose.length ? after : before).push(toCardHtml(line));
         continue;
       }
-      flush();
-      // One row per card: the numbers and Stage on a small line above, the
-      // colored square and Flo's words below. The whole row opens the card.
-      const s = stages.get(link[2]);
+      // The card's words without the proposal numbers. The whole row opens the card.
       const lead = line.match(/^\*([^*]+)\*\s*/);
-      const label = [lead?.[1], s?.stage].filter(Boolean).join(" · ");
-      const words = lead ? line.slice(lead[0].length) : line;
-      widgets.push({
-        decoratedText: {
-          ...(label ? { topLabel: label } : {}),
-          text: (s ? `<font color="${s.color}">■</font> ` : "") + toCardHtml(words),
-          wrapText: true,
-          onClick: { openLink: { url: link[1] } },
-        },
-      });
-      rows++;
+      if (lead && /#\d/.test(lead[1])) {
+        numbered = true;
+        proposed.push(link[3]);
+      }
+      const words = lead && /#\d/.test(lead[1]) ? line.slice(lead[0].length) : line;
+      const row = { decoratedText: { text: toCardHtml(words), wrapText: true, onClick: { openLink: { url: link[1] } } } };
+      const s = stages.get(link[2]);
+      if (!s) loose.push(row);
+      else {
+        if (!groups.has(s.stage)) groups.set(s.stage, { color: s.color, rows: [] });
+        groups.get(s.stage).rows.push(row);
+      }
     }
-    flush();
-    if (note) widgets.push({ textParagraph: { text: `<font color="#80868b">${toCardHtml(note)}</font>` } });
+    const widgets = [];
+    if (before.length) widgets.push({ textParagraph: { text: before.join("<br>") } });
+    // Cards grouped under their Stage, so each Stage is said once.
+    for (const [stage, g] of groups) {
+      widgets.push({ textParagraph: { text: `<font color="${g.color}">■</font> <b>${esc(stage)}</b>` } });
+      widgets.push(...g.rows);
+    }
+    widgets.push(...loose);
+    if (after.length) widgets.push({ textParagraph: { text: after.join("<br>") } });
+    if (numbered) widgets.push({ textParagraph: { text: "{{HINT}}" } });
     if (!widgets.length) widgets.push({ textParagraph: { text: "—" } });
     const section = header ? { header: esc(header), widgets } : { widgets };
-    // Long lists fold after 5; "Show more" opens the rest.
-    if (rows > FOLD_AFTER + 1) Object.assign(section, { collapsible: true, uncollapsibleWidgetsCount: FOLD_AFTER });
+    // Long lists fold; "Show more" opens the rest.
+    if (widgets.length > FOLD_AFTER + 2) Object.assign(section, { collapsible: true, uncollapsibleWidgetsCount: FOLD_AFTER + 1 });
     sections.push(section);
   }
+  const names = [...new Set(proposed)].slice(0, 2).map(shortName);
+  const hint = `<font color="#80868b">Reply "approve all", or name the cards${names.length ? `: "approve ${esc(names.join(" and "))}"` : ""}</font>`;
+  for (const sec of sections) for (const w of sec.widgets) if (w.textParagraph?.text === "{{HINT}}") w.textParagraph.text = hint;
   if (pageUrl) {
     sections.push({ widgets: [{ buttonList: { buttons: [{ text: "Open Flo page", onClick: { openLink: { url: pageUrl } } }] } }] });
   }
@@ -142,3 +147,7 @@ export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl
     cardsV2: [{ cardId: "flo-summary", card: { header: { title: esc(title), subtitle: esc(subtitle) }, sections } }],
   };
 }
+
+// "Don't make these sterile field mistakes" → "Don't make these sterile": enough to match.
+const shortName = (n) => String(n).split(/\s+/).slice(0, 3).join(" ").replace(/[:,.]$/, "");
+const APPROVE_HINT = /^reply\b.*\bapprove\s+#?\d/i;

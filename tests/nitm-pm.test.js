@@ -494,9 +494,9 @@ async function seedThree() {
   const conv = { space: SPACE, thread: THREAD };
   await send(addonMessage("warm up")).catch(() => {}); // creates tables
   const mk = (action, summary) => createPending(env, conv, { proposedBy: AVERY.email, action, summary });
-  await mk({ type: "priority", task_id: "peds-quiz", priority: "high" }, "Set priority on Peds to high");
-  await mk({ type: "assignee", task_id: "funny-one", add: [PEOPLE.diana], remove: [PEOPLE.tia] }, "Assign Diana on Funny");
-  await mk({ type: "comment", task_id: "not-due", text: "Checking in on this one. Anything blocking it?" }, "Comment on Fine for now");
+  await mk({ type: "priority", task_id: "peds-quiz", priority: "high" }, "Set priority on *Peds Infectious Diseases Quiz* to high");
+  await mk({ type: "assignee", task_id: "funny-one", add: [PEOPLE.diana], remove: [PEOPLE.tia] }, "On *Funny charting*: assign Diana");
+  await mk({ type: "comment", task_id: "not-due", text: "Checking in on this one. Anything blocking it?" }, "Comment on *Fine for now*: \"Checking in\"");
 }
 
 test("\"approve 1 and 3\" applies exactly those two", async () => {
@@ -545,7 +545,7 @@ test("\"yes\" with several pending asks which ones instead of guessing", async (
   claudeScript = [{ reply: say("hello") }];
   await seedThree();
   const { text } = await send(addonMessage("yes"));
-  assert.match(text, /^Which ones\? #1, #2, #3 are pending/);
+  assert.match(text, /^Which ones\? 3 cards have changes waiting\. Reply "approve all", or name them, like "approve Peds Infectious Diseases Quiz"/);
   assert.equal(writes().length, 0);
 });
 
@@ -1005,7 +1005,7 @@ test("a non-approver's proposal is filed with the lead approver and sent to them
   assert.match(tr.status, /sent to Avery to approve/);
   const toAvery = postsTo(dmOf(AVERY.email));
   assert.equal(toAvery.length, 1);
-  assert.match(toAvery[0].body.text, /^Diana asks: \*#1\* .*\nReply "approve 1" or "reject 1"\.$/s);
+  assert.match(toAvery[0].body.text, /^Diana asks: \*#1\* .*\nReply "approve Peds Infectious Diseases" or "skip Peds Infectious Diseases"\.$/s);
 
   // Avery approves in her DM.
   const avDm = { commonEventObject: { hostApp: "CHAT" }, chat: { user: AVERY, space: { name: dmOf(AVERY.email), spaceType: "DIRECT_MESSAGE" },
@@ -1175,26 +1175,71 @@ test("summary card keeps Flo's words and lays them out in sections and card rows
   assert.deepEqual(sections.map((s) => s.header), ["Proposals", "Messaged", "Left alone", undefined]);
 
   const [proposals, messaged, left, footer] = sections;
-  const row = proposals.widgets[1].decoratedText;
-  assert.equal(row.topLabel, "#20, #16 · Ready To Edit / Design");
-  assert.equal(row.text, '<font color="#ffc53d">■</font> <a href="https://app.clickup.com/t/peds-quiz">Vital Signs Quiz</a>: owner Kristine → Diana, due → today');
-  assert.equal(row.onClick.openLink.url, "https://app.clickup.com/t/peds-quiz");
-  assert.equal(row.button, undefined, "no Open button; the row opens the card");
-  assert.equal(proposals.widgets[0].decoratedText.topLabel, "#26, #29", "no Stage known, no tag");
-  assert.ok(!proposals.widgets[0].decoratedText.text.includes("■"));
-  assert.equal(proposals.widgets[2].textParagraph.text, '<font color="#80868b">Reply "approve 16 to 29", or pick numbers</font>', "the reply hint moves under the list");
-  assert.equal(proposals.collapsible, undefined, "short lists don't fold");
+  const texts = proposals.widgets.map((w) => (w.textParagraph || w.decoratedText).text);
+  assert.deepEqual(texts, [
+    '<a href="https://app.clickup.com/t/86e38njvm">ACLS Meds Whiteboard</a>: due → today, check-in comment (posts today)',
+    '<font color="#ffc53d">■</font> <b>Ready To Edit / Design</b>',
+    '<a href="https://app.clickup.com/t/peds-quiz">Vital Signs Quiz</a>: owner Kristine → Diana, due → today',
+    '<font color="#80868b">Reply "approve all", or name the cards: "approve ACLS Meds Whiteboard and Vital Signs Quiz"</font>',
+  ].sort((x, y) => texts.indexOf(x) - texts.indexOf(y)));
+  assert.ok(!JSON.stringify(sections).includes("#2"), "no proposal numbers anywhere on the card");
+  assert.equal(proposals.widgets.find((w) => w.decoratedText?.text.includes("Vital")).decoratedText.onClick.openLink.url, "https://app.clickup.com/t/peds-quiz");
   assert.equal(messaged.widgets[0].textParagraph.text, "Gaby (ACLS Meds), Tia (IV Fluids).");
-  assert.match(left.widgets[0].decoratedText.text, /It posts tomorrow &amp; I'll recheck\.$/);
+  assert.match(left.widgets.at(-1).decoratedText.text, /It posts tomorrow &amp; I'll recheck\.$/);
   assert.equal(footer.widgets[0].buttonList.buttons[0].onClick.openLink.url, "https://ops.example/flo/");
 });
 
-test("a long proposal list folds after 5 rows", () => {
+test("cards are grouped under their Stage, and a long list folds", () => {
   const body = "*Proposals:*\n" + Array.from({ length: 8 }, (_, i) => `*#${i + 1}* <https://app.clickup.com/t/c${i}|Card ${i}>: due → today`).join("\n");
-  const s = summaryCard({ title: "Daily check", subtitle: "x", body }).cardsV2[0].card.sections[0];
-  assert.equal(s.widgets.length, 8, "nothing dropped");
+  const stages = new Map(Array.from({ length: 8 }, (_, i) => [`c${i}`, i % 2 ? { stage: "Changes", color: "#e50000" } : { stage: "Outline", color: "#ff7fab" }]));
+  const s = summaryCard({ title: "Daily check", subtitle: "x", body, stages }).cardsV2[0].card.sections[0];
+  const texts = s.widgets.map((w) => (w.textParagraph || w.decoratedText).text);
+  assert.equal(texts.filter((t) => t.includes("<b>Outline</b>")).length, 1, "each Stage said once");
+  assert.equal(texts.filter((t) => t.includes("<b>Changes</b>")).length, 1);
+  assert.equal(s.widgets.filter((w) => w.decoratedText).length, 8, "nothing dropped");
+  assert.ok(texts.indexOf("<a href=\"https://app.clickup.com/t/c2\">Card 2</a>: due → today") < texts.findIndex((t) => t.includes("<b>Changes</b>")), "Outline cards together");
   assert.equal(s.collapsible, true);
-  assert.equal(s.uncollapsibleWidgetsCount, 5);
+});
+
+test("approve by card name: matches in code, one card's changes go together", async () => {
+  claudeScript = [{ reply: say("hello") }];
+  await seedThree();
+  const before = claudeRequests.length;
+  const { text } = await send(addonMessage("approve Peds and fine for now"));
+  assert.equal(claudeRequests.length, before, "handled in code, not by Flo's model");
+  assert.match(text, /✅ Set priority on \*Peds Infectious Diseases Quiz\* to high/);
+  assert.match(text, /✅ Comment on \*Fine for now\*/);
+  assert.doesNotMatch(text, /Funny/);
+  assert.deepEqual(pendingRows().map((r) => r.status), ["approved", "pending", "approved"]);
+});
+
+test("skip by name, then approve all except a name", async () => {
+  claudeScript = [{ reply: say("hello") }];
+  await seedThree();
+  const skipped = await send(addonMessage("skip funny charting"));
+  assert.match(skipped.text, /Skipped: On \*Funny charting\*: assign Diana\. Nothing changed\./);
+  const rest = await send(addonMessage("approve all except Fine for now"));
+  assert.match(rest.text, /✅ Set priority on \*Peds/);
+  assert.deepEqual(pendingRows().map((r) => r.status), ["approved", "rejected", "pending"]);
+});
+
+test("an unknown or ambiguous name changes nothing", async () => {
+  claudeScript = [{ reply: say("hello") }];
+  await seedThree();
+  const none = await send(addonMessage("approve Lupus"));
+  assert.match(none.text, /I don't see a pending change for "lupus"/);
+  assert.equal(writes().length, 0);
+});
+
+test("only approvers can approve by name", async () => {
+  claudeScript = [{ reply: say("hello") }];
+  await seedThree();
+  const msg = addonMessage("approve Peds");
+  msg.chat.messagePayload.message.sender = { name: "users/9", ...DIANA };
+  msg.chat.user = DIANA;
+  const { text } = await send(msg);
+  assert.match(text, /Only approvers can approve/);
+  assert.equal(writes().length, 0);
 });
 
 test("card text is escaped, and Stage colors are made safe", () => {
@@ -1245,7 +1290,7 @@ test("Send me a preview re-sends the latest summary as a card to the asker only"
   assert.equal(claudeRequests.length, before, "nothing re-ran");
   const card = postsTo(dmOf("mark@anurseinthemaking.com")).at(-1).body.cardsV2[0].card;
   assert.match(card.header.subtitle, / · preview$/);
-  assert.equal(card.sections[0].widgets[0].decoratedText.topLabel, "Ready To Edit / Design");
-  assert.match(card.sections[0].widgets[0].decoratedText.text, /^<font color="#ffc53d">■<\/font> /);
+  assert.equal(card.sections[0].widgets[0].textParagraph.text, '<font color="#ffc53d">■</font> <b>Ready To Edit / Design</b>');
+  assert.match(card.sections[0].widgets[1].decoratedText.text, /Peds quiz/);
   assert.equal(writes().length, 0);
 });

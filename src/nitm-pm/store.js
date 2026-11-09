@@ -169,6 +169,16 @@ export async function listPending(env, conv) {
   return results || [];
 }
 
+/** Full rows of everything still pending in a conversation (for approving by card name). */
+export async function listPendingRows(env, conv) {
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM pm_pending_actions WHERE space = ? AND thread = ? AND status = 'pending' ORDER BY number"
+  )
+    .bind(conv.space, conv.thread)
+    .all();
+  return results || [];
+}
+
 export async function getPending(env, conv, number) {
   return env.DB.prepare("SELECT * FROM pm_pending_actions WHERE space = ? AND thread = ? AND number = ?")
     .bind(conv.space, conv.thread, number)
