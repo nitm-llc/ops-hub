@@ -37,7 +37,12 @@
     "PM_TIMEZONE": "America/New_York",
     // Who also gets each morning summary (first names, comma-separated). They
     // can approve its proposals from their copy; first approval wins.
-    "PM_DIGEST_CC": "Tia"
+    "PM_DIGEST_CC": "Tia",
+    // CX scorecard audit (src/cx-audit). Secrets (NOT here): INTERCOM_ACCESS_TOKEN;
+    // ANTHROPIC_API_KEY is shared. Guidelines text lives in D1, not this public repo.
+    "CX_AUDIT_MODEL": "claude-sonnet-5-5",
+    "CX_AUDIT_EFFORT": "high",
+    "CX_AUDIT_TZ": "America/New_York"
   },
   // src/nitm-pm imports its operating instructions as plain text.
   "rules": [{ "type": "Text", "globs": ["**/ai-pm-instructions.md"], "fallthrough": true }],

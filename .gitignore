@@ -3,3 +3,7 @@ node_modules/
 .dev.vars
 .DS_Store
 .scratch/
+
+# CX audit guidelines: internal policy notes, kept out of this public repo.
+# Stored versioned in D1 (cxa_guideline_versions) from Phase 3.
+guidelines/

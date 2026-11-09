@@ -8,6 +8,8 @@ import { handleFloApi } from "./nitm-pm/admin.js";
 import { floCron } from "./nitm-pm/scheduler.js";
 import { cxModelPricing, cxReadPrompt, cxFinProfilePrompt, cxProfileLength, HAIKU_55_TIER_TOKENS } from "./cx-product-kb.js";
 import { zdDateRange, zdSearchQuery, zdAnalysisPrompt, zdAnalysisUserPrompt, zdNormalizeAnalysis, zdSummarize, zdToCsv } from "./cx-ticket-export.js";
+import { cxScrubPII } from "./pii.js";
+import { handleCxAuditRoutes, cxAuditCron } from "./cx-audit/index.js";
 // ===== OPS HUB WORKER — v5 with 3PL API consolidated =====
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 const SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCO2_B3HitEVQIJE71RL357tdUPErxkhG4AdwXapyhOWtry_-czGMVg_HpZ0paQQ/pub";
@@ -3807,35 +3809,6 @@ async function cxEscalate(ticketId, ticketData, intent, reason, db, env, tracer,
 
   await db.prepare(`UPDATE agent_responses SET status = 'posted_as_note', posted_to_zendesk_at = datetime('now') WHERE id = ?`).bind(responseId).run();
   await db.prepare(`UPDATE agent_tickets SET status = 'escalated', final_action = 'escalated', completed_at = datetime('now') WHERE id = ?`).bind(ticketId).run();
-}
-
-// v5.1: strip customer-identifying detail from text that leaves this system. Export files get
-// pasted into third-party tools, so they must carry the SHAPE of a request, never an identity.
-// Order matters: order numbers before the generic 5-digit (zip) rule, or they get half-eaten.
-function cxScrubPII(s) {
-  let t = String(s || '');
-  t = t.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]');
-  t = t.replace(/\bE-\d{6,}\b/gi, '[order]');
-  t = t.replace(/#?\b\d{1,2}-\d{4,8}\b/g, '[order]');
-  // Phone: consume any wrapping parens so we don't leave an orphan bracket.
-  t = t.replace(/\(?\b(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b\)?/g, '[phone]');
-  // Addresses are the highest-risk field, so catch them three ways.
-  // 1) Context-led: everything after an address cue, up to sentence end. This is what catches
-  //    forms with no recognisable suffix (e.g. "6321 Via Venetia N, Delray Beach").
-  t = t.replace(
-    /\b(address\s+is|address\s*:|ship(?:ping)?\s+(?:to|address)|send\s+(?:it\s+)?to|mail\s+(?:it\s+)?to|deliver(?:ed)?\s+to)\s*:?\s*([^.!?\n]{5,140})/gi,
-    (m, cue, tail) => (/\d/.test(tail) && !/https?:\/\//i.test(tail)) ? `${cue} [address]` : m);
-  // 2) Street-suffix led.
-  t = t.replace(/\b\d{1,6}\s+[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,4}\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|way|ct|court|pl|place|cir|circle|ter|terrace|trl|trail|loop|path|row|walk|sq|square|plaza|pkwy|parkway|hwy|highway|via|crossing|bend|run|pass|point|ridge|alley|park)\b\.?/gi, '[address]');
-  // 3) Secondary address lines.
-  t = t.replace(/\b(?:apt|apartment|unit|suite|ste)\b\.?\s*#?\s*(?=[\w-]{0,7}\d)[\w-]{1,8}\b/gi, '[unit]');
-  t = t.replace(/\b\d{5}(?:-\d{4})?\b/g, '[postcode]');
-  // Keep our own links and the tool consoles our process rules point at — blanking those
-  // turns a usable rule ("check ShipMonk under Customer Information") into noise, and none of
-  // them are secrets. Anything else a customer pasted gets dropped.
-  const KEEP_LINK = /(?:a)?nurseinthemaking\.com|youtube\.com\/@NurseInTheMaking|(?:app\.)?shipmonk\.com|myshopify\.com|admin\.shopify\.com|vitalsource\.com|zendesk\.com|intercom\.com/i;
-  t = t.replace(/https?:\/\/\S+/g, (m) => KEEP_LINK.test(m) ? m : '[link]');
-  return t.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // v4.13: Messaging channels (Instagram DM, FB Messenger, web chat) don't put the message in
@@ -8613,6 +8586,11 @@ export default {
     const cuaResp = await handleClickUpAutomationRoutes(request, env, ctx, path);
     if (cuaResp) return cuaResp;
 
+    // ===== CX SCORECARD AUDIT (handles /cx-audit/api/* ; returns null otherwise) =====
+    // Above the global OPTIONS handler: same-origin only, no wildcard CORS.
+    const cxaResp = await handleCxAuditRoutes(request, env, ctx, path);
+    if (cxaResp) return cxaResp;
+
     // ===== STRATEGY (handles /strategy and /strategy/api/* ; returns null otherwise) =====
     // Above the global OPTIONS handler: same-origin only, no wildcard CORS.
     const stratResp = await handleStrategyRoutes(request, env, ctx, path);
@@ -8862,6 +8840,9 @@ export default {
     ctx.waitUntil(fullSync(env));
     // Flo: weekday daily check + Wednesday planning, and "Run now" requests from /flo/.
     ctx.waitUntil((async () => { try { await floCron(env); } catch (e) { console.error("flo cron:", e); } })());
+    // CX scorecard audit: creates the 7am (New York) run for yesterday, then works
+    // any open run a batch per tick. Idle ticks are one cheap D1 read.
+    ctx.waitUntil((async () => { try { await cxAuditCron(env); } catch (e) { console.error("cx-audit cron:", e); } })());
     // Retry ClickUp Automation runs that failed for a recoverable reason. We
     // never 5xx at ClickUp, so it never retries us — this is the only retry.
     ctx.waitUntil((async () => { try { await clickUpAutomationCron(env); } catch (e) { /* non-fatal */ } })());
