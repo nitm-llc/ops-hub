@@ -13,7 +13,7 @@ import { DEFAULT_INSTRUCTIONS, GUARDRAILS, DEFAULT_MODEL } from "./brain.js";
 import { approvers, isApprover } from "./approvals.js";
 import { LIST_ID, LIST_URL, DEFAULT_TZ, PERSON_NAME } from "./config.js";
 import { resolvePerson, fallbackNames, findLead } from "./outreach.js";
-import { DAILY_HOUR, WEEKLY_HOUR } from "./scheduler.js";
+import { DAILY_HOUR, WEEKLY_HOUR, sendPreview } from "./scheduler.js";
 import {
   ensureTables,
   expireOld,
@@ -238,6 +238,11 @@ export async function handleFloApi(request, env, path) {
       // a page request only has ~30 seconds.
       await setSetting(env, "run_request", JSON.stringify({ kind: body.kind, by: viewer }), viewer);
       return json({ ok: true, message: "Queued. It starts within about 2 minutes." });
+    }
+
+    if (sub === "preview" && method === "POST") {
+      const r = await sendPreview(env, viewer);
+      return json(r, r.ok ? 200 : 400);
     }
 
     if (sub === "history" && method === "GET") {

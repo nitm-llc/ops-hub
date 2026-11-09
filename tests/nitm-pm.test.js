@@ -81,8 +81,8 @@ const addonToken = (over = {}) =>
 // Cards
 // ---------------------------------------------------------------------------
 const STAGE_OPTS = [
-  { id: "st-edit", name: "Ready To Edit / Design", orderindex: 3 },
-  { id: "st-review", name: "T: Drive Review", orderindex: 9 },
+  { id: "st-edit", name: "Ready To Edit / Design", orderindex: 3, color: "#ffc53d" },
+  { id: "st-review", name: "T: Drive Review", orderindex: 9, color: "#02BCD4" },
   { id: "st-posted", name: "Posted", orderindex: 18 },
   { id: "st-hold", name: "Schedule On Hold", orderindex: 22 },
   { id: "st-backlog", name: "Backlog", orderindex: 0 },
@@ -1043,7 +1043,11 @@ test("the cron runs the daily check once, in the lead's DM, and posts the summar
   assert.match(claudeRequests.at(-1).messages[0].content, /Scheduled run: the weekday daily check/);
   const posts = postsTo(dmOf(AVERY.email));
   assert.equal(posts.length, 1);
-  assert.match(posts[0].body.text, /^\*Daily check, .+\*\n\*#1\*/);
+  assert.equal(posts[0].body.text, undefined, "sent as a card");
+  assert.match(posts[0].body.fallbackText, /^Daily check, /);
+  const card = posts[0].body.cardsV2[0].card;
+  assert.equal(card.header.title, "Daily check");
+  assert.match(JSON.stringify(card.sections), /<b>#1<\/b>: set the peds quiz to high/);
   assert.equal(pendingRows()[0].space, dmOf(AVERY.email));
   assert.equal(writes().length, 0, "still nothing changed in ClickUp");
 
@@ -1065,7 +1069,7 @@ test("the schedule can be switched off; a run-now request still runs", async () 
   claudeScript = [{ reply: say("Nothing is stuck today.") }];
   await floCron(env, nyTime(`${todayYmd()}T15:00:00`));
   assert.equal(claudeRequests.length, before + 1, "run-now ran despite the time and the switch");
-  assert.match(postsTo(dmOf(AVERY.email)).at(-1).body.text, /Nothing is stuck today/);
+  assert.match(JSON.stringify(postsTo(dmOf(AVERY.email)).at(-1).body.cardsV2), /Nothing is stuck today/);
 });
 
 test("with no reachable lead the scheduled run is skipped and logged", async () => {
@@ -1124,7 +1128,8 @@ test("Tia gets a copy of the morning summary and can approve from it; first appr
   const tiaDm = dmOf("tia@anurseinthemaking.com");
   const copy = postsTo(tiaDm);
   assert.equal(copy.length, 1);
-  assert.match(copy[0].body.text, /^\*Daily check, .+\* \(copy: Avery has it too, either of you can approve\)\n\*#1\*/);
+  assert.match(copy[0].body.cardsV2[0].card.header.subtitle, /copy, Avery has it too, either of you can approve$/);
+  assert.match(JSON.stringify(copy[0].body.cardsV2[0].card.sections), /<b>#1<\/b> Peds quiz/);
   assert.equal(postsTo(dmOf(AVERY.email)).length, 1);
 
   const fromDm = (who, space, text) => ({ commonEventObject: { hostApp: "CHAT" }, chat: { user: who, space: { name: space, spaceType: "DIRECT_MESSAGE" },
@@ -1146,4 +1151,88 @@ test("Reaching people also lists anyone else who has messaged Flo", async () => 
   const j = people.find((p) => p.email === "newperson@anurseinthemaking.com");
   assert.deepEqual({ name: j.name, reachable: j.reachable }, { name: "Jordan", reachable: true });
   assert.ok(people.some((p) => p.name === "Samantha"), "Samantha is on the team list");
+});
+
+// ===========================================================================
+// Summary card
+// ===========================================================================
+import { summaryCard, stageInfo, toCardHtml, stageColor } from "../src/nitm-pm/cards.js";
+
+const NOV9 = `*Proposals* (reply "approve 16 to 29", or pick numbers):
+*#26, #29* <https://app.clickup.com/t/86e38njvm|ACLS Meds Whiteboard>: due → today, check-in comment (posts today)
+*#20, #16* <https://app.clickup.com/t/peds-quiz|Vital Signs Quiz>: owner Kristine → Diana, due → today
+
+*Messaged:* Gaby (ACLS Meds), Tia (IV Fluids).
+
+Left alone: <https://app.clickup.com/t/not-due|Sterile field mistakes>. It posts tomorrow & I'll recheck.`;
+
+test("summary card keeps Flo's words and lays them out in sections and card rows", () => {
+  const stages = new Map([["peds-quiz", { stage: "Ready To Edit / Design", color: "#ffc53d" }]]);
+  const msg = summaryCard({ title: "Daily check", subtitle: "Mon, Nov 9", body: NOV9, stages, pageUrl: "https://ops.example/flo/" });
+  const { header, sections } = msg.cardsV2[0].card;
+  assert.deepEqual(header, { title: "Daily check", subtitle: "Mon, Nov 9" });
+  assert.equal(msg.fallbackText, "Daily check, Mon, Nov 9");
+  assert.deepEqual(sections.map((s) => s.header), ["Proposals", "Messaged", "Left alone", undefined]);
+
+  const [proposals, messaged, left, footer] = sections;
+  assert.equal(proposals.widgets[0].textParagraph.text, '(reply "approve 16 to 29", or pick numbers):');
+  const row = proposals.widgets[2].decoratedText;
+  assert.equal(row.text, '<b>#20, #16</b> <a href="https://app.clickup.com/t/peds-quiz">Vital Signs Quiz</a>: owner Kristine → Diana, due → today<br><font color="#ffc53d">■</font> Ready To Edit / Design');
+  assert.equal(row.button.onClick.openLink.url, "https://app.clickup.com/t/peds-quiz");
+  assert.ok(!proposals.widgets[1].decoratedText.text.includes("■"), "no Stage known, no tag");
+  assert.equal(messaged.widgets[0].textParagraph.text, "Gaby (ACLS Meds), Tia (IV Fluids).");
+  assert.match(left.widgets[0].decoratedText.text, /It posts tomorrow &amp; I'll recheck\.$/);
+  assert.equal(footer.widgets[0].buttonList.buttons[0].onClick.openLink.url, "https://ops.example/flo/");
+});
+
+test("card text is escaped, and Stage colors are made safe", () => {
+  assert.equal(toCardHtml("- *Stale:* a <b> tag & _this_"), "• <b>Stale:</b> a &lt;b&gt; tag &amp; <i>this</i>");
+  assert.equal(toCardHtml("snake_case_name stays"), "snake_case_name stays");
+  assert.equal(stageColor("#fff"), "#9e9e9e");
+  assert.equal(stageColor("#02BCD4"), "#02bcd4");
+  assert.equal(stageColor("#f80"), "#ff8800");
+  assert.equal(stageColor("red"), "#9e9e9e");
+});
+
+test("stageInfo reads each linked card's Stage and color from ClickUp", async () => {
+  const s = await stageInfo(env, "<https://app.clickup.com/t/peds-quiz|Peds> and <https://app.clickup.com/t/nope|Gone>");
+  assert.deepEqual(s.get("peds-quiz"), { stage: "Ready To Edit / Design", color: "#ffc53d" });
+  assert.equal(s.has("nope"), false, "a missing card is skipped, not an error");
+});
+
+test("if Chat refuses the card, the summary still goes out as text", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o = {}) => {
+    if (String(u).startsWith("https://chat.googleapis.com/") && String(o.body).includes("cardsV2")) {
+      return new Response('{"error":{"message":"Invalid card"}}', { status: 400 });
+    }
+    return realFetch(u, o);
+  };
+  claudeScript = [{ reply: say("Nothing is stuck today.") }];
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  const posts = postsTo(dmOf(AVERY.email));
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].body.text, /^\*Daily check, .+\*\nNothing is stuck today/);
+  assert.ok(logRows().some((r) => r.event === "card_post_failed"));
+});
+
+test("Send me a preview re-sends the latest summary as a card to the asker only", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  claudeScript = [{ reply: say("Left alone: <https://app.clickup.com/t/peds-quiz|Peds quiz>.") }];
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  const before = claudeRequests.length;
+  const MARK = "mark@anurseinthemaking.com";
+  assert.equal((await floApi("preview", { method: "POST", body: {}, as: MARK })).status, 400, "Mark hasn't messaged Flo yet");
+  await sayHi("mark@anurseinthemaking.com", "Mark Podlas");
+  const r = await floApi("preview", { method: "POST", body: {}, as: MARK });
+  assert.equal(r.status, 200);
+  assert.equal(postsTo(dmOf(AVERY.email)).length, 1, "Avery isn't sent anything again");
+  assert.equal(claudeRequests.length, before, "nothing re-ran");
+  const card = postsTo(dmOf("mark@anurseinthemaking.com")).at(-1).body.cardsV2[0].card;
+  assert.match(card.header.subtitle, / · preview$/);
+  assert.match(card.sections[0].widgets[0].decoratedText.text, /■<\/font> Ready To Edit \/ Design/);
+  assert.equal(writes().length, 0);
 });

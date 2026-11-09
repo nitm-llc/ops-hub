@@ -19,8 +19,10 @@ import { runTurn } from "./brain.js";
 import { findLead, resolvePerson } from "./outreach.js";
 import { postChatMessage } from "./google.js";
 import { toChatFormat } from "./index.js";
-import { ensureTables, expireOld, claimRun, finishRun, getSetting, deleteSetting, appendHistory, logAction, getPerson, linkConversation } from "./store.js";
+import { ensureTables, expireOld, claimRun, finishRun, getSetting, deleteSetting, appendHistory, loadHistory, logAction, getPerson, linkConversation } from "./store.js";
 import { DEFAULT_TZ, todayYmd, addDays, weekdayName } from "./config.js";
+import { summaryCard, stageInfo } from "./cards.js";
+import { DEFAULT_APP_HOSTNAME } from "../access.js";
 
 export const DAILY_HOUR = 9;
 export const WEEKLY_HOUR = 10;
@@ -76,6 +78,18 @@ export function promptFor(kind, { leadFirst, today }) {
 
 const TITLES = { daily: "Daily check", weekly: "Weekly planning" };
 
+// The summary goes out as a card (same words, laid out like ClickUp). If Chat
+// refuses the card, the plain text goes instead, so the summary always arrives.
+async function postSummary(env, space, { title, subtitle, reply, text, stages }) {
+  const pageUrl = `https://${env.APP_HOSTNAME || DEFAULT_APP_HOSTNAME}/flo/`;
+  try {
+    return await postChatMessage(env, { space, thread: null, card: summaryCard({ title, subtitle, body: reply, stages, pageUrl }) });
+  } catch (e) {
+    await logAction(env, { conv: null, event: "card_post_failed", action: { space }, result: e.message });
+    return postChatMessage(env, { space, thread: null, text });
+  }
+}
+
 export async function runScheduled(env, kind, { trigger = "schedule", tz = env.PM_TIMEZONE || DEFAULT_TZ } = {}) {
   const today = todayYmd(tz);
   const lead = await findLead(env);
@@ -97,9 +111,11 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
     deadline: Date.now() + RUN_DEADLINE_MS,
     scheduled: true,
   });
-  const text = toChatFormat(`*${TITLES[kind]}, ${weekdayName(today)}*\n${reply}`);
+  const title = TITLES[kind];
+  const text = toChatFormat(`*${title}, ${weekdayName(today)}*\n${reply}`);
+  const stages = await stageInfo(env, reply).catch(() => new Map());
   try {
-    await postChatMessage(env, { space: lead.dmSpace, thread: null, text });
+    await postSummary(env, lead.dmSpace, { title, subtitle: weekdayName(today), reply: toChatFormat(reply), text, stages });
     await appendHistory(env, conv, [{ role: "assistant", text }]);
   } catch (e) {
     await logAction(env, { conv, event: "async_post_failed", action: { kind }, result: e.message });
@@ -118,7 +134,7 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
         continue;
       }
       const copy = toChatFormat(`*${TITLES[kind]}, ${weekdayName(today)}* (copy: ${leadFirst} has it too, either of you can approve)\n${reply}`);
-      await postChatMessage(env, { space: dm, thread: null, text: copy });
+      await postSummary(env, dm, { title, subtitle: `${weekdayName(today)} · copy, ${leadFirst} has it too, either of you can approve`, reply: toChatFormat(reply), text: copy, stages });
       await appendHistory(env, { space: dm, thread: "" }, [{ role: "assistant", text: copy }]);
       await linkConversation(env, dm, conv);
       copied.push(String(p.name).split(/\s+/)[0]);
@@ -129,6 +145,24 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
   const to = [leadFirst, ...copied].join(" and ");
   await logAction(env, { conv, actor: "flo-scheduled", event: `run_${kind}`, action: { trigger }, result: `sent to ${to}` });
   return { ok: true, message: `Sent to ${to}.`, text };
+}
+
+/**
+ * "Send me a preview" on the Flo page: the latest summary Flo sent the lead,
+ * re-sent as a card to the person asking. Nothing runs and nothing changes.
+ */
+export async function sendPreview(env, email) {
+  const me = await getPerson(env, email);
+  if (!me?.dm_space) return { ok: false, message: "Send Flo a message in Google Chat first, so it can reach you." };
+  const lead = await findLead(env);
+  const history = lead ? await loadHistory(env, { space: lead.dmSpace, thread: "" }) : [];
+  const last = [...history].reverse().find((m) => m.role === "assistant" && /^\*(Daily check|Weekly planning), /.test(m.text || ""));
+  if (!last) return { ok: false, message: "There's no summary yet to preview." };
+  const [first, ...rest] = last.text.split("\n");
+  const m = first.match(/^\*(Daily check|Weekly planning), ([^*]+)\*/);
+  const stages = await stageInfo(env, rest.join("\n")).catch(() => new Map());
+  await postSummary(env, me.dm_space, { title: m[1], subtitle: `${m[2]} · preview`, reply: rest.join("\n"), text: last.text, stages });
+  return { ok: true, message: "Sent to your chat with Flo." };
 }
 
 /** Called from the Worker's scheduled() every 2 minutes. Cheap when idle. */

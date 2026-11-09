@@ -221,10 +221,13 @@ export const _clearTokenCache = () => {
 // Post a message as the app. `thread` = a thread resource name, or null for a
 // DM / new thread. The fallback option means a vanished thread still gets the
 // answer instead of an error.
-export async function postChatMessage(env, { space, thread, text }) {
+// `card` is an optional { cardsV2, fallbackText } (see cards.js); it's sent
+// instead of `text`.
+export async function postChatMessage(env, { space, thread, text, card }) {
   const token = await getChatAccessToken(env);
   const qs = thread ? "?messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD" : "";
-  const body = thread ? { text, thread: { name: thread } } : { text };
+  const msg = card ? { cardsV2: card.cardsV2, fallbackText: card.fallbackText } : { text };
+  const body = thread ? { ...msg, thread: { name: thread } } : msg;
   const res = await fetch(`${CHAT_API}/${space}/messages${qs}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
