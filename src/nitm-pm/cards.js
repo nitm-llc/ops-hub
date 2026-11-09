@@ -5,8 +5,10 @@
 //   * a header ("Daily check" / "Mon, Nov 9")
 //   * one section per paragraph, titled by its lead-in ("Proposals",
 //     "Messaged", "Left alone")
-//   * every line that links a ClickUp card becomes a row that opens the card,
-//     with its Stage underneath in ClickUp's own Stage color
+//   * every line that links a ClickUp card becomes a row that opens the card:
+//     a small grey line with its numbers and Stage, then a square in
+//     ClickUp's own Stage color and Flo's words
+//   * long lists fold after 5 rows
 // Approving is unchanged: people still type "approve 1 and 3".
 // If Chat rejects the card, the scheduler falls back to the plain text.
 // ============================================================================
@@ -16,6 +18,7 @@ import { FIELDS } from "./config.js";
 
 const CARD_LINK = /<(https:\/\/app\.clickup\.com\/t\/([A-Za-z0-9_-]+))\|([^>]+)>/;
 const MAX_LOOKUPS = 25;
+const FOLD_AFTER = 5;
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -84,9 +87,18 @@ export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl
   for (const block of String(body || "").trim().split(/\n\s*\n/)) {
     const lines = block.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
     if (!lines.length) continue;
-    const { header, rest } = splitHeading(lines[0]);
+    let { header, rest } = splitHeading(lines[0]);
+    // A heading's "(reply "approve 16 to 29", or pick numbers):" becomes a
+    // quiet note under the list instead of a line above it.
+    let note = null;
+    const aside = rest.match(/^\((.+)\):?$/);
+    if (aside) {
+      note = aside[1].charAt(0).toUpperCase() + aside[1].slice(1);
+      rest = "";
+    }
     const widgets = [];
     let para = [];
+    let rows = 0;
     const flush = () => {
       if (para.length) widgets.push({ textParagraph: { text: para.join("<br>") } });
       para = [];
@@ -98,19 +110,29 @@ export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl
         continue;
       }
       flush();
+      // One row per card: the numbers and Stage on a small line above, the
+      // colored square and Flo's words below. The whole row opens the card.
       const s = stages.get(link[2]);
-      const tag = s ? `<br><font color="${s.color}">■</font> ${esc(s.stage)}` : "";
+      const lead = line.match(/^\*([^*]+)\*\s*/);
+      const label = [lead?.[1], s?.stage].filter(Boolean).join(" · ");
+      const words = lead ? line.slice(lead[0].length) : line;
       widgets.push({
         decoratedText: {
-          text: toCardHtml(line) + tag,
+          ...(label ? { topLabel: label } : {}),
+          text: (s ? `<font color="${s.color}">■</font> ` : "") + toCardHtml(words),
           wrapText: true,
-          button: { text: "Open", onClick: { openLink: { url: link[1] } } },
+          onClick: { openLink: { url: link[1] } },
         },
       });
+      rows++;
     }
     flush();
+    if (note) widgets.push({ textParagraph: { text: `<font color="#80868b">${toCardHtml(note)}</font>` } });
     if (!widgets.length) widgets.push({ textParagraph: { text: "—" } });
-    sections.push(header ? { header: esc(header), widgets } : { widgets });
+    const section = header ? { header: esc(header), widgets } : { widgets };
+    // Long lists fold after 5; "Show more" opens the rest.
+    if (rows > FOLD_AFTER + 1) Object.assign(section, { collapsible: true, uncollapsibleWidgetsCount: FOLD_AFTER });
+    sections.push(section);
   }
   if (pageUrl) {
     sections.push({ widgets: [{ buttonList: { buttons: [{ text: "Open Flo page", onClick: { openLink: { url: pageUrl } } }] } }] });

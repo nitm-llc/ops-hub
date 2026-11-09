@@ -1175,14 +1175,26 @@ test("summary card keeps Flo's words and lays them out in sections and card rows
   assert.deepEqual(sections.map((s) => s.header), ["Proposals", "Messaged", "Left alone", undefined]);
 
   const [proposals, messaged, left, footer] = sections;
-  assert.equal(proposals.widgets[0].textParagraph.text, '(reply "approve 16 to 29", or pick numbers):');
-  const row = proposals.widgets[2].decoratedText;
-  assert.equal(row.text, '<b>#20, #16</b> <a href="https://app.clickup.com/t/peds-quiz">Vital Signs Quiz</a>: owner Kristine → Diana, due → today<br><font color="#ffc53d">■</font> Ready To Edit / Design');
-  assert.equal(row.button.onClick.openLink.url, "https://app.clickup.com/t/peds-quiz");
-  assert.ok(!proposals.widgets[1].decoratedText.text.includes("■"), "no Stage known, no tag");
+  const row = proposals.widgets[1].decoratedText;
+  assert.equal(row.topLabel, "#20, #16 · Ready To Edit / Design");
+  assert.equal(row.text, '<font color="#ffc53d">■</font> <a href="https://app.clickup.com/t/peds-quiz">Vital Signs Quiz</a>: owner Kristine → Diana, due → today');
+  assert.equal(row.onClick.openLink.url, "https://app.clickup.com/t/peds-quiz");
+  assert.equal(row.button, undefined, "no Open button; the row opens the card");
+  assert.equal(proposals.widgets[0].decoratedText.topLabel, "#26, #29", "no Stage known, no tag");
+  assert.ok(!proposals.widgets[0].decoratedText.text.includes("■"));
+  assert.equal(proposals.widgets[2].textParagraph.text, '<font color="#80868b">Reply "approve 16 to 29", or pick numbers</font>', "the reply hint moves under the list");
+  assert.equal(proposals.collapsible, undefined, "short lists don't fold");
   assert.equal(messaged.widgets[0].textParagraph.text, "Gaby (ACLS Meds), Tia (IV Fluids).");
   assert.match(left.widgets[0].decoratedText.text, /It posts tomorrow &amp; I'll recheck\.$/);
   assert.equal(footer.widgets[0].buttonList.buttons[0].onClick.openLink.url, "https://ops.example/flo/");
+});
+
+test("a long proposal list folds after 5 rows", () => {
+  const body = "*Proposals:*\n" + Array.from({ length: 8 }, (_, i) => `*#${i + 1}* <https://app.clickup.com/t/c${i}|Card ${i}>: due → today`).join("\n");
+  const s = summaryCard({ title: "Daily check", subtitle: "x", body }).cardsV2[0].card.sections[0];
+  assert.equal(s.widgets.length, 8, "nothing dropped");
+  assert.equal(s.collapsible, true);
+  assert.equal(s.uncollapsibleWidgetsCount, 5);
 });
 
 test("card text is escaped, and Stage colors are made safe", () => {
@@ -1233,6 +1245,7 @@ test("Send me a preview re-sends the latest summary as a card to the asker only"
   assert.equal(claudeRequests.length, before, "nothing re-ran");
   const card = postsTo(dmOf("mark@anurseinthemaking.com")).at(-1).body.cardsV2[0].card;
   assert.match(card.header.subtitle, / · preview$/);
-  assert.match(card.sections[0].widgets[0].decoratedText.text, /■<\/font> Ready To Edit \/ Design/);
+  assert.equal(card.sections[0].widgets[0].decoratedText.topLabel, "Ready To Edit / Design");
+  assert.match(card.sections[0].widgets[0].decoratedText.text, /^<font color="#ffc53d">■<\/font> /);
   assert.equal(writes().length, 0);
 });
