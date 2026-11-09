@@ -130,8 +130,21 @@
   .switch small { display: block; color: var(--muted); font-size: 12.5px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .empty { color: var(--muted); font-size: 14px; margin-top: 10px; }
+  .msg { border-top: 1px solid var(--border); padding: 8px 2px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; }
+  .msg:first-child { border-top: 0; }
+  .msg .who { font-weight: 700; font-size: 12px; color: var(--muted); display: block; white-space: normal; }
+  .msg.score { background: var(--accent-bg); border-radius: 8px; padding: 8px 10px; }
+  .msg.score .who { color: var(--accent); }
+  .msg.event { color: var(--muted); font-size: 12.5px; }
+  .transcript { max-height: 420px; overflow: auto; margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; }
+  .grid-labels td, .grid-labels th { padding: 5px 6px; }
+  .grid-labels select { min-height: 32px; padding: 4px 6px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .agree-good { color: var(--green); font-weight: 700; } .agree-mid { color: var(--amber); font-weight: 700; } .agree-bad { color: var(--red); font-weight: 700; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111827; color: #f9fafb;
            padding: 11px 16px; border-radius: 10px; font-size: 14px; z-index: 60; max-width: calc(100% - 32px); }
+  /* Wide tables scroll inside their card instead of widening the page. */
+  @media (max-width: 900px) { table.t { display: block; max-width: 100%; overflow-x: auto; white-space: nowrap; } table.t td { white-space: normal; min-width: 70px; } }
   @media (max-width: 720px) {
     .two { grid-template-columns: 1fr; }
     .brow { grid-template-columns: 1fr; }
@@ -147,6 +160,7 @@
   <div class="tabs" role="tablist">
     <button role="tab" id="tab-dash" aria-selected="true" aria-controls="dash">Dashboard</button>
     <button role="tab" id="tab-settings" aria-selected="false" aria-controls="settings">Settings &amp; runs</button>
+    <button role="tab" id="tab-cal" aria-selected="false" aria-controls="cal">Calibration</button>
   </div>
 
   <div id="error" class="banner bad hide" role="alert"></div>
@@ -280,6 +294,42 @@
           <button type="submit" style="margin-top:10px">Save and make active</button>
         </form>
       </details>
+    </section>
+  </div>
+
+  <!-- ================= CALIBRATION ================= -->
+  <div id="cal" role="tabpanel" aria-labelledby="tab-cal" class="hide">
+    <section class="card" aria-labelledby="h-calrun">
+      <div class="card-head"><h2 id="h-calrun">How much to trust the scores</h2><button id="calRun">Run calibration</button></div>
+      <p class="sub tiny">You score a set of conversations by hand (the golden set below). A calibration run re-scores them with the current model, prompt and guidelines and shows how often it agrees with you, check by check. Run it whenever the guidelines, prompt or model change. It doesn't change any daily scores. Cost: about 2–3¢ per conversation.</p>
+      <table class="t" id="calRuns"></table>
+      <div id="calReport"></div>
+    </section>
+
+    <section class="card" aria-labelledby="h-golden">
+      <div class="card-head"><h2 id="h-golden">Golden set</h2>
+        <div class="row"><button class="ghost" id="goldenAdd" type="button">Score a conversation</button>
+          <a class="ghost" id="goldenCsv" href="/cx-audit/api/golden/csv" download style="text-decoration:none"><button class="ghost" type="button" tabindex="-1">Download CSV</button></a>
+          <label class="ghost" style="cursor:pointer"><span class="tiny" style="font-weight:600;color:var(--accent)">Upload CSV</span><input type="file" id="goldenUpload" accept=".csv,text/csv" class="hide"></label></div></div>
+      <p class="sub tiny">Pick a mix of issue types, good and bad replies, Ivy and team. 20–40 conversations is plenty. CSV columns: conversation_id, audit_day, author_type (ivy|team), check_id, expected (pass|fail|na), note. Uploading replaces the labels of each conversation/day in the file.</p>
+      <table class="t" id="goldenTable"></table>
+    </section>
+
+    <section class="card hide" id="editor" aria-labelledby="h-editor">
+      <div class="card-head"><h2 id="h-editor">Score a conversation by hand</h2><button class="link" id="editorClose" type="button">Close</button></div>
+      <form class="row" id="editorLoad" style="margin-top:10px">
+        <label class="f" style="flex:1;min-width:240px">Intercom conversation link or id<input type="text" id="edId" required placeholder="https://app.intercom.com/…/conversation/215476…"></label>
+        <label class="f">Day the replies were sent<input type="date" id="edDay" required></label>
+        <button type="submit">Load</button>
+      </form>
+      <div id="edBody" class="hide">
+        <p class="tiny muted" style="margin-top:10px" id="edMeta"></p>
+        <div class="transcript" id="edTranscript"></div>
+        <p class="tiny muted" style="margin-top:12px">Score only the highlighted replies (sent that day); the rest is context. Leave a check blank if you're unsure: blank checks aren't compared. Customer details are replaced with placeholders.</p>
+        <table class="t grid-labels" id="edGrid"></table>
+        <label class="f" style="margin-top:10px">Note (optional)<input type="text" id="edNote" placeholder="Why this one is in the set"></label>
+        <button id="edSave" type="button" style="margin-top:12px">Save hand scores</button>
+      </div>
     </section>
   </div>
 </div>
@@ -590,15 +640,132 @@
     } catch (e) { showError(e); }
   }
 
+  // ---------- calibration ----------
+  const convLink = (id) => `https://app.intercom.com/a/inbox/_/inbox/conversation/${id}`;
+  const agreeClass = (v) => (v == null ? "" : v >= 85 ? "agree-good" : v >= 70 ? "agree-mid" : "agree-bad");
+  const RESULT = { pass: "Pass", fail: "Fail", na: "N/A" };
+  let calTimer = null;
+
+  async function loadCalibrationTab(selectId) {
+    showError(null);
+    clearTimeout(calTimer);
+    try {
+      const [runs, golden] = await Promise.all([api("calibrations"), api("golden")]);
+      $("calRuns").replaceChildren(el("tr", {}, ...["#", "When", "Model", "Guidelines", "Conversations", "Agreement", "Status", ""].map((h) => el("th", { text: h }))),
+        ...runs.runs.map((r) => el("tr", {}, el("td", { text: r.id }), el("td", { text: new Date(r.created_at).toLocaleString() }), el("td", { text: `${r.model || ""} · ${r.effort || ""}` }),
+          el("td", { text: `${r.guidelines_version || ""} · ${r.prompt_version || ""}` }), el("td", { text: `${r.done ?? 0}/${r.total ?? 0}${r.errors ? ` (${r.errors} skipped)` : ""}` }),
+          el("td", { class: agreeClass(r.agreement), text: r.agreement == null ? "—" : r.agreement + "%" }), el("td", { text: r.status + (r.error ? `: ${r.error}` : "") }),
+          el("td", {}, r.status === "done" ? el("button", { class: "link", text: "View", onclick: () => showReport(r.id) }) : null))));
+      if (!runs.runs.length) $("calRuns").append(el("tr", {}, el("td", { colspan: 8, class: "muted", text: "No calibration runs yet." })));
+      const running = runs.runs.find((r) => r.status === "running");
+      if (running) calTimer = setTimeout(() => { if (!$("cal").classList.contains("hide")) loadCalibrationTab(); }, 20000);
+      const latestDone = runs.runs.find((r) => r.status === "done");
+      if (selectId || latestDone) showReport(selectId || latestDone.id); else $("calReport").replaceChildren();
+
+      $("calRun").disabled = !!running || !golden.items.length;
+      $("calRun").title = running ? "A run is in progress" : !golden.items.length ? "Score some conversations by hand first" : "";
+      $("goldenTable").replaceChildren(el("tr", {}, ...["Conversation", "Day", "Hand scores", "Note", ""].map((h) => el("th", { text: h }))),
+        ...golden.items.map((g) => el("tr", {},
+          el("td", {}, el("a", { href: convLink(g.conversation_id), target: "_blank", rel: "noopener", text: g.conversation_id })),
+          el("td", { text: g.audit_day }), el("td", { text: `${g.labels} (${g.fails || 0} fail)` }), el("td", { text: g.note || "" }),
+          el("td", {}, el("button", { class: "link", text: "Edit", onclick: () => openEditor(g.conversation_id, g.audit_day) }),
+            el("button", { class: "link", text: "Remove", onclick: async () => { if (!confirm(`Remove ${g.conversation_id} (${g.audit_day}) from the golden set?`)) return; await api(`golden?id=${g.conversation_id}&day=${g.audit_day}`, { method: "DELETE" }); loadCalibrationTab(); } })))));
+      if (!golden.items.length) $("goldenTable").append(el("tr", {}, el("td", { colspan: 5, class: "muted", text: "Nothing yet. Use “Score a conversation” or upload a CSV." })));
+    } catch (e) { showError(e); }
+  }
+
+  async function showReport(id) {
+    const r = await api("calibrations/" + id);
+    const rep = r.report;
+    if (!rep) { $("calReport").replaceChildren(); return; }
+    const cell = (a) => el("td", { class: "num " + agreeClass(a.agreement), text: a.compared ? `${a.agreement}% (${a.agree}/${a.compared})` : "—" });
+    const head = el("tr", {}, ...["Check", "Agreement", "Ivy", "Team", "Missed fails", "False fails", "N/A mismatch"].map((h) => el("th", { text: h })));
+    const rows = rep.by_check.map((c) => el("tr", {}, el("td", { text: `${c.n}. ${c.name}${c.off ? " (off)" : ""}` }), cell(c), cell(c.ivy), cell(c.team),
+      el("td", { class: "num", text: c.missed_fails }), el("td", { class: "num", text: c.false_fails }), el("td", { class: "num", text: c.na_mismatch })));
+    const o = rep.overall;
+    $("calReport").replaceChildren(
+      el("h3", { text: `Run ${r.id} · ${r.model} · guidelines ${r.guidelines_version}` }),
+      el("div", { class: "stats" },
+        el("div", { class: "stat" }, el("span", { text: "Overall agreement" }), el("b", { class: agreeClass(o.agreement), text: o.agreement == null ? "—" : o.agreement + "%" }), el("span", { text: `${o.agree} of ${o.compared} hand scores` })),
+        el("div", { class: "stat" }, el("span", { text: "Ivy" }), el("b", { text: rep.by_author.ivy.compared ? rep.by_author.ivy.agreement + "%" : "—" }), el("span", { text: `${rep.by_author.ivy.compared} compared` })),
+        el("div", { class: "stat" }, el("span", { text: "Team" }), el("b", { text: rep.by_author.team.compared ? rep.by_author.team.agreement + "%" : "—" }), el("span", { text: `${rep.by_author.team.compared} compared` })),
+        el("div", { class: "stat" }, el("span", { text: "Missed fails / false fails" }), el("b", { text: `${o.missed_fails} / ${o.false_fails}` }), el("span", { text: "you said fail, it didn't / it said fail, you didn't" }))),
+      el("p", { class: "tiny muted", style: "margin-top:10px", text: "Agreement counts exact matches of pass, fail and N/A. Below 85% for a check, read its disagreements: the fix is usually a clearer rule in the guidelines or the check wording." }),
+      el("table", { class: "t" }, head, ...rows),
+      el("h3", { text: `Disagreements (${r.disagreements.length})` }),
+      ...(r.disagreements.length ? r.disagreements.map((d) => el("article", { class: "fail" },
+        el("div", { class: "meta" }, el("span", { class: "pill check", text: checkName(d.check_id) }), el("span", { class: `pill ${d.author_type}`, text: LABEL[d.author_type] }),
+          el("span", { text: `You: ${RESULT[d.expected]} · Model: ${RESULT[d.got] || d.got}` }), el("span", { text: d.audit_day }),
+          el("a", { href: convLink(d.conversation_id), target: "_blank", rel: "noopener", text: "Open in Intercom ↗" }),
+          el("button", { class: "link", text: "Edit my scores", onclick: () => openEditor(d.conversation_id, d.audit_day) })),
+        d.evidence ? el("div", { class: "quote", text: `Model: “${unquote(d.evidence)}”` }) : null)) : [el("p", { class: "empty", text: "None. The model matched every hand score." })]),
+      ...(r.item_errors.length ? [el("h3", { text: "Notes" }), el("ul", { class: "tiny muted", style: "margin:6px 0 0 18px" }, ...r.item_errors.map((e) => el("li", { text: `${e.conversation_id} (${e.audit_day}): ${e.error}` })))] : []));
+  }
+
+  async function openEditor(id, day) {
+    $("editor").classList.remove("hide");
+    $("edId").value = id || ""; $("edDay").value = day || addDays(nyToday(), -1);
+    $("edBody").classList.add("hide");
+    $("editor").scrollIntoView({ behavior: "smooth", block: "start" });
+    if (id && day) await loadEditor();
+  }
+  async function loadEditor() {
+    showError(null);
+    try {
+      const q = `id=${encodeURIComponent($("edId").value)}&day=${$("edDay").value}`;
+      const [t, existing] = await Promise.all([api("golden/transcript?" + q), api("golden/item?" + q).catch(() => null)]);
+      $("edId").value = t.conversation_id;
+      $("edMeta").replaceChildren(`${t.issue_type || "No issue type"} · ${t.channel} · replies that day: Ivy ${t.counts.ivy}, team ${t.counts.team} · `, el("a", { href: t.link, target: "_blank", rel: "noopener", text: "Open in Intercom ↗" }));
+      $("edTranscript").replaceChildren(...t.messages.map((m) => {
+        const score = m.in_window && (m.role === "ivy" || m.role === "team");
+        const who = m.role === "team" ? `TEAM (${m.name})` : m.role.toUpperCase();
+        const when = new Date(m.at * 1000).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+        return el("div", { class: "msg" + (score ? " score" : "") + (m.role === "event" ? " event" : "") }, el("span", { class: "who", text: `${who} · ${when}${score ? " · score this" : ""}` }), m.text);
+      }));
+      const have = {};
+      for (const l of existing?.labels || []) have[`${l.author_type}:${l.check_id}`] = l.expected;
+      const groups = ["ivy", "team"];
+      const sel = (g, c) => {
+        const s = el("select", { "data-g": g, "data-c": c.id, "aria-label": `${LABEL[g]}: ${c.name}`, disabled: !t.counts[g] });
+        for (const [v, label] of [["", "—"], ["pass", "Pass"], ["fail", "Fail"], ["na", "N/A"]]) s.append(el("option", { value: v, text: label }));
+        s.value = have[`${g}:${c.id}`] || "";
+        return s;
+      };
+      $("edGrid").replaceChildren(el("tr", {}, el("th", { text: "Check" }), ...groups.map((g) => el("th", { text: t.counts[g] ? LABEL[g] : `${LABEL[g]} (no reply that day)` }))),
+        ...state.checks.map((c) => el("tr", {}, el("td", { title: c.passes }, `${c.n}. ${c.name}`, el("small", { class: "muted", style: "display:block;font-size:11.5px", text: c.passes })), ...groups.map((g) => el("td", {}, sel(g, c))))));
+      $("edNote").value = existing?.note || "";
+      $("edBody").classList.remove("hide");
+    } catch (e) { showError(e); }
+  }
+  $("editorLoad").onsubmit = (e) => { e.preventDefault(); loadEditor(); };
+  $("editorClose").onclick = () => $("editor").classList.add("hide");
+  $("goldenAdd").onclick = () => openEditor("", "");
+  $("edSave").onclick = async () => {
+    const labels = [...document.querySelectorAll("#edGrid select")].filter((s) => s.value && !s.disabled).map((s) => ({ author_type: s.dataset.g, check_id: s.dataset.c, expected: s.value }));
+    if (!labels.length && !confirm("No hand scores picked. Save it with none?")) return;
+    try { await api("golden", { method: "POST", body: JSON.stringify({ conversation_id: $("edId").value, audit_day: $("edDay").value, note: $("edNote").value || null, labels }) });
+      toast(`Saved ${labels.length} hand score${labels.length === 1 ? "" : "s"}`); $("editor").classList.add("hide"); loadCalibrationTab(); } catch (e) { showError(e); }
+  };
+  $("goldenUpload").onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try { const r = await api("golden/csv", { method: "POST", body: JSON.stringify({ csv: await file.text() }) }); toast(`Imported ${r.labels} hand scores for ${r.conversations} conversations`); loadCalibrationTab(); }
+    catch (err) { showError(err); } finally { e.target.value = ""; }
+  };
+  $("calRun").onclick = async () => {
+    if (!confirm("Re-score the golden set with the current settings? Takes a few minutes; costs about 2–3¢ per conversation.")) return;
+    try { const r = await api("calibrations", { method: "POST", body: "{}" }); toast(`Calibration run ${r.id} started`); loadCalibrationTab(); } catch (e) { showError(e); }
+  };
+
   // ---------- wiring ----------
   function selectTab(which) {
-    const dash = which !== "settings";
-    $("tab-dash").setAttribute("aria-selected", String(dash)); $("tab-settings").setAttribute("aria-selected", String(!dash));
-    $("dash").classList.toggle("hide", !dash); $("settings").classList.toggle("hide", dash);
-    if (dash) loadDashboard(); else loadSettingsTab();
+    const tabs = { dash: "tab-dash", settings: "tab-settings", cal: "tab-cal" };
+    if (!tabs[which]) which = "dash";
+    for (const [panel, tab] of Object.entries(tabs)) { $(tab).setAttribute("aria-selected", String(panel === which)); $(panel).classList.toggle("hide", panel !== which); }
+    if (which === "dash") loadDashboard(); else if (which === "settings") loadSettingsTab(); else loadCalibrationTab();
   }
   $("tab-dash").onclick = () => selectTab("dash");
   $("tab-settings").onclick = () => selectTab("settings");
+  $("tab-cal").onclick = () => selectTab("cal");
   for (const b of $("presets").querySelectorAll("button")) b.onclick = () => { setPreset(Number(b.dataset.days)); loadDashboard(); };
   for (const id of ["from", "to", "author", "check", "issue", "version"]) $(id).addEventListener("change", loadDashboard);
   $("more").onclick = () => loadFailures().catch(showError);
@@ -662,7 +829,7 @@
     try { await loadSettings(); } catch (e) { showError(e); return; }
     if (h.issue) $("issue").append(el("option", { value: h.issue, text: h.issue })), ($("issue").value = h.issue);
     if (h.version) $("version").append(el("option", { value: h.version, text: h.version })), ($("version").value = h.version);
-    selectTab(h.tab === "settings" ? "settings" : "dash");
+    selectTab(h.tab || "dash");
   })();
 })();
 </script>

@@ -14,6 +14,14 @@
 //   GET  summary?from&to&author&check&issue&version   dashboard aggregates
 //   GET  failures?...&limit&offset                     failed checks, newest first
 //   POST digest               {from, to?, send?}  preview the digest text; send: true DMs it now
+//   Calibration (Phase 6):
+//   GET  golden                         golden set (conversation/day + label counts)
+//   GET  golden/item?id&day             one item with its hand labels
+//   GET  golden/transcript?id&day       scrubbed transcript to label from (fetched live, not stored)
+//   POST golden {conversation_id, audit_day, note?, labels:[{author_type, check_id, expected}]}
+//   DELETE golden?id&day
+//   GET  golden/csv  /  POST golden/csv {csv}
+//   POST calibrations  /  GET calibrations  /  GET calibrations/:id
 //   GET  runs                 recent runs
 //   GET  runs/:id             one run, with queue counts and errors
 //   POST runs                 {from, to, force?}  manual run (processed by cron)
@@ -40,6 +48,7 @@ import { CHECKS, VOICE_RULES, DEFAULT_TOGGLES } from "./checks.js";
 import { makeClient, scoreMany, scorerSettings } from "./scorer.js";
 import { summary, failures, parseFilters } from "./report.js";
 import { buildDigest, sendToRecipients, recipients } from "./digest.js";
+import * as cal from "./calibration.js";
 
 export { cxAuditCron };
 
@@ -67,6 +76,16 @@ export async function handleCxAuditRoutes(request, env, ctx, path) {
   try {
     await store.ensureTables(env);
 
+    if (head === "golden") return await goldenRoutes(env, method, idPart, url, body, by);
+    if (head === "calibrations") {
+      if (method === "GET" && !idPart) return json({ runs: await cal.listCalibrations(env) });
+      if (method === "GET" && idPart) { const r = await cal.getCalibration(env, Number(idPart)); return r ? json(r) : json({ error: "No such run." }, 404); }
+      if (method === "POST") {
+        const id = await cal.createCalibration(env, by);
+        if (env.INTERCOM_ACCESS_TOKEN && env.ANTHROPIC_API_KEY) ctx.waitUntil(cal.calibrationTick(env).catch((e) => console.error("cx-audit calibration kick:", e)));
+        return json({ id }, 201);
+      }
+    }
     if (head === "summary" && method === "GET") return json(await summary(env, parseFilters(url.searchParams)));
     if (head === "failures" && method === "GET") {
       return json(await failures(env, parseFilters(url.searchParams), { limit: url.searchParams.get("limit"), offset: url.searchParams.get("offset") }));
@@ -149,6 +168,32 @@ export async function handleCxAuditRoutes(request, env, ctx, path) {
   } catch (e) {
     return json({ error: String(e.message || e) }, 400);
   }
+}
+
+async function goldenRoutes(env, method, sub, url, body, by) {
+  const q = (k) => url.searchParams.get(k) || "";
+  if (method === "GET" && !sub) return json({ items: await cal.listGolden(env) });
+  if (method === "GET" && sub === "item") {
+    const g = await cal.getGolden(env, cal.parseConversationId(q("id")), q("day"));
+    return g ? json(g) : json({ error: "Not in the golden set." }, 404);
+  }
+  if (method === "GET" && sub === "transcript") {
+    const id = cal.parseConversationId(q("id"));
+    if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(q("day"))) return json({ error: "Give a conversation id or link and a day." }, 400);
+    const tz = env.CX_AUDIT_TZ || DEFAULT_TZ;
+    const [appId, fetched] = await Promise.all([getAppId(env), getConversations(env, [id])]);
+    if (fetched[0].error) return json({ error: fetched[0].error }, 502);
+    const rec = extract(fetched[0].conversation, windowFor(q("day"), q("day"), tz), { appId });
+    const { messages, link, issue_type, channel, counts, id: cid } = rec;
+    return json({ conversation_id: cid, day: q("day"), link, issue_type, channel, counts, messages: messages.filter((m) => m.at < rec.window.end) });
+  }
+  if (method === "GET" && sub === "csv") {
+    return new Response(await cal.exportCsv(env), { headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=cx-golden-set.csv", "Cache-Control": "no-store" } });
+  }
+  if (method === "POST" && sub === "csv") return json(await cal.importCsv(env, body.csv, by), 201);
+  if (method === "POST" && !sub) return json(await cal.saveGolden(env, body, by), 201);
+  if (method === "DELETE" && !sub) { await cal.deleteGolden(env, cal.parseConversationId(q("id")), q("day")); return json({ ok: true }); }
+  return json({ error: "Not found." }, 404);
 }
 
 function parseRun(r) {

@@ -5,7 +5,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { sqliteD1 } from "./support/sqlite-d1.mjs";
-import { schemaStatements, splitSql, saveGuidelines, ensureTables, setSetting } from "../src/cx-audit/store.js";
+import { schemaStatements, splitSql, MIGRATIONS, saveGuidelines, ensureTables, setSetting } from "../src/cx-audit/store.js";
 import { tick, scheduledRunDue, createRun, validateRange } from "../src/cx-audit/job.js";
 import { handleCxAuditRoutes, dryRun } from "../src/cx-audit/index.js";
 import { windowFor } from "../src/cx-audit/config.js";
@@ -73,10 +73,14 @@ async function runToEnd(env, opts = {}) {
   return last;
 }
 
-test("migration file matches the schema in store.js", () => {
-  const sql = fs.readFileSync(new URL("../migrations/0013_cx_audit.sql", import.meta.url), "utf8");
-  const fromFile = splitSql(sql);
-  assert.deepEqual(fromFile, schemaStatements());
+test("migration files match the schemas in store.js", () => {
+  const all = [];
+  for (const [file, schema] of Object.entries(MIGRATIONS)) {
+    const sql = fs.readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
+    assert.deepEqual(splitSql(sql), splitSql(schema), file);
+    all.push(...splitSql(schema));
+  }
+  assert.deepEqual(all, schemaStatements(), "ensureTables runs exactly the migrations");
 });
 
 test("schedule windows: daily 7-10am NY for yesterday; weekly on Mondays; nothing outside", () => {

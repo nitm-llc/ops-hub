@@ -25,6 +25,7 @@ import { windowFor, localMidnight, todayYmd, addDaysYmd, DEFAULT_TZ } from "./co
 import { makeClient, scoreMany, scorerSettings, scorerKey, scoredIds } from "./scorer.js";
 import * as store from "./store.js";
 import { digestAfterRun } from "./digest.js";
+import { calibrationTick } from "./calibration.js";
 
 export const RUN_HOUR = 7;
 const WINDOW_HOURS = 3;
@@ -262,5 +263,8 @@ export async function tick(env, { now = Date.now(), client, budgetMs = TICK_BUDG
 
 export async function cxAuditCron(env) {
   if (!store.db(env) || !env.INTERCOM_ACCESS_TOKEN || !env.ANTHROPIC_API_KEY) return { skipped: "not configured" };
-  return tick(env);
+  const audit = await tick(env);
+  // Calibration runs (Phase 6) share the tick; idle is one cheap read.
+  const calibration = await calibrationTick(env).catch((e) => ({ error: String(e.message || e) }));
+  return { audit, calibration };
 }

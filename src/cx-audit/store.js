@@ -10,8 +10,8 @@
 // moment it is. Long-term storage is scores + scrubbed evidence quotes +
 // rewrites + the Intercom id and link.
 //
-// SCHEMA is the single source; migrations/0013_cx_audit.sql must match it
-// (tests/cx-audit-job.test.js checks).
+// SCHEMA / SCHEMA_CALIBRATION are the single source; migrations 0013 and 0014
+// must match them (tests/cx-audit-job.test.js checks).
 // ============================================================================
 
 import { DEFAULT_EXCLUSIONS } from "./config.js";
@@ -138,9 +138,78 @@ CREATE TABLE IF NOT EXISTS cxa_check_results (
 CREATE INDEX IF NOT EXISTS cxa_check_results_check ON cxa_check_results (check_id, result);
 `;
 
+// Phase 6: calibration. A golden set of conversations Mark scores by hand,
+// and runs that re-score it with the current model/prompt/guidelines and
+// report agreement per check. Labels are pass|fail|na; an unlabeled check is
+// simply not compared.
+export const SCHEMA_CALIBRATION = `
+-- One row per golden conversation/day (what to fetch and re-score).
+CREATE TABLE IF NOT EXISTS cxa_golden_items (
+  conversation_id TEXT NOT NULL,
+  audit_day       TEXT NOT NULL,
+  note            TEXT,
+  added_by        TEXT,
+  added_at        TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, audit_day)
+);
+
+-- Mark's hand scores.
+CREATE TABLE IF NOT EXISTS cxa_golden_labels (
+  conversation_id TEXT NOT NULL,
+  audit_day       TEXT NOT NULL,
+  author_type     TEXT NOT NULL,
+  check_id        TEXT NOT NULL,
+  expected        TEXT NOT NULL,
+  labeled_by      TEXT,
+  labeled_at      TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, audit_day, author_type, check_id)
+);
+
+CREATE TABLE IF NOT EXISTS cxa_calibration_runs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  status        TEXT NOT NULL,
+  settings_json TEXT,
+  total         INTEGER,
+  done          INTEGER,
+  errors        INTEGER,
+  report_json   TEXT,
+  error         TEXT,
+  lease_until   INTEGER,
+  created_at    TEXT NOT NULL,
+  created_by    TEXT,
+  finished_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS cxa_calibration_queue (
+  run_id          INTEGER NOT NULL,
+  conversation_id TEXT NOT NULL,
+  audit_day       TEXT NOT NULL,
+  stage           TEXT NOT NULL,
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  error           TEXT,
+  PRIMARY KEY (run_id, conversation_id, audit_day)
+);
+
+-- What the model said for each labeled check, next to the hand label.
+CREATE TABLE IF NOT EXISTS cxa_calibration_results (
+  run_id          INTEGER NOT NULL,
+  conversation_id TEXT NOT NULL,
+  audit_day       TEXT NOT NULL,
+  author_type     TEXT NOT NULL,
+  check_id        TEXT NOT NULL,
+  expected        TEXT NOT NULL,
+  got             TEXT NOT NULL,
+  evidence        TEXT,
+  PRIMARY KEY (run_id, conversation_id, audit_day, author_type, check_id)
+);
+`;
+
+// Each migration file and the schema it must match.
+export const MIGRATIONS = { "0013_cx_audit.sql": SCHEMA, "0014_cx_audit_calibration.sql": SCHEMA_CALIBRATION };
+
 // Strip comments first: a ";" inside a comment would otherwise split a statement.
 export const splitSql = (sql) => sql.replace(/--[^\n]*/g, "").split(";").map((x) => x.trim()).filter(Boolean);
-const statements = () => splitSql(SCHEMA);
+const statements = () => [...splitSql(SCHEMA), ...splitSql(SCHEMA_CALIBRATION)];
 export const schemaStatements = statements;
 
 const ready = new WeakSet();
