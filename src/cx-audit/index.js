@@ -11,6 +11,8 @@
 //
 // API: /cx-audit/api/* behind the normal Ops Hub Cloudflare Access login,
 //   refused on any other hostname (workers.dev skips Access).
+//   GET  summary?from&to&author&check&issue&version   dashboard aggregates
+//   GET  failures?...&limit&offset                     failed checks, newest first
 //   GET  runs                 recent runs
 //   GET  runs/:id             one run, with queue counts and errors
 //   POST runs                 {from, to, force?}  manual run (processed by cron)
@@ -35,6 +37,7 @@ import { extract } from "./extract.js";
 import { windowFor, DEFAULT_TZ } from "./config.js";
 import { CHECKS, VOICE_RULES, DEFAULT_TOGGLES } from "./checks.js";
 import { makeClient, scoreMany, scorerSettings } from "./scorer.js";
+import { summary, failures, parseFilters } from "./report.js";
 
 export { cxAuditCron };
 
@@ -61,6 +64,11 @@ export async function handleCxAuditRoutes(request, env, ctx, path) {
 
   try {
     await store.ensureTables(env);
+
+    if (head === "summary" && method === "GET") return json(await summary(env, parseFilters(url.searchParams)));
+    if (head === "failures" && method === "GET") {
+      return json(await failures(env, parseFilters(url.searchParams), { limit: url.searchParams.get("limit"), offset: url.searchParams.get("offset") }));
+    }
 
     if (head === "runs" && method === "GET" && !idPart) {
       const { results } = await store.db(env).prepare(

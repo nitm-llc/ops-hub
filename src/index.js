@@ -8821,6 +8821,7 @@ export default {
     if (path === "/clickup-automation") return Response.redirect(url.origin + "/clickup-automation/", 301);
     if (path === "/tiktok-router") return Response.redirect(url.origin + "/tiktok-router/", 301);
     if (path === "/flo") return Response.redirect(url.origin + "/flo/", 301);
+    if (path === "/cx-audit") return Response.redirect(url.origin + "/cx-audit/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }
     // ===== AMBASSADOR API =====
@@ -8971,6 +8972,7 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,-app
     <div class="hub-section-label">Customers &amp; Partners</div>
     <div class="app-grid">
       <a href="/cx-agent/" class="app-card"><div class="app-icon">\u{1F916}</div><div class="app-text"><div class="app-name">CX Agent</div><div class="app-desc">AI customer support automation</div></div></a>
+      <a href="/cx-audit/" class="app-card"><div class="app-icon">\u{2705}</div><div class="app-text"><div class="app-name">CX Scorecard</div><div class="app-desc">Daily quality scores for Ivy &amp; team replies</div></div></a>
       <a href="/ambassadors/" class="app-card"><div class="app-icon">\u{1F91D}</div><div class="app-text"><div class="app-name">Ambassadors</div><div class="app-desc">Ambassador sales &amp; commission tracking</div></div></a>
     </div>
   </div>

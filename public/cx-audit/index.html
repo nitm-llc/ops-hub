@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CX Scorecard — NITM Ops</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* nav.js owns the neutral palette (--bg/--panel/--surface/--border/--text/...).
+     Only accent, semantic and series colours belong here. Series colours are the
+     dataviz reference palette slots 1-2, validated for both surfaces. */
+  :root {
+    --accent: #0f766e; --accent-text: #ffffff; --accent-bg: #e6f4f2;
+    --red: #dc2626; --red-bg: #fee2e2; --green: #15803d; --green-bg: #dcfce7; --amber: #b45309; --amber-bg: #fef3c7;
+    --ivy: #2a78d6; --team: #eb6834;
+  }
+  :root[data-theme="dark"] {
+    --accent: #5eead4; --accent-text: #042f2b; --accent-bg: #10302c;
+    --red: #f87171; --red-bg: #431a1a; --green: #4ade80; --green-bg: #10331c; --amber: #fbbf24; --amber-bg: #422f06;
+    --ivy: #3987e5; --team: #d95926;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 80px; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 26px 16px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.3px; }
+  h2 { font-size: 17px; font-weight: 700; }
+  h3 { font-size: 14.5px; font-weight: 700; margin-top: 18px; }
+  .sub { font-size: 14px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .tiny { font-size: 12.5px; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .hide { display: none !important; }
+
+  button { padding: 8px 14px; border-radius: 9px; border: 0; background: var(--accent); color: var(--accent-text);
+           font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; min-height: 36px; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+  button.link { background: none; color: var(--accent); padding: 2px 4px; min-height: 0; font-weight: 600; }
+  button.danger { background: transparent; color: var(--red); border: 1px solid var(--border2); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input, select, textarea {
+    font: inherit; font-size: 14px; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border2); border-radius: 8px; padding: 7px 9px; min-height: 36px;
+  }
+  textarea { width: 100%; min-height: 220px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.5; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-top: 16px; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .banner { border-radius: 12px; padding: 12px 15px; font-size: 14px; margin-top: 16px; line-height: 1.45; }
+  .banner.bad { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+  .banner.info { background: var(--accent-bg); color: var(--text); border: 1px solid var(--border2); }
+
+  .tabs { display: flex; gap: 4px; margin-top: 18px; border-bottom: 1px solid var(--border); }
+  .tabs button { background: none; color: var(--muted); border-radius: 0; border-bottom: 2px solid transparent; padding: 8px 12px; }
+  .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+
+  .seg { display: inline-flex; border: 1px solid var(--border2); border-radius: 9px; overflow: hidden; }
+  .seg button { background: transparent; color: var(--text2); border-radius: 0; min-height: 34px; padding: 5px 12px; font-size: 13px; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+
+  .filters { display: flex; gap: 10px 14px; flex-wrap: wrap; align-items: flex-end; margin-top: 16px;
+             background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .stat b { display: block; font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
+  .stat span { font-size: 12.5px; color: var(--muted); }
+  .stat .key { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--text2); align-items: center; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .legend .fin i { height: 0; border-top: 2px dashed var(--faint); }
+
+  /* trend chart */
+  .chart { position: relative; margin-top: 10px; }
+  .chart svg { display: block; width: 100%; overflow: visible; }
+  .chart .grid line { stroke: var(--border); stroke-width: 1; }
+  .chart .axis text { fill: var(--muted); font-size: 11.5px; }
+  .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .pt { stroke: var(--panel); stroke-width: 2; }
+  .chart .fin line { stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 4 4; }
+  .chart .fin text { fill: var(--text2); font-size: 11px; font-weight: 700; }
+  .chart .fin circle { fill: var(--panel); stroke: var(--faint); stroke-width: 1.5; }
+  .chart .end text { font-size: 12px; font-weight: 700; fill: var(--text); }
+  .chart .hair { stroke: var(--text2); stroke-width: 1; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border2); border-radius: 10px;
+         padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 18px rgba(0,0,0,.14); min-width: 150px; z-index: 5; line-height: 1.5; }
+  .tip .t { font-weight: 700; margin-bottom: 2px; }
+  .tip .k { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 6px; }
+  .tip .fc { color: var(--muted); margin-top: 4px; border-top: 1px solid var(--border); padding-top: 4px; }
+
+  /* bar rows (pass rate per check / issue type) */
+  .bars { margin-top: 12px; }
+  .brow { display: grid; grid-template-columns: minmax(150px, 230px) 1fr; gap: 6px 14px; align-items: center; padding: 8px 4px; border-top: 1px solid var(--border); }
+  .brow:first-child { border-top: 0; }
+  .brow.click { cursor: pointer; border-radius: 8px; }
+  .brow.click:hover { background: var(--surface); }
+  .brow.sel { background: var(--accent-bg); border-radius: 8px; }
+  .brow .name { font-size: 13.5px; font-weight: 600; line-height: 1.3; }
+  .brow .name small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+  .pair { display: flex; flex-direction: column; gap: 2px; }
+  .bar { display: grid; grid-template-columns: 1fr 92px; gap: 10px; align-items: center; font-size: 12.5px; }
+  .track { position: relative; height: 10px; }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 4px 4px 0; min-width: 2px; }
+  .fill.ivy { background: var(--ivy); } .fill.team { background: var(--team); }
+  .bar .v { color: var(--text); white-space: nowrap; }
+  .bar .v b { font-weight: 700; } .bar .v span { color: var(--muted); }
+  .bar.none .v { color: var(--faint); }
+
+  /* failures */
+  .fail { border-top: 1px solid var(--border); padding: 14px 2px; }
+  .fail:first-child { border-top: 0; }
+  .fail .meta { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 99px; background: var(--surface); color: var(--text2); border: 1px solid var(--border2); }
+  .pill.ivy { border-color: var(--ivy); } .pill.team { border-color: var(--team); }
+  .pill.check { background: var(--red-bg); color: var(--red); border-color: transparent; }
+  .quote { margin-top: 8px; font-size: 14px; line-height: 1.5; border-left: 3px solid var(--border2); padding-left: 10px; color: var(--text2); }
+  .rewrite { margin-top: 8px; font-size: 14px; line-height: 1.5; background: var(--green-bg); border-radius: 8px; padding: 8px 10px; }
+  .rewrite b { color: var(--green); font-size: 12px; display: block; }
+  .note { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+
+  table.t { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  table.t th, table.t td { border-bottom: 1px solid var(--border); padding: 7px 6px; text-align: left; vertical-align: top; }
+  table.t th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .switch { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; padding: 7px 0; border-top: 1px solid var(--border); }
+  .switch:first-of-type { border-top: 0; }
+  .switch input { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 2px; flex: none; }
+  .switch small { display: block; color: var(--muted); font-size: 12.5px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .empty { color: var(--muted); font-size: 14px; margin-top: 10px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111827; color: #f9fafb;
+           padding: 11px 16px; border-radius: 10px; font-size: 14px; z-index: 60; max-width: calc(100% - 32px); }
+  @media (max-width: 720px) {
+    .two { grid-template-columns: 1fr; }
+    .brow { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<script defer src="/shared/nav.js"></script>
+<div class="wrap">
+  <h1>CX Scorecard</h1>
+  <p class="sub">Every customer-facing reply from Ivy and the CX team is scored each morning against the communication guidelines (9 checks). Pass rate counts pass and fail only: a check that didn't apply to a reply isn't counted either way.</p>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-dash" aria-selected="true" aria-controls="dash">Dashboard</button>
+    <button role="tab" id="tab-settings" aria-selected="false" aria-controls="settings">Settings &amp; runs</button>
+  </div>
+
+  <div id="error" class="banner bad hide" role="alert"></div>
+
+  <!-- ================= DASHBOARD ================= -->
+  <div id="dash" role="tabpanel" aria-labelledby="tab-dash">
+    <div class="filters" role="group" aria-label="Filters">
+      <div class="seg" id="presets" role="group" aria-label="Date range">
+        <button data-days="7">7 days</button><button data-days="30" aria-pressed="true">30 days</button><button data-days="90">90 days</button>
+      </div>
+      <label class="f">From<input type="date" id="from"></label>
+      <label class="f">To<input type="date" id="to"></label>
+      <label class="f">Who
+        <select id="author"><option value="">Ivy and team</option><option value="ivy">Ivy</option><option value="team">Team</option></select>
+      </label>
+      <label class="f">Check<select id="check"><option value="">All checks</option></select></label>
+      <label class="f">Issue type<select id="issue"><option value="">All issue types</option></select></label>
+      <label class="f">Guidelines<select id="version"><option value="">Latest score</option></select></label>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <section class="card" aria-labelledby="h-trend">
+      <div class="card-head">
+        <h2 id="h-trend">Pass rate by day</h2>
+        <div class="legend"><span><i style="background:var(--ivy)"></i>Ivy</span><span><i style="background:var(--team)"></i>Team</span><span class="fin"><i></i>Fin change</span>
+          <button class="link" id="trendTableBtn" aria-expanded="false">Show table</button></div>
+      </div>
+      <div class="chart" id="trend"></div>
+      <div id="trendTable" class="hide"></div>
+      <ol class="tiny muted" id="finList" style="margin:10px 0 0 18px"></ol>
+    </section>
+
+    <div class="two">
+      <section class="card" aria-labelledby="h-checks">
+        <h2 id="h-checks">Pass rate per check</h2>
+        <p class="sub tiny">Click a check to filter everything to it.</p>
+        <div class="bars" id="checks"></div>
+      </section>
+      <section class="card" aria-labelledby="h-issues">
+        <h2 id="h-issues">Pass rate by issue type</h2>
+        <p class="sub tiny">Click an issue type to filter everything to it.</p>
+        <div class="bars" id="issues"></div>
+      </section>
+    </div>
+
+    <section class="card" aria-labelledby="h-fails">
+      <div class="card-head"><h2 id="h-fails">Failures</h2><span class="tiny muted" id="failCount"></span></div>
+      <p class="sub tiny">Each failed check with the quote that failed it and a suggested rewrite. Quotes have customer details replaced with placeholders like [email] and [order number].</p>
+      <div id="fails"></div>
+      <button class="ghost hide" id="more" style="margin-top:12px">Load more</button>
+    </section>
+  </div>
+
+  <!-- ================= SETTINGS ================= -->
+  <div id="settings" role="tabpanel" aria-labelledby="tab-settings" class="hide">
+    <section class="card" aria-labelledby="h-fin">
+      <h2 id="h-fin">Fin change log</h2>
+      <p class="sub tiny">Log each change to Fin (guidance, procedures, content, settings). Each one is marked on the trend chart, so you can see whether it moved the scores.</p>
+      <form class="row" id="finForm" style="margin-top:12px">
+        <label class="f">Date<input type="date" id="finDay" required></label>
+        <label class="f" style="flex:1;min-width:220px">What changed<input type="text" id="finWhat" required placeholder="e.g. Handoff messages now give a reply time"></label>
+        <label class="f">Who<input type="text" id="finWho" placeholder="Mark"></label>
+        <button type="submit">Add</button>
+      </form>
+      <table class="t" id="finTable"></table>
+    </section>
+
+    <section class="card" aria-labelledby="h-runs">
+      <div class="card-head"><h2 id="h-runs">Runs</h2><button class="ghost" id="refreshRuns">Refresh</button></div>
+      <p class="sub tiny" id="scheduleNote"></p>
+      <form class="row" id="runForm" style="margin-top:12px">
+        <label class="f">From<input type="date" id="runFrom" required></label>
+        <label class="f">To<input type="date" id="runTo" required></label>
+        <label class="switch" style="border:0;padding:0;align-items:center"><input type="checkbox" id="runForce"><span>Re-score even if already scored</span></label>
+        <button type="submit">Audit these days</button>
+      </form>
+      <p class="tiny muted" style="margin-top:6px">A conversation already scored for a day is skipped unless it got new replies, or the guidelines version changed. Up to 31 days per run. Runs work through a batch every 2 minutes.</p>
+      <table class="t" id="runsTable"></table>
+    </section>
+
+    <section class="card" aria-labelledby="h-toggles">
+      <div class="card-head"><h2 id="h-toggles">Checks and schedule</h2><button id="saveToggles">Save</button></div>
+      <h3>Schedule</h3>
+      <div class="seg" id="schedule" role="group" aria-label="Schedule" style="margin-top:8px">
+        <button data-v="daily">Daily, 7am</button><button data-v="weekly">Weekly, Mondays</button><button data-v="off">Off</button>
+      </div>
+      <div class="two">
+        <div><h3>Checks</h3><div id="checkToggles"></div></div>
+        <div><h3>"Right voice" rules</h3><p class="tiny muted" style="margin-top:4px">Rules waiting on an open decision in the guidelines start switched off.</p><div id="voiceToggles"></div></div>
+      </div>
+      <p class="tiny muted" style="margin-top:10px">Changes apply to the next run. Scores already saved keep the settings they were scored with.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-excl">
+      <h2 id="h-excl">Exclusions</h2>
+      <p class="sub tiny">Conversations from these senders aren't scored. Spam, Fin preview tests and conversations with no reply are always skipped. A domain also covers its subdomains. Shopify contact forms are matched on the real customer, not mailer@shopify.com.</p>
+      <form class="row" id="exclForm" style="margin-top:12px">
+        <label class="f">Type<select id="exclKind"><option value="domain">Domain</option><option value="email">Email</option><option value="subject">Subject pattern</option><option value="issue_type">Issue type</option></select></label>
+        <label class="f" style="flex:1;min-width:180px">Value<input type="text" id="exclValue" required placeholder="vendor.com"></label>
+        <label class="f" style="flex:1;min-width:160px">Note<input type="text" id="exclNote" placeholder="Why"></label>
+        <button type="submit">Add</button>
+      </form>
+      <table class="t" id="exclTable"></table>
+    </section>
+
+    <section class="card" aria-labelledby="h-guide">
+      <h2 id="h-guide">Guidelines</h2>
+      <p class="sub tiny">The version scores are judged against. Each score records its version. Saving a new version makes it active from the next run; days already scored are re-scored only when you run them again.</p>
+      <table class="t" id="guideTable"></table>
+      <details style="margin-top:12px"><summary class="tiny" style="cursor:pointer;font-weight:600">Add a new version</summary>
+        <form id="guideForm" style="margin-top:10px">
+          <div class="row"><label class="f">Version<input type="text" id="guideVersion" placeholder="v2" required pattern="v[0-9]+"></label>
+            <label class="f" style="flex:1">Note<input type="text" id="guideNote" placeholder="What changed"></label></div>
+          <label class="f" style="margin-top:10px">Guidelines (Markdown)<textarea id="guideText" required></textarea></label>
+          <button type="submit" style="margin-top:10px">Save and make active</button>
+        </form>
+      </details>
+    </section>
+  </div>
+</div>
+
+<script>
+(function () {
+  const API = "/cx-audit/api/";
+  const $ = (id) => document.getElementById(id);
+  const state = { names: {}, checks: [], voice: [], toggles: null, schedule: "daily", failOffset: 0 };
+  const LABEL = { ivy: "Ivy", team: "Team" };
+
+  // ---------- helpers ----------
+  async function api(path, opts = {}) {
+    const res = await fetch(API + path, { credentials: "same-origin", ...opts, headers: { "Content-Type": "application/json", ...(opts.headers || {}) } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    return data;
+  }
+  function el(tag, attrs = {}, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") n.className = v; else if (k === "text") n.textContent = v;
+      else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of kids.flat()) if (c != null) n.append(c.nodeType ? c : document.createTextNode(String(c)));
+    return n;
+  }
+  const svg = (tag, attrs = {}) => { const n = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
+  function showError(e) { const b = $("error"); b.textContent = e ? String(e.message || e) : ""; b.classList.toggle("hide", !e); }
+  function toast(msg) { const t = el("div", { class: "toast", role: "status", text: msg }); document.body.append(t); setTimeout(() => t.remove(), 2600); }
+  const pct = (p, f) => (p + f ? Math.round((100 * p) / (p + f)) : null);
+  const fmtPct = (v) => (v == null ? "—" : v + "%");
+  const ymd = (d) => d.toISOString().slice(0, 10);
+  function nyToday() { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()); }
+  function addDays(s, n) { const d = new Date(s + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return ymd(d); }
+  function daysBetween(a, b) { const out = []; for (let d = a; d <= b; d = addDays(d, 1)) out.push(d); return out; }
+  const short = (s) => new Date(s + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const checkName = (id) => state.names[id] || id;
+  // The model sometimes wraps its quote in quote marks already.
+  const unquote = (t) => String(t).trim().replace(/^["“”']+|["“”']+$/g, "");
+
+  // ---------- filters (kept in the URL hash so a view can be shared) ----------
+  function readHash() { return Object.fromEntries(new URLSearchParams(location.hash.slice(1))); }
+  function filters() {
+    return { from: $("from").value, to: $("to").value, author: $("author").value, check: $("check").value, issue: $("issue").value, version: $("version").value };
+  }
+  function qs(extra = {}) { const p = new URLSearchParams(); for (const [k, v] of Object.entries({ ...filters(), ...extra })) if (v !== "" && v != null) p.set(k, v); return p.toString(); }
+  function writeHash() { const f = filters(); const p = new URLSearchParams(); for (const [k, v] of Object.entries(f)) if (v) p.set(k, v); history.replaceState(null, "", "#" + p.toString()); }
+  function setPreset(days) {
+    const to = addDays(nyToday(), -1);
+    $("to").value = to; $("from").value = addDays(to, -(days - 1));
+    syncPresetButtons();
+  }
+  function syncPresetButtons() {
+    const span = daysBetween($("from").value, $("to").value).length;
+    const isYesterday = $("to").value === addDays(nyToday(), -1);
+    for (const b of $("presets").querySelectorAll("button")) b.setAttribute("aria-pressed", String(isYesterday && Number(b.dataset.days) === span));
+  }
+  function setSelect(sel, values, current, allLabel) {
+    sel.replaceChildren(el("option", { value: "", text: allLabel }), ...values.map((v) => el("option", { value: v.value ?? v, text: v.label ?? v })));
+    sel.value = values.some((v) => (v.value ?? v) === current) ? current : "";
+  }
+
+  // ---------- dashboard ----------
+  async function loadDashboard() {
+    showError(null);
+    writeHash();
+    syncPresetButtons();
+    const f = filters();
+    if (!f.from || !f.to || f.from > f.to) return;
+    try {
+      const s = await api("summary?" + qs());
+      setSelect($("issue"), s.issue_types, f.issue, "All issue types");
+      setSelect($("version"), s.versions, f.version, "Latest score");
+      renderStats(s);
+      renderTrend(s);
+      renderChecks(s);
+      renderIssues(s);
+      state.failOffset = 0;
+      $("fails").replaceChildren();
+      await loadFailures();
+    } catch (e) { showError(e); }
+  }
+
+  function renderStats(s) {
+    const tile = (label, value, sub, color) => el("div", { class: "stat" },
+      el("span", {}, color ? el("i", { class: "key", style: `background:var(--${color})` }) : null, label), el("b", { text: value }), el("span", { text: sub }));
+    const tiles = [];
+    for (const g of ["ivy", "team"]) {
+      if ($("author").value && $("author").value !== g) continue;
+      const t = s.totals[g];
+      tiles.push(tile(`${LABEL[g]} pass rate`, t ? fmtPct(pct(t.pass, t.fail)) : "—", t ? `${t.convs} conversation${t.convs === 1 ? "" : "s"} · ${t.pass + t.fail} checks` : "Nothing scored in this range", g));
+    }
+    // Weakest check: lowest pass rate with at least 5 scored results.
+    const agg = {};
+    for (const r of s.per_check) { const a = (agg[r.check_id] ||= { pass: 0, fail: 0 }); a.pass += r.pass; a.fail += r.fail; }
+    const ranked = Object.entries(agg).filter(([, a]) => a.pass + a.fail >= 5).map(([id, a]) => [id, pct(a.pass, a.fail), a]).sort((x, y) => x[1] - y[1]);
+    tiles.push(tile("Weakest check", ranked[0] ? fmtPct(ranked[0][1]) : "—", ranked[0] ? `${checkName(ranked[0][0])} (${ranked[0][2].fail} fails)` : "Needs at least 5 scored replies"));
+    const lr = s.last_run;
+    tiles.push(tile("Last finished run", lr ? short(lr.day_to) : "—", lr ? `${lr.scored ?? 0} scored · ${lr.kind}` : "No run yet"));
+    $("stats").replaceChildren(...tiles);
+  }
+
+  // Trend: one line per group, daily pass rate, Fin changes as dashed markers.
+  function renderTrend(s) {
+    const box = $("trend");
+    const days = daysBetween($("from").value, $("to").value);
+    const groups = ["ivy", "team"].filter((g) => !$("author").value || $("author").value === g);
+    const byDay = {};
+    for (const r of s.trend) (byDay[r.day] ||= {})[r.author_type] = r;
+    const fin = s.fin_changes;
+    const finByDay = {};
+    fin.forEach((c, i) => (finByDay[c.day] ||= []).push({ ...c, n: i + 1 }));
+    $("finList").replaceChildren(...fin.map((c, i) => el("li", { text: `${short(c.day)}: ${c.what}${c.who ? " (" + c.who + ")" : ""}` })));
+    $("finList").start = 1;
+
+    const W = Math.max(box.clientWidth || 600, 300), H = 270, L = 38, R = 64, T = 34, B = 26;
+    const x = (i) => L + (days.length === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (days.length - 1));
+    const y = (v) => T + ((100 - v) * (H - T - B)) / 100;
+    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": "Daily pass rate for Ivy and the team" });
+    const grid = svg("g", { class: "grid axis" });
+    for (const v of [0, 25, 50, 75, 100]) {
+      grid.append(svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }));
+      const t = svg("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }); t.textContent = v + "%"; grid.append(t);
+    }
+    const tickEvery = Math.max(1, Math.ceil(days.length / 7));
+    days.forEach((d, i) => {
+      if (i % tickEvery && i !== days.length - 1) return;
+      if (i !== days.length - 1 && days.length - 1 - i < tickEvery / 2) return;
+      const t = svg("text", { x: x(i), y: H - 6, "text-anchor": "middle" }); t.textContent = short(d); grid.append(t);
+    });
+    root.append(grid);
+
+    const finG = svg("g", { class: "fin" });
+    days.forEach((d, i) => {
+      if (!finByDay[d]) return;
+      finG.append(svg("line", { x1: x(i), x2: x(i), y1: T - 12, y2: H - B }));
+      finG.append(svg("circle", { cx: x(i), cy: T - 22, r: 9 }));
+      const t = svg("text", { x: x(i), y: T - 18, "text-anchor": "middle" }); t.textContent = finByDay[d].map((c) => c.n).join(","); finG.append(t);
+    });
+    root.append(finG);
+
+    const ends = svg("g", { class: "end" });
+    let anyData = false;
+    for (const g of groups) {
+      const pts = days.map((d, i) => { const r = byDay[d]?.[g]; const v = r ? pct(r.pass, r.fail) : null; return v == null ? null : [x(i), y(v), v]; });
+      // Connect consecutive scored days only: a gap means nothing was scored.
+      let dPath = "", prev = null;
+      pts.forEach((p) => { if (p) { dPath += (prev ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1); } prev = p; });
+      if (dPath) { anyData = true; root.append(svg("path", { class: "line", d: dPath, stroke: `var(--${g})` })); }
+      for (const p of pts) if (p) root.append(svg("circle", { class: "pt", cx: p[0], cy: p[1], r: 4, fill: `var(--${g})` }));
+      const last = [...pts].reverse().find(Boolean);
+      if (last) { const t = svg("text", { x: last[0] + 8, y: last[1] + 4 }); t.textContent = `${LABEL[g]} ${last[2]}%`; ends.append(t); }
+    }
+    // Keep the two end labels from overlapping.
+    const texts = [...ends.children];
+    if (texts.length === 2 && Math.abs(texts[0].getAttribute("y") - texts[1].getAttribute("y")) < 14) {
+      const [a, b] = texts.sort((p, q) => p.getAttribute("y") - q.getAttribute("y"));
+      a.setAttribute("y", Number(a.getAttribute("y")) - 7); b.setAttribute("y", Number(b.getAttribute("y")) + 7);
+    }
+    root.append(ends);
+
+    const hair = svg("line", { class: "hair hide", y1: T, y2: H - B });
+    root.append(hair);
+    const hit = svg("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" });
+    root.append(hit);
+    const tip = el("div", { class: "tip hide", role: "status" });
+    function move(ev) {
+      const r = root.getBoundingClientRect();
+      const px = ((ev.clientX - r.left) * W) / r.width;
+      const i = Math.max(0, Math.min(days.length - 1, Math.round(((px - L) * (days.length - 1)) / Math.max(1, W - L - R))));
+      const d = days[i];
+      hair.setAttribute("x1", x(i)); hair.setAttribute("x2", x(i)); hair.classList.remove("hide");
+      tip.replaceChildren(el("div", { class: "t", text: new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" }) }));
+      for (const g of groups) {
+        const row = byDay[d]?.[g];
+        tip.append(el("div", {}, el("i", { class: "k", style: `background:var(--${g})` }), el("b", { text: row ? fmtPct(pct(row.pass, row.fail)) : "—" }),
+          ` ${LABEL[g]}${row ? ` · ${row.convs} conv.` : ""}`));
+      }
+      for (const c of finByDay[d] || []) tip.append(el("div", { class: "fc", text: `Fin change ${c.n}: ${c.what}` }));
+      tip.classList.remove("hide");
+      const left = (x(i) / W) * r.width;
+      tip.style.left = Math.min(Math.max(0, left + 12), r.width - 180) + "px";
+      tip.style.top = "8px";
+    }
+    hit.addEventListener("pointermove", move);
+    hit.addEventListener("pointerdown", move);
+    hit.addEventListener("pointerleave", () => { hair.classList.add("hide"); tip.classList.add("hide"); });
+    box.replaceChildren(root, tip);
+    if (!anyData) box.append(el("p", { class: "empty", text: "Nothing scored in this range yet." }));
+
+    // Table view: every value the chart shows.
+    const head = el("tr", {}, el("th", { text: "Day" }), ...groups.map((g) => el("th", { text: `${LABEL[g]} pass rate` })), el("th", { text: "Fin changes" }));
+    const rows = days.filter((d) => byDay[d] || finByDay[d]).map((d) => el("tr", {}, el("td", { text: d }),
+      ...groups.map((g) => { const r = byDay[d]?.[g]; return el("td", { text: r ? `${fmtPct(pct(r.pass, r.fail))} (${r.pass}/${r.pass + r.fail} checks, ${r.convs} conv.)` : "—" }); }),
+      el("td", { text: (finByDay[d] || []).map((c) => c.what).join("; ") })));
+    $("trendTable").replaceChildren(el("table", { class: "t" }, el("thead", {}, head), el("tbody", {}, rows)));
+  }
+
+  function barPair(byGroup, label) {
+    const groups = ["ivy", "team"].filter((g) => !$("author").value || $("author").value === g);
+    return el("div", { class: "pair" }, ...groups.map((g) => {
+      const r = byGroup[g];
+      const n = r ? r.pass + r.fail : 0;
+      const v = n ? pct(r.pass, r.fail) : null;
+      const desc = `${label}, ${LABEL[g]}: ${v == null ? "nothing scored" : `${v}% (${r.pass} of ${n} passed)`}`;
+      return el("div", { class: "bar" + (v == null ? " none" : ""), title: desc, "aria-label": desc },
+        el("div", { class: "track" }, v == null ? null : el("div", { class: `fill ${g}`, style: `width:${v}%` })),
+        el("div", { class: "v" }, v == null ? `${LABEL[g]} —` : el("span", {}, el("b", { text: v + "%" }), el("span", { text: ` ${LABEL[g]} · ${r.pass}/${n}` }))));
+    }));
+  }
+
+  function renderChecks(s) {
+    const by = {};
+    for (const r of s.per_check) (by[r.check_id] ||= {})[r.author_type] = r;
+    const rows = state.checks.map((c) => {
+      const off = state.toggles && !state.toggles.checks[c.id];
+      const sel = $("check").value === c.id;
+      return el("div", { class: "brow click" + (sel ? " sel" : ""), tabindex: 0, role: "button", "aria-pressed": String(sel),
+        onclick: () => { $("check").value = sel ? "" : c.id; loadDashboard(); },
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } },
+        el("div", { class: "name" }, `${c.n}. ${c.name}`, off ? el("small", { text: "Switched off" }) : null),
+        barPair(by[c.id] || {}, c.name));
+    });
+    $("checks").replaceChildren(...rows);
+  }
+
+  function renderIssues(s) {
+    const by = {};
+    for (const r of s.by_issue) (by[r.issue_type] ||= {})[r.author_type] = r;
+    const order = Object.entries(by).sort((a, b) => Object.values(b[1]).reduce((n, r) => n + r.convs, 0) - Object.values(a[1]).reduce((n, r) => n + r.convs, 0));
+    if (!order.length) { $("issues").replaceChildren(el("p", { class: "empty", text: "Nothing scored in this range yet." })); return; }
+    $("issues").replaceChildren(...order.map(([issue, g]) => {
+      const sel = $("issue").value === issue;
+      const convs = Object.values(g).reduce((n, r) => n + r.convs, 0);
+      return el("div", { class: "brow click" + (sel ? " sel" : ""), tabindex: 0, role: "button", "aria-pressed": String(sel),
+        onclick: () => { $("issue").value = sel ? "" : issue; if (!sel && ![...$("issue").options].some((o) => o.value === issue)) $("issue").append(el("option", { value: issue, text: issue })); $("issue").value = sel ? "" : issue; loadDashboard(); },
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } },
+        el("div", { class: "name" }, issue, el("small", { text: `${convs} conversation${convs === 1 ? "" : "s"}` })),
+        barPair(g, issue));
+    }));
+  }
+
+  async function loadFailures() {
+    const r = await api("failures?" + qs({ limit: 30, offset: state.failOffset }));
+    const items = r.failures.map((f) => el("article", { class: "fail" },
+      el("div", { class: "meta" },
+        el("span", { class: "pill check", text: checkName(f.check_id) + (f.failed_rules.length ? ` · ${f.failed_rules.map((x) => state.voiceNames[x] || x).join(", ")}` : "") }),
+        el("span", { class: `pill ${f.author_type}`, text: LABEL[f.author_type] }),
+        el("span", { text: short(f.day) }),
+        f.issue_type ? el("span", { text: f.issue_type }) : null,
+        el("a", { href: f.link, target: "_blank", rel: "noopener", text: "Open in Intercom ↗" })),
+      f.evidence ? el("div", { class: "quote", text: `“${unquote(f.evidence)}”` }) : null,
+      f.rewrite ? el("div", { class: "rewrite" }, el("b", { text: "Suggested rewrite" }), f.rewrite) : null,
+      f.note ? el("div", { class: "note", text: f.note }) : null));
+    if (!state.failOffset && !items.length) $("fails").replaceChildren(el("p", { class: "empty", text: "No failures for these filters." }));
+    else $("fails").append(...items);
+    state.failOffset = r.next_offset || 0;
+    $("more").classList.toggle("hide", !r.more);
+    $("failCount").textContent = $("fails").querySelectorAll(".fail").length + (r.more ? "+" : "") + " shown";
+  }
+
+  // ---------- settings ----------
+  async function loadSettings() {
+    const s = await api("settings");
+    state.checks = s.checks; state.voice = s.voice_rules; state.toggles = s.toggles; state.schedule = s.schedule;
+    state.names = Object.fromEntries(s.checks.map((c) => [c.id, c.name]));
+    state.voiceNames = Object.fromEntries(s.voice_rules.map((v) => [v.id, v.name]));
+    setSelect($("check"), s.checks.map((c) => ({ value: c.id, label: `${c.n}. ${c.name}` })), readHash().check || $("check").value, "All checks");
+    $("checkToggles").replaceChildren(...s.checks.map((c) => el("label", { class: "switch" },
+      el("input", { type: "checkbox", "data-check": c.id, checked: s.toggles.checks[c.id] }), el("span", {}, `${c.n}. ${c.name}`, el("small", { text: c.passes })))));
+    $("voiceToggles").replaceChildren(...s.voice_rules.map((v) => el("label", { class: "switch" },
+      el("input", { type: "checkbox", "data-voice": v.id, checked: s.toggles.voice[v.id] }), el("span", {}, v.name, el("small", { text: v.rule })))));
+    for (const b of $("schedule").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === s.schedule));
+    $("scheduleNote").textContent = s.schedule === "daily" ? "Scheduled: every day around 7am New York time, for the day before."
+      : s.schedule === "weekly" ? "Scheduled: Mondays around 7am New York time, for the previous Monday to Sunday." : "Scheduled runs are off. Only runs started here happen.";
+  }
+  async function loadSettingsTab() {
+    showError(null);
+    try {
+      const [fin, runs, excl, guides] = await Promise.all([api("fin-changes"), api("runs"), api("exclusions"), api("guidelines")]);
+      $("finTable").replaceChildren(el("tr", {}, el("th", { text: "Date" }), el("th", { text: "What changed" }), el("th", { text: "Who" }), el("th", {})),
+        ...fin.changes.map((c) => el("tr", {}, el("td", { text: c.day }), el("td", { text: c.what }), el("td", { text: c.who || "" }),
+          el("td", {}, el("button", { class: "link", text: "Delete", onclick: async () => { if (!confirm("Delete this entry?")) return; await api("fin-changes/" + c.id, { method: "DELETE" }); loadSettingsTab(); } })))));
+      if (!fin.changes.length) $("finTable").append(el("tr", {}, el("td", { colspan: 4, class: "muted", text: "No changes logged yet." })));
+
+      $("runsTable").replaceChildren(el("tr", {}, ...["#", "Days", "Kind", "Status", "Searched", "Scored", "Skipped", "Errors", "Finished"].map((h) => el("th", { text: h }))),
+        ...runs.runs.map((r) => el("tr", {}, el("td", { text: r.id }), el("td", { text: r.day_from === r.day_to ? r.day_from : `${r.day_from} → ${r.day_to}` }),
+          el("td", { text: r.kind + (r.force ? " (forced)" : "") }), el("td", { text: r.status + (r.error ? `: ${r.error}` : "") }),
+          el("td", { text: r.searched ?? "" }), el("td", { text: r.scored ?? "" }), el("td", { text: r.skipped ?? "" }), el("td", { text: r.errors ?? "" }),
+          el("td", { text: r.finished_at ? new Date(r.finished_at).toLocaleString() : "" }))));
+
+      $("exclTable").replaceChildren(el("tr", {}, ...["On", "Type", "Value", "Note", ""].map((h) => el("th", { text: h }))),
+        ...excl.exclusions.map((x) => el("tr", {},
+          el("td", {}, el("input", { type: "checkbox", checked: !!x.enabled, "aria-label": `Exclude ${x.value}`, onchange: async (e) => { await api("exclusions/" + x.id, { method: "PATCH", body: JSON.stringify({ enabled: e.target.checked }) }); toast("Saved"); } })),
+          el("td", { text: x.kind }), el("td", { text: x.value }), el("td", { text: x.note || "" }),
+          el("td", {}, el("button", { class: "link", text: "Delete", onclick: async () => { if (!confirm(`Delete ${x.value}?`)) return; await api("exclusions/" + x.id, { method: "DELETE" }); loadSettingsTab(); } })))));
+
+      $("guideTable").replaceChildren(el("tr", {}, ...["Version", "Active", "Note", "Added", "Size"].map((h) => el("th", { text: h }))),
+        ...guides.versions.map((g) => el("tr", {}, el("td", { text: g.version }), el("td", { text: g.is_active ? "Active" : "" }), el("td", { text: g.note || "" }),
+          el("td", { text: new Date(g.created_at).toLocaleDateString() }), el("td", { text: `${Math.round(g.chars / 1000)}k chars` }))));
+    } catch (e) { showError(e); }
+  }
+
+  // ---------- wiring ----------
+  function selectTab(which) {
+    const dash = which !== "settings";
+    $("tab-dash").setAttribute("aria-selected", String(dash)); $("tab-settings").setAttribute("aria-selected", String(!dash));
+    $("dash").classList.toggle("hide", !dash); $("settings").classList.toggle("hide", dash);
+    if (dash) loadDashboard(); else loadSettingsTab();
+  }
+  $("tab-dash").onclick = () => selectTab("dash");
+  $("tab-settings").onclick = () => selectTab("settings");
+  for (const b of $("presets").querySelectorAll("button")) b.onclick = () => { setPreset(Number(b.dataset.days)); loadDashboard(); };
+  for (const id of ["from", "to", "author", "check", "issue", "version"]) $(id).addEventListener("change", loadDashboard);
+  $("more").onclick = () => loadFailures().catch(showError);
+  $("trendTableBtn").onclick = (e) => { const open = $("trendTable").classList.toggle("hide"); e.target.textContent = open ? "Show table" : "Hide table"; e.target.setAttribute("aria-expanded", String(!open)); };
+  let resizeT; window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (!$("dash").classList.contains("hide")) loadDashboard(); }, 250); });
+
+  $("finForm").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api("fin-changes", { method: "POST", body: JSON.stringify({ day: $("finDay").value, what: $("finWhat").value, who: $("finWho").value || null }) });
+      $("finWhat").value = ""; toast("Logged"); loadSettingsTab(); } catch (err) { showError(err); }
+  };
+  $("exclForm").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api("exclusions", { method: "POST", body: JSON.stringify({ kind: $("exclKind").value, value: $("exclValue").value, note: $("exclNote").value || null }) });
+      $("exclValue").value = ""; $("exclNote").value = ""; toast("Added. It applies from the next run."); loadSettingsTab(); } catch (err) { showError(err); }
+  };
+  $("runForm").onsubmit = async (e) => {
+    e.preventDefault();
+    try { const r = await api("runs", { method: "POST", body: JSON.stringify({ from: $("runFrom").value, to: $("runTo").value, force: $("runForce").checked }) });
+      toast(`Run ${r.id} queued`); loadSettingsTab(); } catch (err) { showError(err); }
+  };
+  $("refreshRuns").onclick = loadSettingsTab;
+  for (const b of $("schedule").querySelectorAll("button")) b.onclick = () => { for (const o of $("schedule").querySelectorAll("button")) o.setAttribute("aria-pressed", String(o === b)); };
+  $("saveToggles").onclick = async () => {
+    const toggles = { checks: {}, voice: {} };
+    for (const i of document.querySelectorAll("[data-check]")) toggles.checks[i.dataset.check] = i.checked;
+    for (const i of document.querySelectorAll("[data-voice]")) toggles.voice[i.dataset.voice] = i.checked;
+    const schedule = $("schedule").querySelector('[aria-pressed="true"]')?.dataset.v || state.schedule;
+    try { await api("settings", { method: "PUT", body: JSON.stringify({ toggles, schedule }) }); await loadSettings(); toast("Saved. Applies from the next run."); } catch (err) { showError(err); }
+  };
+  $("guideForm").onsubmit = async (e) => {
+    e.preventDefault();
+    if (!confirm(`Make ${$("guideVersion").value} the active guidelines? The next run scores against it.`)) return;
+    try { await api("guidelines", { method: "POST", body: JSON.stringify({ version: $("guideVersion").value.trim(), text: $("guideText").value, note: $("guideNote").value || null }) });
+      $("guideText").value = ""; toast("Saved and active"); loadSettingsTab(); loadSettings(); } catch (err) { showError(err); }
+  };
+
+  // ---------- start ----------
+  (async () => {
+    const h = readHash();
+    const yesterday = addDays(nyToday(), -1);
+    $("finDay").value = yesterday; $("runFrom").value = yesterday; $("runTo").value = yesterday;
+    if (h.from && h.to) { $("from").value = h.from; $("to").value = h.to; } else setPreset(30);
+    $("author").value = h.author || "";
+    try { await loadSettings(); } catch (e) { showError(e); return; }
+    if (h.issue) $("issue").append(el("option", { value: h.issue, text: h.issue })), ($("issue").value = h.issue);
+    if (h.version) $("version").append(el("option", { value: h.version, text: h.version })), ($("version").value = h.version);
+    selectTab(h.tab === "settings" ? "settings" : "dash");
+  })();
+})();
+</script>
+</body>
+</html>
