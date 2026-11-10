@@ -10,6 +10,7 @@
 // ============================================================================
 
 import { db } from "./store.js";
+import { problemFor } from "./checks.js";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -127,4 +128,43 @@ export async function failures(env, f, { limit = 50, offset = 0 } = {}) {
     failures: results.slice(0, lim).map((r) => ({ ...r, failed_rules: r.failed_rules ? JSON.parse(r.failed_rules) : [] })),
     more, next_offset: more ? off + lim : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The fix list: failed checks grouped by (who, what, where it comes from),
+// most frequent first, each with a suggested change and example links.
+// Scores from before 2026-11-10 have no source: grouped under "Not recorded".
+// ---------------------------------------------------------------------------
+export const NOT_RECORDED = "Not recorded (scored before Nov 10)";
+
+export async function fixList(env, f, { limit = 15 } = {}) {
+  const d = db(env);
+  const [cte, b] = scoresCte(f);
+  const [cf, cb] = checkFilter(f);
+  const { results } = await d.prepare(`${cte}
+    SELECT s.audit_day AS day, s.author_type, s.conversation_id, s.link, s.issue_type,
+      c.check_id, c.evidence, c.rewrite, c.failed_rules, c.source, c.fix
+    FROM s JOIN cxa_check_results c ON c.score_id = s.id
+    WHERE c.result = 'fail' ${cf}
+    ORDER BY s.audit_day DESC, s.scored_at DESC`).bind(...b, ...cb).all();
+  const groups = new Map();
+  for (const r of results) {
+    const source = r.source || NOT_RECORDED;
+    const team = /^Team: /.test(source) ? source.slice(6) : null;
+    // Right voice: one entry per broken rule (a reply can break two).
+    const rules = r.check_id === "right_voice" && r.failed_rules ? JSON.parse(r.failed_rules) : [];
+    for (const rule of rules.length ? rules : [null]) {
+      const key = `${r.author_type}|${r.check_id}|${rule || ""}|${source}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = { author_type: r.author_type, who: r.author_type === "ivy" ? "Ivy" : team || "Team", check_id: r.check_id, rule, problem: problemFor(r.check_id, rule), source, count: 0, fix: "", examples: [] };
+        groups.set(key, g);
+      }
+      g.count++;
+      if (!g.fix && r.fix) g.fix = r.fix; // newest suggestion wins
+      if (g.examples.length < 3) g.examples.push({ day: r.day, link: r.link, conversation_id: r.conversation_id, issue_type: r.issue_type, evidence: r.evidence, rewrite: r.rewrite });
+    }
+  }
+  const fixes = [...groups.values()].sort((a, b) => b.count - a.count || (a.source === NOT_RECORDED) - (b.source === NOT_RECORDED));
+  return { fixes: fixes.slice(0, limit), total_groups: fixes.length, total_fails: results.length };
 }

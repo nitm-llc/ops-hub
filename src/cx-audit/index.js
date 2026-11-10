@@ -13,6 +13,7 @@
 //   refused on any other hostname (workers.dev skips Access).
 //   GET  summary?from&to&author&check&issue&version   dashboard aggregates
 //   GET  failures?...&limit&offset                     failed checks, newest first
+//   GET  fixes?from&to&author&check&issue               fix list: fails grouped by where they come from
 //   POST digest               {from, to?, send?}  preview the digest text; send: true DMs it now
 //   Calibration (Phase 6):
 //   GET  golden                         golden set (conversation/day + label counts)
@@ -44,9 +45,9 @@ import { getAppId, getConversations } from "./intercom.js";
 import { fetchAndFilter, pickSamples } from "./pipeline.js";
 import { extract } from "./extract.js";
 import { windowFor, DEFAULT_TZ } from "./config.js";
-import { CHECKS, VOICE_RULES, DEFAULT_TOGGLES } from "./checks.js";
+import { CHECKS, VOICE_RULES, DEFAULT_TOGGLES, PROBLEM } from "./checks.js";
 import { makeClient, scoreMany, scorerSettings } from "./scorer.js";
-import { summary, failures, parseFilters } from "./report.js";
+import { summary, failures, parseFilters, fixList } from "./report.js";
 import { buildDigest, sendToRecipients, recipients } from "./digest.js";
 import * as cal from "./calibration.js";
 
@@ -86,6 +87,7 @@ export async function handleCxAuditRoutes(request, env, ctx, path) {
         return json({ id }, 201);
       }
     }
+    if (head === "fixes" && method === "GET") return json(await fixList(env, parseFilters(url.searchParams)));
     if (head === "summary" && method === "GET") return json(await summary(env, parseFilters(url.searchParams)));
     if (head === "failures" && method === "GET") {
       return json(await failures(env, parseFilters(url.searchParams), { limit: url.searchParams.get("limit"), offset: url.searchParams.get("offset") }));
@@ -129,7 +131,7 @@ export async function handleCxAuditRoutes(request, env, ctx, path) {
     }
 
     if (head === "settings" && method === "GET") {
-      return json({ toggles: await store.getToggles(env), schedule: await store.getSchedule(env), checks: CHECKS, voice_rules: VOICE_RULES, defaults: DEFAULT_TOGGLES,
+      return json({ toggles: await store.getToggles(env), schedule: await store.getSchedule(env), checks: CHECKS, problems: PROBLEM, voice_rules: VOICE_RULES, defaults: DEFAULT_TOGGLES,
         model: env.CX_AUDIT_MODEL || null, guidelines: await store.getActiveGuidelines(env).then((g) => g?.version || null), digest_to: await recipients(env) });
     }
     if (head === "settings" && method === "PUT") {

@@ -141,6 +141,18 @@
   .grid-labels select { min-height: 32px; padding: 4px 6px; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
   .agree-good { color: var(--green); font-weight: 700; } .agree-mid { color: var(--amber); font-weight: 700; } .agree-bad { color: var(--red); font-weight: 700; }
+  .fixitem { border-top: 1px solid var(--border); padding: 14px 2px; }
+  .fixitem:first-child { border-top: 0; }
+  .fixitem .t { display: flex; gap: 10px; align-items: baseline; font-size: 15px; font-weight: 700; line-height: 1.35; }
+  .fixitem .t .n { flex: none; min-width: 1.4em; color: var(--muted); }
+  .fixitem .t .cnt { flex: none; margin-left: auto; font-size: 12.5px; font-weight: 700; background: var(--red-bg); color: var(--red); border-radius: 99px; padding: 2px 9px; }
+  .fixitem .row2 { margin: 6px 0 0 calc(1.4em + 10px); font-size: 13.5px; line-height: 1.5; }
+  .fixitem .src b { font-weight: 700; }
+  .fixitem .chg { margin-top: 6px; background: var(--green-bg); border-radius: 8px; padding: 7px 10px; }
+  .fixitem .chg b { color: var(--green); font-size: 12px; display: block; }
+  .fixitem details summary { cursor: pointer; font-size: 12.5px; color: var(--accent); font-weight: 600; margin-top: 6px; }
+  .fixitem .ex { font-size: 13px; margin-top: 6px; color: var(--text2); }
+  details.more-detail > summary { cursor: pointer; font-weight: 700; font-size: 14.5px; margin-top: 20px; color: var(--text2); }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #111827; color: #f9fafb;
            padding: 11px 16px; border-radius: 10px; font-size: 14px; z-index: 60; max-width: calc(100% - 32px); }
   /* Wide tables scroll inside their card instead of widening the page. */
@@ -181,6 +193,12 @@
       <label class="f">Guidelines<select id="version"><option value="">Latest score</option></select></label>
     </div>
 
+    <section class="card" aria-labelledby="h-fix">
+      <div class="card-head"><h2 id="h-fix">What to fix</h2><span class="tiny muted" id="fixCount"></span></div>
+      <p class="sub tiny">Each problem, how often it happened in this date range, and where it comes from in Intercom: a Fin procedure, a piece of guidance, a Fin setting, or a team member. The suggested change is a starting point to review, not something applied automatically.</p>
+      <div id="fixes"></div>
+    </section>
+
     <div class="stats" id="stats"></div>
 
     <section class="card" aria-labelledby="h-trend">
@@ -194,6 +212,8 @@
       <ol class="tiny muted" id="finList" style="margin:10px 0 0 18px"></ol>
     </section>
 
+    <details class="more-detail" id="moreDetail">
+    <summary>More detail: pass rate per check and issue type, and every failed reply</summary>
     <div class="two">
       <section class="card" aria-labelledby="h-checks">
         <h2 id="h-checks">Pass rate per check</h2>
@@ -213,6 +233,7 @@
       <div id="fails"></div>
       <button class="ghost hide" id="more" style="margin-top:12px">Load more</button>
     </section>
+    </details>
   </div>
 
   <!-- ================= SETTINGS ================= -->
@@ -409,6 +430,7 @@
       renderTrend(s);
       renderChecks(s);
       renderIssues(s);
+      renderFixes(await api("fixes?" + qs()));
       state.failOffset = 0;
       $("fails").replaceChildren();
       await loadFailures();
@@ -578,6 +600,38 @@
     }));
   }
 
+  // Where in Intercom to make the change, by source type. Plain words, no
+  // guessed menu paths.
+  function whereToChange(source) {
+    const [kind, ...rest] = source.split(": ");
+    const name = rest.join(": ");
+    if (kind === "Procedure") return `Edit the Fin procedure “${name.replace(" › ", "”, section “")}”`;
+    if (kind === "Guidance") return `Edit the Fin guidance “${name}”`;
+    if (kind === "Content") return `Edit the help content “${name}”`;
+    if (kind === "Action") return `Check the Fin action “${name}” and how the procedure uses its result`;
+    if (kind === "Fin setting") return `Change Fin's ${name} in Fin's settings`;
+    if (kind === "Fin") return "Fin answered without a procedure: add guidance or a procedure for this kind of question";
+    if (kind === "Team") return `Coaching for ${name}, or a saved reply the team can use`;
+    if (source.startsWith("Not recorded")) return "Scored before sources were tracked. Re-score these days (Settings & runs → force) to see where it comes from";
+    return "Not sure where this comes from; open an example to look";
+  }
+  function renderFixes(r) {
+    $("fixCount").textContent = r.total_fails ? `${r.total_fails} failed checks in ${r.total_groups} groups` : "";
+    if (!r.fixes.length) { $("fixes").replaceChildren(el("p", { class: "empty", text: "Nothing failed in this date range." })); return; }
+    $("fixes").replaceChildren(...r.fixes.map((g, i) => {
+      const problem = g.problem || state.problems?.[g.check_id] || checkName(g.check_id);
+      return el("article", { class: "fixitem" },
+        el("div", { class: "t" }, el("span", { class: "n", text: `${i + 1}.` }), el("span", { text: `${g.who} ${problem}` }), el("span", { class: "cnt", text: `${g.count}×` })),
+        el("div", { class: "row2" },
+          el("div", { class: "src" }, "Comes from: ", el("b", { text: g.source })),
+          el("div", { class: "tiny muted", text: whereToChange(g.source) }),
+          g.fix ? el("div", { class: "chg" }, el("b", { text: "Suggested change" }), g.fix) : null,
+          el("details", {}, el("summary", { text: `Examples (${g.examples.length}${g.count > g.examples.length ? ` of ${g.count}` : ""})` }),
+            ...g.examples.map((x) => el("div", { class: "ex" }, `${short(x.day)} · `, x.evidence ? `“${unquote(x.evidence)}” ` : "",
+              el("a", { href: x.link, target: "_blank", rel: "noopener", text: "Open in Intercom ↗" }))))));
+    }));
+  }
+
   async function loadFailures() {
     const r = await api("failures?" + qs({ limit: 30, offset: state.failOffset }));
     const items = r.failures.map((f) => el("article", { class: "fail" },
@@ -602,6 +656,7 @@
     const s = await api("settings");
     state.checks = s.checks; state.voice = s.voice_rules; state.toggles = s.toggles; state.schedule = s.schedule;
     state.names = Object.fromEntries(s.checks.map((c) => [c.id, c.name]));
+    state.problems = s.problems || {};
     state.voiceNames = Object.fromEntries(s.voice_rules.map((v) => [v.id, v.name]));
     setSelect($("check"), s.checks.map((c) => ({ value: c.id, label: `${c.n}. ${c.name}` })), readHash().check || $("check").value, "All checks");
     $("checkToggles").replaceChildren(...s.checks.map((c) => el("label", { class: "switch" },

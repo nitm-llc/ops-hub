@@ -59,3 +59,31 @@ export function normalizeToggles(t = {}) {
 
 export const enabledChecks = (toggles) => CHECKS.filter((c) => toggles.checks[c.id]);
 export const enabledVoiceRules = (toggles) => VOICE_RULES.filter((r) => toggles.voice[r.id]);
+
+// Plain-language "what went wrong" per check, for the fix list and digest:
+// "<who> <problem>", e.g. "Ivy handed off without saying what happens next".
+export const PROBLEM = {
+  answered: "didn't fully answer the question",
+  didnt_ask_for_what_we_had: "asked for information we already had",
+  reassured_first: "didn't reassure a worried customer first",
+  accurate: "said something we can't back up",
+  no_silent_handoff: "handed off without saying what happens next and when",
+  right_voice: "used off-voice wording",
+  encouragement_placed_right: "used encouragement at the wrong moment",
+  one_message: "sent an extra message that only checks in",
+  every_no_has_next_step: "said no without offering an alternative",
+};
+
+// "Right voice" is split by the rule that broke, so the fix list says what
+// actually went wrong ("used a banned phrase", not "off-voice wording").
+export const VOICE_PROBLEM = {
+  banned_phrases: "used a banned phrase",
+  greeting: "didn't greet the customer by first name",
+  product_names: "got a product name wrong",
+  ivy_not_kristine: "spoke as if she were Kristine",
+  speaker_identity: "didn't speak as the team",
+  sign_off: "signed off inconsistently",
+  ivy_disclosure: "skipped or changed the AI disclosure line",
+  emoji: "broke the emoji rule",
+};
+export const problemFor = (checkId, rule) => (rule && VOICE_PROBLEM[rule]) || PROBLEM[checkId] || checkId;

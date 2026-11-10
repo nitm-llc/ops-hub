@@ -44,6 +44,8 @@ export function cleanText(body) {
   t = t.replace(/​/g, "");
   const cuts = [
     /^\s*On\s.{3,200}\bwrote:\s*$/im,
+    // Mail clients that keep the "On <date> <name> wrote:" line glued to text.
+    /\bOn (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,? [^\n]{3,200}?\bwrote:/,
     /^\s*-{2,}\s*Original Message\s*-{2,}/im,
     /^\s*From:\s.*\n\s*(?:Sent|Date):\s/im,
     /^\s*_{8,}\s*$/m,
@@ -178,17 +180,46 @@ export function extract(conv, win, { appId = "_" } = {}) {
   if (srcRole) {
     messages.push({ id: `source-${src.id || conv.id}`, at: conv.created_at, role: srcRole, name: nameFor(srcRole, src.author), part_type: "source", in_window: inWin(conv.created_at), text: scrub(srcBody) });
   }
+  // Where Ivy's replies come from (names only, never Fin's reasoning text,
+  // which repeats order numbers and tracking): the procedure and section Fin
+  // was in, actions it called, guidance it applied, and its automatic
+  // follow-ups. Becomes FIN lines in the transcript and the list of
+  // "comes from" options the scorer picks from.
+  const fin = { procedures: [], sections: [], actions: [], guidance: [], follow_ups: 0 };
+  const addU = (arr, v) => { if (v && !arr.includes(v)) arr.push(v); };
+  let procedure = null;
+  let followUpPending = false;
+  let lastSpeaker = null;
   for (const p of parts) {
+    const fe = finEvent(p);
+    if (fe) {
+      if (fe.kind === "procedure") { procedure = fe.name; addU(fin.procedures, fe.name); }
+      if (fe.kind === "section") addU(fin.sections, procedure ? `${procedure} › ${fe.name}` : fe.name);
+      if (fe.kind === "action") addU(fin.actions, fe.name);
+      if (fe.kind === "guidance") fe.names.forEach((g) => addU(fin.guidance, g));
+      if (fe.kind === "follow_up") { followUpPending = true; continue; }
+      if (fe.kind === "procedure_end") procedure = null;
+      messages.push({ id: String(p.id), at: p.created_at, role: "fin", name: "Fin", part_type: p.part_type, in_window: inWin(p.created_at), text: fe.text });
+      continue;
+    }
     const body = withAttachments(cleanText(p.body), p.attachments);
     const role = roleOf(p.author, p.part_type, body);
     if (!role) continue;
     const name = nameFor(role, p.author);
     const actor = p.author?.type === "bot" ? "Ivy" : name;
+    // An Ivy message right after another Ivy message, with a follow-up
+    // scheduled in between, is Fin's automatic "checking in" follow-up.
+    const auto = role === "ivy" && followUpPending && lastSpeaker === "ivy";
+    if (auto) fin.follow_ups++;
+    if (role === "customer" || role === "team") followUpPending = false;
+    if (role === "customer" || role === "ivy" || role === "team") lastSpeaker = role;
     messages.push({
       id: String(p.id), at: p.created_at, role, name, part_type: p.part_type, in_window: inWin(p.created_at),
+      ...(auto ? { auto_follow_up: true } : {}),
       text: role === "event" ? eventText(p, actor) : scrub(body),
     });
   }
+  for (const s of conv.ai_agent?.content_sources?.content_sources || []) addU(fin.articles ||= [], s?.title);
   messages.sort((a, b) => a.at - b.at);
 
   const counts = { customer: 0, ivy: 0, team: 0, automation: 0 };
@@ -215,7 +246,59 @@ export function extract(conv, win, { appId = "_" } = {}) {
     window: { from: win.from, to: win.to, start: win.start, end: win.end },
     counts, // in-window only
     last_reply_part_id: lastReplyId,
+    fin,
+    source_options: sourceOptions(fin, messages),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Fin's own trail. Returns a one-line FIN marker, or null for anything else.
+// ---------------------------------------------------------------------------
+const ellipsis = (s) => String(s || "").replace(/\.\.\.$/, "…").trim();
+export function finEvent(p) {
+  if (p.author?.type !== "bot") return null;
+  const ev = p.event_details || {};
+  if (p.part_type === "fin_guidance_applied") {
+    const names = (ev.guidance || []).map((g) => ellipsis(g.title)).filter(Boolean);
+    return names.length ? { kind: "guidance", names, text: `[Fin applied guidance: ${names.join("; ")}]` } : null;
+  }
+  if (p.part_type === "custom_action_started") {
+    const n = ev.action?.name;
+    return n ? { kind: "action", name: n, text: `[Fin called action: ${n}]` } : null;
+  }
+  if (p.part_type !== "ai_agent_event") return null;
+  const e = ev.event || {};
+  const data = e.data?.[e.type] || {};
+  switch (e.type) {
+    case "ai_agent_workflow_started": return data.title ? { kind: "procedure", name: data.title, text: `[Fin started procedure: ${data.title}]` } : null;
+    case "ai_agent_goto_section": { const n = data.display_name || data.section_name; return n ? { kind: "section", name: n, text: `[Fin moved to procedure section: ${n}]` } : null; }
+    case "ai_agent_workflow_finished": return { kind: "procedure_end", text: `[Fin finished procedure${data.title ? `: ${data.title}` : ""}]` };
+    case "procedure_handover": return { kind: "handover", text: `[Fin handed over from procedure${data.procedure_name ? `: ${data.procedure_name}` : ""}]` };
+    case "ai_agent_follow_up_scheduled": return { kind: "follow_up" };
+    default: return null;
+  }
+}
+
+// The "comes from" choices the scorer picks one of for each failed check.
+export const FIN_SETTINGS = {
+  intro: "Fin setting: introduction & identity",
+  follow_up: "Fin setting: automatic follow-ups",
+  style: "Fin setting: tone & answer length",
+  general: "Fin: general answer (no procedure)",
+};
+function sourceOptions(fin, messages) {
+  const out = [];
+  if (messages.some((m) => m.role === "ivy")) {
+    for (const s of fin.sections) out.push(`Procedure: ${s}`);
+    for (const p of fin.procedures) out.push(`Procedure: ${p}`);
+    for (const g of fin.guidance) out.push(`Guidance: ${g}`);
+    for (const a of fin.articles || []) out.push(`Content: ${a}`);
+    for (const a of fin.actions) out.push(`Action: ${a}`);
+    out.push(FIN_SETTINGS.intro, FIN_SETTINGS.follow_up, FIN_SETTINGS.style, FIN_SETTINGS.general);
+  }
+  for (const n of [...new Set(messages.filter((m) => m.role === "team").map((m) => m.name))]) out.push(`Team: ${n}`);
+  out.push("Not sure");
+  return out;
 }
 
 // ---------------------------------------------------------------------------

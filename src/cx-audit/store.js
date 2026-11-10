@@ -204,8 +204,16 @@ CREATE TABLE IF NOT EXISTS cxa_calibration_results (
 );
 `;
 
+// 2026-11-10: where each failed check comes from (a Fin procedure, guidance,
+// setting or team member) and a one-line suggested change. Feeds the fix list.
+export const SCHEMA_FIX_SOURCES = `
+ALTER TABLE cxa_check_results ADD COLUMN source TEXT;
+ALTER TABLE cxa_check_results ADD COLUMN fix TEXT;
+`;
+const ADDED_COLUMNS = [["cxa_check_results", "source", "TEXT"], ["cxa_check_results", "fix", "TEXT"]];
+
 // Each migration file and the schema it must match.
-export const MIGRATIONS = { "0013_cx_audit.sql": SCHEMA, "0014_cx_audit_calibration.sql": SCHEMA_CALIBRATION };
+export const MIGRATIONS = { "0013_cx_audit.sql": SCHEMA, "0014_cx_audit_calibration.sql": SCHEMA_CALIBRATION, "0015_cx_audit_fix_sources.sql": SCHEMA_FIX_SOURCES };
 
 // Strip comments first: a ";" inside a comment would otherwise split a statement.
 export const splitSql = (sql) => sql.replace(/--[^\n]*/g, "").split(";").map((x) => x.trim()).filter(Boolean);
@@ -218,6 +226,11 @@ export async function ensureTables(env) {
   if (!d) throw new Error("DB not configured");
   if (ready.has(d)) return;
   await d.batch(statements().map((s) => d.prepare(s)));
+  // ALTERs can't be IF NOT EXISTS: add each column only when it's missing.
+  for (const [table, col, type] of ADDED_COLUMNS) {
+    const { results } = await d.prepare(`PRAGMA table_info(${table})`).all();
+    if (!results.some((c) => c.name === col)) await d.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`).run();
+  }
   const n = await d.prepare("SELECT COUNT(*) AS n FROM cxa_exclusions").first("n");
   if (!n) {
     const at = new Date().toISOString();
@@ -347,7 +360,7 @@ export async function saveScore(env, score, { runId, scorerKey }) {
     ).run();
     const scoreId = ins.meta.last_row_id;
     await d.batch(Object.entries(G.checks).map(([checkId, c]) =>
-      d.prepare("INSERT INTO cxa_check_results (score_id, check_id, result, evidence, rewrite, reply_id, failed_rules) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(scoreId, checkId, c.result, c.evidence || null, c.rewrite || null, c.reply_id || null, c.failed_rules?.length ? JSON.stringify(c.failed_rules) : null)));
+      d.prepare("INSERT INTO cxa_check_results (score_id, check_id, result, evidence, rewrite, reply_id, failed_rules, source, fix) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(scoreId, checkId, c.result, c.evidence || null, c.rewrite || null, c.reply_id || null, c.failed_rules?.length ? JSON.stringify(c.failed_rules) : null, c.source || null, c.fix || null)));
   }
 }

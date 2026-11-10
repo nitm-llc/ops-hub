@@ -22,7 +22,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { CHECKS, VOICE_RULES, enabledChecks, enabledVoiceRules, normalizeToggles } from "./checks.js";
 
-export const PROMPT_VERSION = "p1";
+// p2 (2026-11-10): Fin trail in the transcript; each fail names where it comes from + a fix.
+export const PROMPT_VERSION = "p2";
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
 export const DEFAULT_EFFORT = "high";
 const MAX_TOKENS = 16000;
@@ -55,8 +56,13 @@ export function rubric(toggles) {
     "- evidence: a short exact quote (25 words max) from the scored reply that shows the result. For na, a few words on why.",
     "- rewrite: only for a fail. Rewrite just the failing sentence(s) so they would pass, in NITM's voice. Empty string otherwise.",
     "- reply_id: the id of the reply the result is about (the failing one if it failed). Empty for na.",
-    "- Text in [square brackets] like [email], [order number], [code], [surname], [link], [Image] replaces real details we removed for privacy. Treat the detail as present. Never fail a reply for a placeholder, and keep placeholders in rewrites.",
+    "- Text in [square brackets] like [email], [order number], [code], [surname], [link], [Image] replaces real details we removed for privacy. Treat the detail as present. Never fail a reply for a placeholder, and keep placeholders in rewrites. Only those placeholders take brackets: write names plainly (Sarah, not [Sarah]).",
     "- Lines like \"[Ivy handed the conversation to ...; this step sent the customer no message]\" are system markers for what happened, not text the customer saw.",
+    "- FIN lines show where Ivy's reply came from: the procedure and section Fin was following, actions it called, guidance it applied. \"IVY (automatic follow-up)\" is a message Fin's automatic follow-up setting sent, not an answer Ivy wrote.",
+    "- For every fail, fill two more fields so someone can fix the cause, not just the reply:",
+    "  source: where the problem comes from. Copy exactly one option from the conversation's \"Comes-from options\" list. Ivy: pick the procedure section, procedure, guidance or content she was using when she wrote the failing sentence; the introduction & identity setting for her standard opener and disclosure; the automatic follow-ups setting for automatic follow-ups; the tone & answer length setting for tone or length problems no guidance explains. Team: the team member. \"Not sure\" only when nothing fits.",
+    "  fix: one plain sentence saying what to change at that source, in words a non-technical manager can act on (e.g. \"In the handoff step, add: Our team will reply within one business day.\"). Not a rewrite of the reply; that goes in rewrite.",
+    "  For pass and na, source and fix are empty strings.",
     "- Only the checks and voice rules listed below are switched on. Don't score anything else, even if the guidelines mention it.",
     "- failed_rules: only for right_voice when it fails (the broken voice rule ids); an empty list otherwise.",
     "- ivy_note / team_note: one sentence on that group's replies. overall_note: one line (25 words max), the single most useful takeaway.",
@@ -97,13 +103,14 @@ export function buildUserMessage(record, { tz = "America/New_York" } = {}) {
     `Intercom issue type: ${record.issue_type || "(none)"} · sentiment: ${record.sentiment || "(none)"} · Fin resolution: ${record.fin_state || "(none)"}`,
     `Audit day: ${record.window.from}${record.window.to !== record.window.from ? " to " + record.window.to : ""} (${tz}).`,
     `Ivy replies to score: ${ids.ivy.join(", ") || "none"}. Team replies to score: ${ids.team.join(", ") || "none"}.`,
+    `Comes-from options: ${(record.source_options || ["Not sure"]).map((o) => `"${o}"`).join(", ")}`,
     "",
     "Transcript:",
   ];
   const body = [];
   for (const m of record.messages) {
     if (m.at >= record.window.end) continue;
-    const who = m.role === "team" ? `TEAM (${m.name})` : m.role === "event" ? "EVENT" : m.role.toUpperCase();
+    const who = m.role === "team" ? `TEAM (${m.name})` : m.role === "event" ? "EVENT" : m.auto_follow_up ? "IVY (automatic follow-up)" : m.role.toUpperCase();
     const mark = m.in_window && (m.role === "ivy" || m.role === "team") ? " ▶SCORE" : "";
     body.push(`[${m.id}] ${fmtTime(m.at, tz)} · ${who}${mark}\n${m.text}\n`);
   }
@@ -134,8 +141,10 @@ export function outputSchema(toggles) {
             rewrite: { type: "string" },
             reply_id: { type: "string" },
             failed_rules: { type: "array", items: { type: "string", enum: voiceIds.length ? voiceIds : ["none"] } },
+            source: { type: "string" },
+            fix: { type: "string" },
           },
-          required: ["group", "check", "result", "evidence", "rewrite", "reply_id", "failed_rules"],
+          required: ["group", "check", "result", "evidence", "rewrite", "reply_id", "failed_rules", "source", "fix"],
           additionalProperties: false,
         },
       },
@@ -179,6 +188,13 @@ export function normalizeScore(raw, record, toggles) {
         reply_id: scored && r && ids[g].includes(String(r.reply_id)) ? String(r.reply_id) : scored && result !== "na" ? ids[g].at(-1) : "",
       };
       if (c.id === "right_voice") out.failed_rules = result === "fail" ? (r.failed_rules || []).filter((x) => allowedVoice.has(x)) : [];
+      if (result === "fail") {
+        // Must be one of this conversation's options, so the fix list groups cleanly.
+        const opts = record.source_options || [];
+        const src = String(r.source || "").trim();
+        out.source = opts.includes(src) ? src : (opts.find((o) => o.toLowerCase() === src.toLowerCase()) || "Not sure");
+        out.fix = String(r.fix || "").slice(0, 400);
+      }
       checks[c.id] = out;
     }
     const vals = Object.values(checks).map((c) => c.result);

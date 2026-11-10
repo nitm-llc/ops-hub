@@ -5,16 +5,19 @@ import assert from "node:assert/strict";
 import { sqliteD1 } from "./support/sqlite-d1.mjs";
 import { ensureTables, saveScore, saveGuidelines, setSetting } from "../src/cx-audit/store.js";
 import { formatDigest, buildDigest, digestAfterRun, MAX_CHARS, recipients } from "../src/cx-audit/digest.js";
+import { fixList } from "../src/cx-audit/report.js";
 import { createRun, tick } from "../src/cx-audit/job.js";
 import { handleCxAuditRoutes } from "../src/cx-audit/index.js";
 import { windowFor } from "../src/cx-audit/config.js";
 import { CHECKS } from "../src/cx-audit/checks.js";
 
-function score({ id, day = "2026-11-08", group = "ivy", fails = [], issue = "Order Problem", evidence = "quote", rewrite = "Try this." }) {
+const SOURCES = { no_silent_handoff: "Procedure: Where is my order › Handle Order Status", right_voice: "Fin setting: introduction & identity", answered: "Guidance: Tone" };
+function score({ id, day = "2026-11-08", group = "ivy", fails = [], issue = "Order Problem", evidence = "quote", rewrite = "Try this.", source = SOURCES }) {
   const checks = {};
   for (const c of CHECKS) {
     const result = fails.includes(c.id) ? "fail" : "pass";
-    checks[c.id] = { result, evidence, rewrite: result === "fail" ? rewrite : "", reply_id: "r1", ...(c.id === "right_voice" ? { failed_rules: [] } : {}) };
+    const fail = result === "fail";
+    checks[c.id] = { result, evidence, rewrite: fail ? rewrite : "", reply_id: "r1", source: fail ? (source[c.id] || "Not sure") : "", fix: fail ? `Fix ${c.id}` : "", ...(c.id === "right_voice" ? { failed_rules: fail ? ["banned_phrases"] : [] } : {}) };
   }
   const vals = Object.values(checks).map((c) => c.result);
   const G = { scored: true, replies: ["r1"], checks, note: "n", passed: vals.filter((v) => v === "pass").length, failed: vals.filter((v) => v === "fail").length, applicable: vals.length };
@@ -37,31 +40,47 @@ async function seeded() {
   return env;
 }
 
-test("digest: rates, weakest check, worst replies first, links, inert customer text", async () => {
+test("fix list groups fails by who, what and where they come from, most frequent first", async () => {
+  const env = await seeded();
+  const r = await fixList(env, { from: "2026-11-08", to: "2026-11-08", author: "", check: "", issue: "", version: "" });
+  assert.equal(r.total_fails, 4);
+  const top = r.fixes[0];
+  assert.deepEqual([top.who, top.check_id, top.rule, top.source, top.count], ["Ivy", "right_voice", "banned_phrases", "Fin setting: introduction & identity", 2]);
+  assert.equal(top.problem, "used a banned phrase");
+  assert.equal(top.fix, "Fix right_voice");
+  assert.equal(top.examples.length, 2);
+});
+
+test("digest leads with what to fix: problem, where it comes from, change, example", async () => {
   const env = await seeded();
   const text = await buildDigest(env, "2026-11-08", "2026-11-08");
-  assert.match(text, /^\*CX scorecard · Sun, Nov 8\*/);
-  assert.match(text, /Ivy \*\d+%\* \(3 conv\.\) · Team \*100%\* \(1 conv\.\)/);
-  assert.match(text, /Weakest check: \*Right voice\* 50% \(2 fails\)/);
-  assert.match(text, /\*Worst 2 replies\*\n1\. Ivy · Order Problem · failed Answered the question, No silent handoff, Right voice/);
-  assert.match(text, /<https:\/\/app\.intercom\.com\/a\/inbox\/ws\/inbox\/conversation\/1\|Open in Intercom>/);
-  assert.match(text, /<https:\/\/ops\.anurseinthemaking\.com\/cx-audit\/#from=2026-11-08&to=2026-11-08\|Full scorecard>/);
-  assert.ok(!text.includes("<b>"), "customer text can't make links or bold");
-  assert.match(text, /‹b›bold‹\/b›/);
+  assert.match(text, /^\*CX scorecard · Sun, Nov 8\*\nIvy \d+% · Team 100% of checks passed \(4 conversations\)/);
+  assert.match(text, /\*Fix first\*\n1\. \*Ivy used a banned phrase\* \(2×\)\n   From: Fin setting: introduction & identity\n   Change: Fix right_voice\n   <https:\/\/app\.intercom\.com\/a\/inbox\/ws\/inbox\/conversation\/\d\|See an example>/);
+  assert.match(text, /2\. \*Ivy (handed off|didn.t fully answer)/);
+  assert.match(text, /<https:\/\/ops\.anurseinthemaking\.com\/cx-audit\/#from=2026-11-08&to=2026-11-08\|Fixes and details>/);
+  assert.doesNotMatch(text, /Weakest|Worst/);
+});
+
+test("customer-derived text can't make Chat links or bold", () => {
+  const s = { totals: { ivy: { pass: 1, fail: 1, convs: 1 } } };
+  const fixes = [{ who: "Ivy", check_id: "accurate", source: "Guidance: <b>*x*</b>", count: 1, fix: "Say <a> _y_", examples: [{ link: "https://app.intercom.com/c/1" }] }];
+  const text = formatDigest({ from: "2026-11-08", to: "2026-11-08", s, fixes, url: "u" });
+  assert.match(text, /From: Guidance: ‹b›∗x∗‹\/b›/);
+  assert.match(text, /Change: Say ‹a› _y_/);
+  assert.doesNotMatch(text.split("\n").slice(3).join("\n"), /<b>|\*x\*/);
 });
 
 test("digest always fits Flo's 1500-character limit", () => {
   const long = "x".repeat(900);
-  const worst = [1, 2, 3].map((i) => ({ author_type: "ivy", issue_type: "Other", link: `https://app.intercom.com/c/${i}`,
-    fails: [{ check_id: "answered", evidence: long, rewrite: long }, { check_id: "right_voice", evidence: long, rewrite: long }] }));
-  const s = { totals: { ivy: { pass: 1, fail: 5, convs: 3 } }, per_check: [{ check_id: "answered", author_type: "ivy", pass: 0, fail: 3 }] };
-  const text = formatDigest({ from: "2026-11-08", to: "2026-11-08", s, worst, url: "https://ops.anurseinthemaking.com/cx-audit/" });
+  const fixes = [1, 2, 3, 4].map((i) => ({ who: "Ivy", check_id: "answered", source: "Procedure: " + long, count: i, fix: long, examples: [{ link: `https://app.intercom.com/c/${i}` }] }));
+  const s = { totals: { ivy: { pass: 1, fail: 5, convs: 3 } } };
+  const text = formatDigest({ from: "2026-11-08", to: "2026-11-08", s, fixes, url: "https://ops.anurseinthemaking.com/cx-audit/" });
   assert.ok(text.length <= MAX_CHARS, `got ${text.length}`);
-  assert.match(text, /Worst/);
+  assert.match(text, /Fix first/);
 });
 
 test("digest with nothing scored is one short line", () => {
-  const text = formatDigest({ from: "2026-11-08", to: "2026-11-08", s: { totals: {}, per_check: [] }, worst: [], url: "u" });
+  const text = formatDigest({ from: "2026-11-08", to: "2026-11-08", s: { totals: {} }, fixes: [], url: "u" });
   assert.match(text, /No Ivy or team replies to score that day/);
 });
 
@@ -116,7 +135,7 @@ test("the scheduled job sends the digest when its run finishes", async () => {
   assert.equal(r.done, true);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].person, "Mark", "default recipient");
-  assert.match(sent[0].text, /failed No silent handoff/);
+  assert.match(sent[0].text, /Ivy handed off without saying what happens next and when/);
   // A manual run the same day sends nothing.
   await createRun(env, { kind: "manual", from: "2026-11-08", to: "2026-11-08", force: true }, NOW);
   for (let i = 0; i < 5; i++) { r = await tick(env, { now: NOW, client, send }); if (r.done || r.idle) break; }

@@ -78,9 +78,20 @@ test("migration files match the schemas in store.js", () => {
   for (const [file, schema] of Object.entries(MIGRATIONS)) {
     const sql = fs.readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
     assert.deepEqual(splitSql(sql), splitSql(schema), file);
-    all.push(...splitSql(schema));
+    if (!/^ALTER/m.test(schema)) all.push(...splitSql(schema));
   }
-  assert.deepEqual(all, schemaStatements(), "ensureTables runs exactly the migrations");
+  assert.deepEqual(all, schemaStatements(), "ensureTables runs exactly the CREATE migrations");
+});
+
+test("ensureTables adds the 0015 columns once, and the 0015 file applies after 0013", async () => {
+  const env = { DB: sqliteD1() };
+  await ensureTables(env);
+  const cols = (await env.DB.prepare("PRAGMA table_info(cxa_check_results)").all()).results.map((c) => c.name);
+  assert.ok(cols.includes("source") && cols.includes("fix"));
+  const fresh = sqliteD1();
+  for (const file of Object.keys(MIGRATIONS)) fresh.raw.exec(fs.readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
+  const cols2 = (await fresh.prepare("PRAGMA table_info(cxa_check_results)").all()).results.map((c) => c.name);
+  assert.ok(cols2.includes("fix"));
 });
 
 test("schedule windows: daily 7-10am NY for yesterday; weekly on Mondays; nothing outside", () => {
