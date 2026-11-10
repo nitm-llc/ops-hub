@@ -9,7 +9,7 @@ import { _clearJwksCache, _clearTokenCache } from "../src/nitm-pm/google.js";
 import { _resetReady, createPending } from "../src/nitm-pm/store.js";
 import { validateAction, applyAction, RefusedError, _clearFieldCache } from "../src/nitm-pm/clickup.js";
 import { parseApproval } from "../src/nitm-pm/approvals.js";
-import { LIST_ID, FIELDS, PEOPLE, todayYmd, addDays, ymdToClickUpMs } from "../src/nitm-pm/config.js";
+import { LIST_ID, FIELDS, PEOPLE, todayYmd, addDays, ymdToClickUpMs, isWeekend } from "../src/nitm-pm/config.js";
 import { _clearTeamCache, messagePerson } from "../src/nitm-pm/outreach.js";
 import { dueRuns, floCron } from "../src/nitm-pm/scheduler.js";
 import { recordPerson } from "../src/nitm-pm/store.js";
@@ -1035,11 +1035,12 @@ test("the cron runs the daily check once, in the lead's DM, and posts the summar
   const before = claudeRequests.length;
   claudeScript = [
     { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) },
-    { reply: say("*#1*: set the peds quiz to high. Nothing else is stuck.") },
+    { reply: toolUse("propose_change", { type: "stage", task_id: "peds-quiz", stage: "Posted" }) },
+    { reply: say("*Done:*\n<https://app.clickup.com/t/peds-quiz|Peds quiz>: priority High\n\n*Needs a person:*\n<https://app.clickup.com/t/peds-quiz|Peds quiz>: Stage to Posted?") },
   ];
   const nine = nyTime(`${todayYmd()}T09:10:00`);
   await floCron(env, nine);
-  assert.equal(claudeRequests.length, before + 2);
+  assert.equal(claudeRequests.length, before + 3);
   assert.match(claudeRequests.at(-1).messages[0].content, /Scheduled run: the weekday daily check/);
   const posts = postsTo(dmOf(AVERY.email));
   assert.equal(posts.length, 1);
@@ -1047,12 +1048,20 @@ test("the cron runs the daily check once, in the lead's DM, and posts the summar
   assert.match(posts[0].body.fallbackText, /^Daily check, /);
   const card = posts[0].body.cardsV2[0].card;
   assert.equal(card.header.title, "Daily check");
-  assert.match(JSON.stringify(card.sections), /<b>#1<\/b>: set the peds quiz to high/);
+  const all = JSON.stringify(card.sections);
+  assert.match(all, /Peds quiz<\/a>: priority High/);
+  assert.match(all, /approve Peds Infectious Diseases/, "the hint names the card that's waiting");
+  // The routine change was made; the Stage change waits for a person.
+  assert.equal(puts().length, 1, "priority set in ClickUp");
+  assert.deepEqual(puts()[0].body, { priority: 2 });
+  assert.ok(writes().some((w) => w.method === "POST" && /by Flo's daily routine/.test(w.body?.comment_text || "")), "paper trail says it was Flo's routine");
+  assert.equal(pendingRows().length, 1);
   assert.equal(pendingRows()[0].space, dmOf(AVERY.email));
-  assert.equal(writes().length, 0, "still nothing changed in ClickUp");
+  assert.match(JSON.parse(pendingRows()[0].action).value, /Posted/);
+  assert.ok(logRows().some((r) => r.event === "auto_applied"));
 
   await floCron(env, nine + 120000); // next tick
-  assert.equal(claudeRequests.length, before + 2, "not run twice");
+  assert.equal(claudeRequests.length, before + 3, "not run twice");
 });
 
 test("the schedule can be switched off; a run-now request still runs", async () => {
@@ -1120,7 +1129,7 @@ test("Tia gets a copy of the morning summary and can approve from it; first appr
   await sayHi(AVERY.email, "Avery Pless");
   await sayHi("tia@anurseinthemaking.com", "Tia Freeman");
   claudeScript = [
-    { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) },
+    { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "low" }) },
     { reply: say("*#1* Peds quiz: priority → high\nReply \"yes\".") },
   ];
   await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
@@ -1293,4 +1302,61 @@ test("Send me a preview re-sends the latest summary as a card to the asker only"
   assert.equal(card.sections[0].widgets[0].textParagraph.text, '<font color="#ffc53d">■</font> <b>Ready To Edit / Design</b>');
   assert.match(card.sections[0].widgets[1].decoratedText.text, /Peds quiz/);
   assert.equal(writes().length, 0);
+});
+
+
+// ===========================================================================
+// Routine changes on scheduled runs
+// ===========================================================================
+import { routineCheck } from "../src/nitm-pm/routine.js";
+
+test("routineCheck: only the routine steps, checked in code", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  const card = { stage: "Ready To Edit / Design", type: "Quiz", post_date: addDays(TODAY, 6), assignee_ids: [PEOPLE.tia] };
+  const ok = (a) => routineCheck(env, { task_id: "peds-quiz", ...a }, card, TODAY).then((r) => r.routine);
+  assert.equal(await ok({ type: "priority", priority: "high" }), true);
+  assert.equal(await ok({ type: "priority", priority: "low" }), false);
+  assert.equal(await ok({ type: "due_date", date: TODAY }), !isWeekend(TODAY));
+  assert.equal(await ok({ type: "due_date", date: addDays(TODAY, -1) }), false, "not in the past");
+  assert.equal(await ok({ type: "due_date", date: addDays(TODAY, 6) }), false, "not on the Post Date");
+  assert.equal(await ok({ type: "assignee", add: [PEOPLE.gaby], remove: [PEOPLE.tia] }), true, "the Stage table's editor for a Quiz");
+  assert.equal(await ok({ type: "assignee", add: [PEOPLE.diana], remove: [PEOPLE.tia] }), false, "anyone else needs a person");
+  assert.equal(await ok({ type: "assignee", add: [PEOPLE.gaby], remove: [] }), false, "must end with only the owner");
+  assert.equal(await ok({ type: "comment", text: "Checking in, anything blocking it?" }), true);
+  assert.equal(await ok({ type: "custom_field", field: FIELDS.stage, value: "Posted" }), false);
+});
+
+test("Flo comments on a card at most once every 2 days on its own", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  claudeScript = [
+    { reply: toolUse("propose_change", { type: "comment", task_id: "peds-quiz", text: "Checking in, anything blocking it?" }) },
+    { reply: toolUse("propose_change", { type: "comment", task_id: "peds-quiz", text: "Checking in again" }) },
+    { reply: say("*Done:*\n<https://app.clickup.com/t/peds-quiz|Peds quiz>: comment asking Gaby if anything's blocking it") },
+  ];
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  const comments = writes().filter((w) => w.url.endsWith("/comment"));
+  assert.equal(comments.length, 1, "the second comment wasn't posted");
+  assert.match(comments[0].body.comment_text, /\(Posted by Flo\.\)$/);
+  assert.equal(pendingRows().length, 1, "the second one waits for a person instead");
+});
+
+test("a chat request is never routine, even for an approver", async () => {
+  claudeScript = [{ reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) }, { reply: say("Proposed.") }];
+  await send(addonMessage("bump the peds quiz to high"));
+  assert.equal(writes().length, 0);
+  assert.equal(pendingRows().length, 1);
+});
+
+test("each scheduled run clears earlier runs' unapproved suggestions, not people's", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  const conv = { space: dmOf(AVERY.email), thread: "" };
+  await createPending(env, conv, { proposedBy: "flo-scheduled", action: { type: "priority", task_id: "peds-quiz", priority: "low" }, summary: "old" });
+  await createPending(env, conv, { proposedBy: AVERY.email, action: { type: "priority", task_id: "peds-quiz", priority: "low" }, summary: "Avery's own" });
+  env.DB.raw.prepare("UPDATE pm_pending_actions SET created_at = ?").run(new Date(Date.now() - 86400e3).toISOString());
+  claudeScript = [{ reply: say("Nothing stuck today.") }];
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  assert.deepEqual(pendingRows().map((r) => [r.summary, r.status]), [["old", "expired"], ["Avery's own", "pending"]]);
+  assert.ok(logRows().some((r) => r.event === "pending_cleared"));
 });

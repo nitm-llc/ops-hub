@@ -169,6 +169,19 @@ export async function listPending(env, conv) {
   return results || [];
 }
 
+/**
+ * A new scheduled run replaces the earlier runs' unapproved suggestions, so
+ * the morning card only shows today's. People's own proposals are kept.
+ */
+export async function expireScheduledPending(env, conv, beforeIso) {
+  const r = await env.DB.prepare(
+    "UPDATE pm_pending_actions SET status = 'expired', decided_at = ?, result = 'replaced by the next daily check' WHERE space = ? AND thread = ? AND status = 'pending' AND proposed_by = 'flo-scheduled' AND created_at < ?"
+  )
+    .bind(nowIso(), conv.space, conv.thread, beforeIso)
+    .run();
+  return r?.meta?.changes ?? 0;
+}
+
 /** Full rows of everything still pending in a conversation (for approving by card name). */
 export async function listPendingRows(env, conv) {
   const { results } = await env.DB.prepare(

@@ -51,6 +51,8 @@ function parseJson(s) {
 const EVENT_LABELS = {
   proposed: "Proposed",
   applied: "Changed",
+  auto_applied: "Changed by Flo (routine)",
+  pending_cleared: "Cleared old suggestions",
   apply_failed: "Change failed",
   rejected: "Turned down",
   approval_refused: "Approval refused (not an approver)",
@@ -259,7 +261,7 @@ export async function handleFloApi(request, env, path) {
       const changesOnly = url.searchParams.get("filter") === "changes";
       const { results } = await env.DB.prepare(
         `SELECT id, at, space, thread, number, actor, event, action, result FROM pm_action_log
-          ${changesOnly ? "WHERE event IN ('proposed','applied','apply_failed','rejected','approval_refused','approval_expired')" : ""}
+          ${changesOnly ? "WHERE event IN ('proposed','applied','auto_applied','apply_failed','rejected','approval_refused','approval_expired')" : ""}
           ORDER BY id DESC LIMIT ?`
       ).bind(limit).all();
       return json({ log: (results || []).map(shapeLog) });

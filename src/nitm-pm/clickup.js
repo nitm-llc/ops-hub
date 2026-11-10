@@ -418,8 +418,8 @@ export function describeAction(action, cardName, resolved) {
   return `Change ${on}`;
 }
 
-function paperTrail(action, approver, resolved) {
-  const by = `approved by ${approver} in Chat`;
+function paperTrail(action, approver, resolved, auto = false) {
+  const by = auto ? "by Flo's daily routine" : `approved by ${approver} in Chat`;
   if (action.type === "due_date") return `Due date moved to ${weekdayName(action.date)}, ${by}.`;
   if (action.type === "priority") return `Priority set to ${action.priority}, ${by}.`;
   if (action.type === "assignee") {
@@ -458,7 +458,9 @@ export async function prepareAction(env, raw) {
  * change failing; a comment failure after a successful change is reported,
  * not thrown, so the caller can say exactly what happened.
  */
-export async function applyAction(env, rawAction, approverName) {
+// `auto`: a routine change Flo made itself on a scheduled run (routine.js);
+// the card's paper trail says so instead of naming an approver.
+export async function applyAction(env, rawAction, approverName, { auto = false } = {}) {
   // Re-validate and re-resolve: the stored row is not trusted, and the
   // field's options may have changed since the proposal.
   const { action, resolved } = await prepareAction(env, rawAction);
@@ -467,7 +469,7 @@ export async function applyAction(env, rawAction, approverName) {
 
   if (action.type === "comment") {
     await clickup(env, "POST", `${path}/comment`, {
-      comment_text: `${action.text}\n\n(Posted by Flo, approved by ${approverName} in Chat.)`,
+      comment_text: auto ? `${action.text}\n\n(Posted by Flo.)` : `${action.text}\n\n(Posted by Flo, approved by ${approverName} in Chat.)`,
       notify_all: false,
     });
     return { changed: true, commented: true, detail: "comment posted" };
@@ -486,7 +488,7 @@ export async function applyAction(env, rawAction, approverName) {
   }
 
   try {
-    await clickup(env, "POST", `${path}/comment`, { comment_text: paperTrail(action, approverName, resolved), notify_all: false });
+    await clickup(env, "POST", `${path}/comment`, { comment_text: paperTrail(action, approverName, resolved, auto), notify_all: false });
     return { changed: true, commented: true, detail: "changed and commented" };
   } catch (e) {
     return { changed: true, commented: false, detail: `changed, but the card comment failed: ${e.message}` };

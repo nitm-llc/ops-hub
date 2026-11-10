@@ -82,9 +82,9 @@ function splitHeading(line) {
  *   body      Flo's reply, unchanged
  *   stages    Map from stageInfo()
  */
-export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl }) {
+export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl, approveNames = null }) {
   const sections = [];
-  const proposed = []; // card names with numbered changes, for the reply hint
+  const proposed = []; // card names with numbered changes, for the reply hint (older summaries)
   for (const block of String(body || "").trim().split(/\n\s*\n/)) {
     const lines = block.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim());
     if (!lines.length) continue;
@@ -98,8 +98,10 @@ export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl
     const groups = new Map(); // stage → { color, rows: [] }, in order seen
     const loose = [];
     let numbered = false;
-    for (const line of [rest, ...lines.slice(1)].filter(Boolean)) {
+    for (let line of [rest, ...lines.slice(1)].filter(Boolean)) {
       if (APPROVE_HINT.test(line)) continue;
+      // "- *#30* <card>…" / "• #30 <card>…": drop the bullet and any leading numbers.
+      line = line.replace(/^\s*[-•]\s+/, "").replace(/^\*?(#\d+(?:\s*(?:,|–|-|and)\s*#?\d+)*)\*?\s+(?=<)/, (m0, nums) => `*${nums}* `);
       const link = line.match(CARD_LINK);
       if (!link) {
         (groups.size || loose.length ? after : before).push(toCardHtml(line));
@@ -129,14 +131,17 @@ export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl
     }
     widgets.push(...loose);
     if (after.length) widgets.push({ textParagraph: { text: after.join("<br>") } });
-    if (numbered) widgets.push({ textParagraph: { text: "{{HINT}}" } });
+    if (numbered && !approveNames) widgets.push({ textParagraph: { text: "{{HINT}}" } });
     if (!widgets.length) widgets.push({ textParagraph: { text: "—" } });
     const section = header ? { header: esc(header), widgets } : { widgets };
     // Long lists fold; "Show more" opens the rest.
     if (widgets.length > FOLD_AFTER + 2) Object.assign(section, { collapsible: true, uncollapsibleWidgetsCount: FOLD_AFTER + 1 });
     sections.push(section);
   }
-  const names = [...new Set(proposed)].slice(0, 2).map(shortName);
+  // The hint names cards really waiting for approval (today's run), or, for
+  // older summaries, the cards that had numbered proposals.
+  if (approveNames?.length) sections.push({ widgets: [{ textParagraph: { text: "{{HINT}}" } }] });
+  const names = [...new Set(approveNames?.length ? approveNames : proposed)].slice(0, 2).map(shortName);
   const hint = `<font color="#80868b">Reply "approve all", or name the cards${names.length ? `: "approve ${esc(names.join(" and "))}"` : ""}</font>`;
   for (const sec of sections) for (const w of sec.widgets) if (w.textParagraph?.text === "{{HINT}}") w.textParagraph.text = hint;
   if (pageUrl) {

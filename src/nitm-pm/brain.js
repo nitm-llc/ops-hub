@@ -9,8 +9,9 @@
 // repeat questions only pay for the conversation.
 // ============================================================================
 
+import { routineCheck } from "./routine.js";
 import INSTRUCTIONS from "./ai-pm-instructions.md";
-import { findCards, getCard, calendar, prepareAction, describeAction, loadListTask, readCard, RefusedError } from "./clickup.js";
+import { findCards, getCard, calendar, prepareAction, describeAction, loadListTask, readCard, applyAction, RefusedError } from "./clickup.js";
 import { createPending, listPending, logAction, loadInstructions } from "./store.js";
 import { applyNumbers, isApprover } from "./approvals.js";
 import { messagePerson, findLead } from "./outreach.js";
@@ -26,12 +27,13 @@ const GUARDRAILS = `
 You are "Flo", the NITM marketing team's project-management helper in Google Chat (named after Florence Nightingale, and keeping work flowing). Right now you're connected to one ClickUp list, TikTok Production; if someone asks about other marketing work, say it isn't connected yet. Today's date, the sender and any pending proposals arrive in a <context> block with each message.
 
 Ground rules, enforced by the tools as well:
-- You are read-only on your own. To change anything, call propose_change. It records a numbered proposal and changes NOTHING. Then tell the person that an approver can reply "yes" (one proposal), "approve all", or name the card ("approve Peds quiz"). Numbers ("approve 1 and 3") also work.
+- In conversations you are read-only on your own. To change anything, call propose_change. It records a numbered proposal and changes NOTHING. Then tell the person that an approver can reply "yes" (one proposal), "approve all", or name the card ("approve Peds quiz"). Numbers ("approve 1 and 3") also work.
 - Only call apply_approved when the sender's CURRENT message explicitly approves numbered proposals, and only for those numbers. The tool checks this and refuses anything else.
 - You can propose: a due date, priority, assignees, a comment, the Post Date, the Stage, or another custom field on the card.
 - Post Dates and Stages: this OVERRIDES "never change a post date or a card's Stage" above. When a person explicitly asks for one, propose exactly what they asked; it's on purpose. Don't propose Post Date or Stage changes on your own initiative (daily check, balance check): there you suggest them in words, and Post Dates stay Cass's call.
 - Never say a change was made unless apply_approved reported it done. If a tool returns an error, say so plainly in one line. Never guess card data: look it up.
-- "Run the daily check": follow the daily routine in suggest mode. Call find_cards with overdue=true and with_comments=true, decide per card, then call propose_change once per suggested change (in parallel). Reply with one numbered line per proposal, plus a short list of cards you're leaving alone and why.
+- On scheduled runs (daily check, weekly planning), routine changes you propose are made right away by code and come back as done; report them as done. Judgment calls stay waiting for a person.
+- "Run the daily check" (asked in a conversation): follow the daily routine in suggest mode. Call find_cards with overdue=true and with_comments=true, decide per card, then call propose_change once per suggested change (in parallel). Reply with one numbered line per proposal, plus a short list of cards you're leaving alone and why.
 - "What's stuck": overdue cards (find_cards overdue=true, with_comments=true), each with the likely reason from the routine (active comment thread, owner/stage mismatch, post date close, unused stage). No proposals unless asked.
 - Calendar balance: use the calendar tool, apply the rules, and suggest swaps for Cass in words. Only propose the swap as changes if the person asks you to make it.
 - Reaching people: message_person sends someone a Google Chat DM (by first name). Use it for the routine's check-ins with a card's owner (Post Date close, daily step 5), escalations to Avery (step 6), calendar suggestions for Cass, and when a person asks you to tell or ask someone something. One card per message: friendly, 1 to 3 short lines, with the card link and the ask. If they can't be reached directly, the tool sends it to Avery and Mark to pass on, so just report what it says. Don't message the person you're already talking to. The ClickUp comment the routine asks for is still a propose_change.
@@ -185,6 +187,24 @@ async function runTool(env, turn, name, input) {
       const task = await loadListTask(env, action.task_id);
       const card = readCard(task, turn.tz, turn.today);
       const summary = describeAction(action, card.name, resolved) + (input.reason ? ` (${String(input.reason).slice(0, 140)})` : "");
+      // Scheduled runs make routine changes themselves (routine.js decides,
+      // in code). Anything else becomes a proposal for a person, below.
+      let notRoutine = null;
+      if (turn.scheduled) {
+        const check = await routineCheck(env, action, card, turn.today);
+        if (check.routine) {
+          try {
+            const r = await applyAction(env, action, "Flo", { auto: true });
+            await logAction(env, { conv: turn.conv, actor: "flo-scheduled", event: "auto_applied", action, result: `${summary} · ${r.detail}` });
+            return { summary, card_url: card.url, status: "done: changed in ClickUp just now (routine, no approval needed)" };
+          } catch (e) {
+            const msg = e instanceof RefusedError ? e.message : `ClickUp error: ${e.message}`;
+            await logAction(env, { conv: turn.conv, actor: "flo-scheduled", event: "apply_failed", action, result: msg });
+            return { summary, card_url: card.url, status: `failed, nothing changed: ${msg}` };
+          }
+        }
+        notRoutine = check.why;
+      }
       // A non-approver's proposal can't be approved in their own DM (no
       // approver is in it), so it's filed in the lead approver's DM and sent
       // to them. Scheduled runs already happen in the lead's DM.
@@ -216,7 +236,12 @@ async function runTool(env, turn, name, input) {
       const row = await createPending(env, turn.conv, { proposedBy: turn.sender.email, action, summary });
       turn.proposed.push(row.number);
       await logAction(env, { conv: turn.conv, number: row.number, actor: turn.sender.email, event: "proposed", action, result: summary });
-      return { number: row.number, summary, card_url: card.url, status: "pending — nothing has changed yet" };
+      return {
+        number: row.number,
+        summary,
+        card_url: card.url,
+        status: turn.scheduled ? `waiting for a person to approve (${notRoutine}); nothing has changed yet` : "pending — nothing has changed yet",
+      };
     }
     case "message_person": {
       return messagePerson(env, {
@@ -295,7 +320,9 @@ function contextBlock(env, turn, pending) {
     `Today: ${weekdayName(turn.today)} (${turn.today}), ${turn.tz}`,
     `Sender: ${turn.sender.displayName || "?"} <${turn.sender.email}>; approver: ${isApprover(env, turn.sender.email) ? "yes" : "no"}`,
     `Numbers this message approves: ${turn.approvedNumbers.length ? turn.approvedNumbers.join(", ") : "none"}`,
-    ...(turn.scheduled ? ["This is a scheduled run, not a person: nobody approves anything in this turn. Propose and message people as the task says."] : []),
+    ...(turn.scheduled
+      ? ["This is a scheduled run, not a person. Call propose_change for every change the routine calls for: routine ones (due date, High priority, the Stage table's owner, a check-in comment) are made right away and come back as done; anything else waits for a person. Never apply_approved here."]
+      : []),
     `Pending proposals in this conversation:\n${p}`,
     "</context>",
   ].join("\n");

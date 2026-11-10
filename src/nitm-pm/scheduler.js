@@ -19,7 +19,8 @@ import { runTurn } from "./brain.js";
 import { findLead, resolvePerson } from "./outreach.js";
 import { postChatMessage } from "./google.js";
 import { toChatFormat } from "./index.js";
-import { ensureTables, expireOld, claimRun, finishRun, getSetting, deleteSetting, appendHistory, loadHistory, logAction, getPerson, linkConversation } from "./store.js";
+import { ensureTables, expireOld, expireScheduledPending, claimRun, finishRun, getSetting, deleteSetting, appendHistory, loadHistory, listPendingRows, logAction, getPerson, linkConversation } from "./store.js";
+import { cardNameOf } from "./approvals.js";
 import { DEFAULT_TZ, todayYmd, addDays, weekdayName } from "./config.js";
 import { summaryCard, stageInfo } from "./cards.js";
 import { DEFAULT_APP_HOSTNAME } from "../access.js";
@@ -55,24 +56,33 @@ function nextWeek(today) {
   return { from: monday, to: addDays(monday, 6) };
 }
 
+// What every summary looks like. One line per card, no proposal numbers, no
+// talk about earlier runs: the card (cards.js) groups the lines by Stage.
+const SHAPE =
+  `Then reply in this shape, as briefly as possible. Skip any part that's empty. No proposal numbers, and don't mention earlier runs or older proposals.\n` +
+  `*Done:* then one line per card: <url|short name>: everything you changed on it, in plain words ("due today, priority High, comment asking Gaby if anything's blocking it").\n` +
+  `*Needs a person:* then one line per card for changes waiting for approval or anything you escalated: <url|short name>: what and why, in a few words.\n` +
+  `*Messaged:* who, and about which cards, in one line.\n` +
+  `If nothing needed doing, one line.`;
+
 export function promptFor(kind, { leadFirst, today }) {
   if (kind === "weekly") {
     const w = nextWeek(today);
     return (
-      `Scheduled run: the weekly routine. Your reply goes to ${leadFirst} as the planning summary, and they approve proposals here.\n` +
+      `Scheduled run: the weekly routine. Your reply goes to ${leadFirst} as the planning summary.\n` +
       `1. Find every card with a Post Date next week (${weekdayName(w.from)} to ${weekdayName(w.to)}, ${w.from} to ${w.to}) that isn't done.\n` +
-      `2. Propose due dates (propose_change type due_date): Post Date minus 8 to 9 days, never on a weekend (use the Friday before), spread so no day piles up. Nothing beyond next week. Skip cards whose due date already fits.\n` +
+      `2. Set due dates (propose_change type due_date): Post Date minus 8 to 9 days, never on a weekend (use the Friday before), spread so no day piles up. Nothing beyond next week. Skip cards whose due date already fits.\n` +
       `3. Check the calendar balance for the next 3 weeks (calendar tool). If anything breaks a rule, send Cass ONE message (message_person, kind calendar) with the problems and suggested swaps. Don't propose Post Date changes.\n` +
-      `Then reply, as briefly as possible: the numbered proposals (one line each) and, in one line, what you sent Cass. If nothing needs doing, one line.`
+      SHAPE
     );
   }
   return (
-    `Scheduled run: the weekday daily check. Your reply goes to ${leadFirst} as the morning summary, and they approve proposals here.\n` +
+    `Scheduled run: the weekday daily check. Your reply goes to ${leadFirst} as the morning summary.\n` +
     `Follow the daily routine: find_cards with overdue=true and with_comments=true, then decide per card.\n` +
-    `- ClickUp changes (due date to today, priority High, fixing an owner who doesn't match the stage, the public check-in comment): propose_change.\n` +
+    `- ClickUp changes the routine calls for (due date to today, priority High, giving the card to the owner the Stage table names, the public check-in comment): propose_change. Routine ones are made right away.\n` +
     `- Check-ins the routine calls for (Post Date within the follow-up window and no active conversation on the card): message_person to the card's owner, kind check_in.\n` +
     `- Escalations (posts within 3 workdays and still stuck after an earlier follow-up, a card in an unused stage, or a workload question): message_person to Avery, kind escalation.\n` +
-    `Then reply, as briefly as possible: the numbered proposals (one line each), one line for who you messaged, one line for cards left alone. If nothing is stuck, one line.`
+    SHAPE
   );
 }
 
@@ -80,10 +90,10 @@ const TITLES = { daily: "Daily check", weekly: "Weekly planning" };
 
 // The summary goes out as a card (same words, laid out like ClickUp). If Chat
 // refuses the card, the plain text goes instead, so the summary always arrives.
-async function postSummary(env, space, { title, subtitle, reply, text, stages }) {
+async function postSummary(env, space, { title, subtitle, reply, text, stages, approveNames }) {
   const pageUrl = `https://${env.APP_HOSTNAME || DEFAULT_APP_HOSTNAME}/flo/`;
   try {
-    return await postChatMessage(env, { space, thread: null, card: summaryCard({ title, subtitle, body: reply, stages, pageUrl }) });
+    return await postChatMessage(env, { space, thread: null, card: summaryCard({ title, subtitle, body: reply, stages, pageUrl, approveNames }) });
   } catch (e) {
     await logAction(env, { conv: null, event: "card_post_failed", action: { space }, result: e.message });
     return postChatMessage(env, { space, thread: null, text });
@@ -100,6 +110,9 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
   }
   const leadFirst = String(lead.name).split(/\s+/)[0];
   const conv = { space: lead.dmSpace, thread: "" };
+  // Earlier days' unapproved suggestions are replaced by today's run.
+  const cleared = await expireScheduledPending(env, conv, new Date(Date.parse(`${today}T05:00:00Z`)).toISOString());
+  if (cleared) await logAction(env, { conv, actor: "flo-scheduled", event: "pending_cleared", action: { kind }, result: `${cleared} unapproved suggestion(s) from earlier runs` });
   const reply = await runTurn(env, {
     conv,
     sender: { email: "flo-scheduled", displayName: `Flo (${TITLES[kind]})` },
@@ -114,8 +127,9 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
   const title = TITLES[kind];
   const text = toChatFormat(`*${title}, ${weekdayName(today)}*\n${reply}`);
   const stages = await stageInfo(env, reply).catch(() => new Map());
+  const approveNames = [...new Set((await listPendingRows(env, conv)).map(cardNameOf))];
   try {
-    await postSummary(env, lead.dmSpace, { title, subtitle: weekdayName(today), reply: toChatFormat(reply), text, stages });
+    await postSummary(env, lead.dmSpace, { title, subtitle: weekdayName(today), reply: toChatFormat(reply), text, stages, approveNames });
     await appendHistory(env, conv, [{ role: "assistant", text }]);
   } catch (e) {
     await logAction(env, { conv, event: "async_post_failed", action: { kind }, result: e.message });
@@ -134,7 +148,7 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
         continue;
       }
       const copy = toChatFormat(`*${TITLES[kind]}, ${weekdayName(today)}* (copy: ${leadFirst} has it too, either of you can approve)\n${reply}`);
-      await postSummary(env, dm, { title, subtitle: `${weekdayName(today)} · copy, ${leadFirst} has it too, either of you can approve`, reply: toChatFormat(reply), text: copy, stages });
+      await postSummary(env, dm, { title, subtitle: `${weekdayName(today)} · copy, ${leadFirst} has it too, either of you can approve`, reply: toChatFormat(reply), text: copy, stages, approveNames });
       await appendHistory(env, { space: dm, thread: "" }, [{ role: "assistant", text: copy }]);
       await linkConversation(env, dm, conv);
       copied.push(String(p.name).split(/\s+/)[0]);
@@ -161,7 +175,8 @@ export async function sendPreview(env, email) {
   const [first, ...rest] = last.text.split("\n");
   const m = first.match(/^\*(Daily check|Weekly planning), ([^*]+)\*/);
   const stages = await stageInfo(env, rest.join("\n")).catch(() => new Map());
-  await postSummary(env, me.dm_space, { title: m[1], subtitle: `${m[2]} · preview`, reply: rest.join("\n"), text: last.text, stages });
+  const approveNames = [...new Set((await listPendingRows(env, { space: lead.dmSpace, thread: "" })).map(cardNameOf))];
+  await postSummary(env, me.dm_space, { title: m[1], subtitle: `${m[2]} · preview`, reply: rest.join("\n"), text: last.text, stages, approveNames });
   return { ok: true, message: "Sent to your chat with Flo." };
 }
 

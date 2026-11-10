@@ -16,10 +16,12 @@ Things it handles:
 
 | Rule | Where |
 | --- | --- |
-| Nothing changes until an approver says yes | `propose_change` only writes a D1 row. `applyAction()` is reached only from `approvals.js`. |
+| In conversations, nothing changes until an approver says yes | `propose_change` only writes a D1 row; `applyAction()` runs from `approvals.js`. |
+| On scheduled runs, Flo makes routine changes itself (Mark, Nov 10) | `routine.js` decides in code: due date today or later (not a weekend, before the Post Date), priority High, the Stage table's owner, at most one comment per card every 2 days. Paper trail: "by Flo's daily routine". Anything else waits for a person. |
+| Each scheduled run starts fresh | Earlier runs' unapproved suggestions are expired (`expireScheduledPending`); people's own proposals are kept. |
 | Approvers are `PM_APPROVERS`, and only numbers they typed in that message | `approvals.js` parses the message. The model's `apply_approved` call is filtered to those numbers. |
 | Anyone `@anurseinthemaking.com` can ask; others are turned away | `index.js` (`PM_ALLOWED_DOMAIN`) |
-| Never a Post Date or a Stage | `validateAction()` whitelists due date, priority, assignee and comment, and refuses any other key. It runs again at apply time, so a tampered row can't get through. |
+| Only known change types | `validateAction()` whitelists due date, priority, assignee, comment, Post Date, Stage and custom fields, and refuses any other key. It runs again at apply time, so a tampered row can't get through. Post Date and Stage only when a person asks. |
 | Only cards on the Production list | The task is re-fetched and its list is checked at propose and apply time. |
 | Every change gets a comment on the card | `applyAction()`: "Due date moved to Fri Nov 6, approved by Avery in Chat." |
 | Everything is logged | `pm_action_log`: proposed, applied, apply_failed, rejected, approval_refused, approval_expired, proposal_refused. |
