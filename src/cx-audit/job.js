@@ -213,7 +213,11 @@ export async function tick(env, { now = Date.now(), client, budgetMs = TICK_BUDG
   const tz = tzOf(env);
 
   const due = scheduledRunDue(await store.getSchedule(env), tz, now);
-  if (due) await createRun(env, { ...due, by: "schedule" }, now);
+  // Look before inserting: an INSERT OR IGNORE that hits the unique index
+  // still burns an id in D1, once per tick for the whole 3-hour window.
+  if (due && !(await d.prepare("SELECT 1 AS x FROM cxa_runs WHERE kind = ? AND day_from = ?").bind(due.kind, due.from).first("x"))) {
+    await createRun(env, { ...due, by: "schedule" }, now);
+  }
 
   const run = await d.prepare("SELECT * FROM cxa_runs WHERE status IN ('queued', 'running') ORDER BY id LIMIT 1").first();
   if (!run) return { idle: true };
