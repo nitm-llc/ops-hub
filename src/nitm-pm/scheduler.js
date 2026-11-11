@@ -79,7 +79,8 @@ export function promptFor(kind, { leadFirst, today }) {
   return (
     `Scheduled run: the weekday daily check. Your reply goes to ${leadFirst} as the morning summary.\n` +
     `Follow the daily routine: find_cards with overdue=true and with_comments=true, then decide per card.\n` +
-    `- ClickUp changes the routine calls for (due date to today, priority High, giving the card to the owner the Stage table names, the public check-in comment): propose_change. Routine ones are made right away.\n` +
+    `- ClickUp changes the routine calls for (due date to today, priority High, the public check-in comment): propose_change. Routine ones are made right away.\n` +
+    `- Never change who a card is assigned to, and don't propose it: people assign cards for reasons you can't see (someone is out, a swap they agreed). If the owner looks wrong for the Stage, leave it alone.\n` +
     `- Check-ins the routine calls for (Post Date within the follow-up window and no active conversation on the card): message_person to the card's owner, kind check_in.\n` +
     `- Escalations (posts within 3 workdays and still stuck after an earlier follow-up, a card in an unused stage, or a workload question): message_person to Avery, kind escalation.\n` +
     SHAPE

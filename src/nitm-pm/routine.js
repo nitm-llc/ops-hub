@@ -7,15 +7,16 @@
 //
 //   due date   today or later, not a weekend, before the card's Post Date
 //   priority   High
-//   owner      the card ends up with exactly the owner the Stage table names
 //   comment    at most one of Flo's own comments per card every 2 days
 //
-// Everything else (Post Date, Stage, other fields, any other reassignment)
+// Owners are never changed on Flo's own (Nov 11): the team assigns people for
+// reasons Flo can't see, like someone being out, and Flo kept undoing that.
+// Everything else (owners, Post Date, Stage, other fields)
 // stays a proposal for a person. Chat requests from people are never routine:
 // this only applies when turn.scheduled is true.
 // ============================================================================
 
-import { expectedOwner, isWeekend } from "./config.js";
+import { isWeekend } from "./config.js";
 
 const COMMENT_GAP_MS = 2 * 24 * 3600 * 1000;
 const MAX_COMMENT = 600;
@@ -44,13 +45,8 @@ export async function routineCheck(env, action, card, today) {
     }
     case "priority":
       return action.priority === "high" ? { routine: true } : { routine: false, why: "only raising to High is routine" };
-    case "assignee": {
-      const owner = expectedOwner(card.stage, card.type);
-      if (!owner) return { routine: false, why: "the Stage table names no owner for this stage" };
-      const after = new Set((card.assignee_ids || []).filter((id) => !action.remove.includes(id)));
-      for (const id of action.add) after.add(id);
-      return after.size === 1 && after.has(owner) ? { routine: true } : { routine: false, why: "not the owner the Stage table names" };
-    }
+    case "assignee":
+      return { routine: false, why: "who a card is assigned to is the team's call" };
     case "comment": {
       if (String(action.text || "").length > MAX_COMMENT) return { routine: false, why: "comment too long" };
       if (await commentedRecently(env, action.task_id)) return { routine: false, why: "Flo already commented on this card in the last 2 days" };

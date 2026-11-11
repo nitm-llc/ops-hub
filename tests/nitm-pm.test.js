@@ -1319,9 +1319,7 @@ test("routineCheck: only the routine steps, checked in code", async () => {
   assert.equal(await ok({ type: "due_date", date: TODAY }), !isWeekend(TODAY));
   assert.equal(await ok({ type: "due_date", date: addDays(TODAY, -1) }), false, "not in the past");
   assert.equal(await ok({ type: "due_date", date: addDays(TODAY, 6) }), false, "not on the Post Date");
-  assert.equal(await ok({ type: "assignee", add: [PEOPLE.gaby], remove: [PEOPLE.tia] }), true, "the Stage table's editor for a Quiz");
-  assert.equal(await ok({ type: "assignee", add: [PEOPLE.diana], remove: [PEOPLE.tia] }), false, "anyone else needs a person");
-  assert.equal(await ok({ type: "assignee", add: [PEOPLE.gaby], remove: [] }), false, "must end with only the owner");
+  assert.equal(await ok({ type: "assignee", add: [PEOPLE.gaby], remove: [PEOPLE.tia] }), false, "owners are never changed on Flo's own, even to the Stage table's owner");
   assert.equal(await ok({ type: "comment", text: "Checking in, anything blocking it?" }), true);
   assert.equal(await ok({ type: "custom_field", field: FIELDS.stage, value: "Posted" }), false);
 });
