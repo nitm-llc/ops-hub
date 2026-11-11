@@ -20,7 +20,8 @@
 import { clickup } from "./clickup.js";
 import { getPerson, logOutreach, countOutreach, appendHistory, logAction } from "./store.js";
 import { postChatMessage } from "./google.js";
-import { todayYmd, DEFAULT_TZ, PEOPLE } from "./config.js";
+import { teamOut, isOut } from "./teamout.js";
+import { todayYmd, DEFAULT_TZ, PEOPLE, weekdayName } from "./config.js";
 
 const MAX_PER_PERSON = 6;
 const MAX_PER_DAY = 40;
@@ -112,6 +113,11 @@ export async function messagePerson(env, { person, text, taskId = null, kind = "
 
   const p = await resolvePerson(env, person);
   if (!p) return { sent: false, message: `I don't know who "${person}" is. Use a first name from ClickUp.` };
+
+  // Out today on the Team Out calendar: leave them alone.
+  const out = await teamOut(env, { tz, today: day }).catch(() => null);
+  const away = out ? isOut(out.away, p, day) : null;
+  if (away) return { sent: false, message: `${away.name} is out (Team Out calendar, through ${weekdayName(away.to)}). Not sent.` };
 
   if (kind !== "digest" && kind !== "approval") {
     if (taskId && (await countOutreach(env, day, { toEmail: p.email, taskId })) > 0) {

@@ -21,6 +21,7 @@ import { postChatMessage } from "./google.js";
 import { toChatFormat } from "./index.js";
 import { ensureTables, expireOld, expireScheduledPending, claimRun, finishRun, getSetting, deleteSetting, appendHistory, loadHistory, listPendingRows, logAction, getPerson, linkConversation } from "./store.js";
 import { cardNameOf } from "./approvals.js";
+import { countToReview } from "./coach.js";
 import { DEFAULT_TZ, todayYmd, addDays, weekdayName } from "./config.js";
 import { summaryCard, stageInfo } from "./cards.js";
 import { DEFAULT_APP_HOSTNAME } from "../access.js";
@@ -100,8 +101,9 @@ const TITLES = { daily: "Daily check", weekly: "Weekly planning" };
 // refuses the card, the plain text goes instead, so the summary always arrives.
 async function postSummary(env, space, { title, subtitle, reply, text, stages, approveNames }) {
   const pageUrl = `https://${env.APP_HOSTNAME || DEFAULT_APP_HOSTNAME}/flo/`;
+  const coach = { url: `${pageUrl}coach/`, count: await countToReview(env).catch(() => 0) };
   try {
-    return await postChatMessage(env, { space, thread: null, card: summaryCard({ title, subtitle, body: reply, stages, pageUrl, approveNames }) });
+    return await postChatMessage(env, { space, thread: null, card: summaryCard({ title, subtitle, body: reply, stages, pageUrl, approveNames, coach }) });
   } catch (e) {
     await logAction(env, { conv: null, event: "card_post_failed", action: { space }, result: e.message });
     return postChatMessage(env, { space, thread: null, text });

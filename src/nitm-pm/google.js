@@ -158,7 +158,7 @@ export async function verifyChatRequest(env, request, endpointUrl) {
 // ---------------------------------------------------------------------------
 // Service-account access token (chat.bot scope), RS256-signed with WebCrypto.
 // ---------------------------------------------------------------------------
-let tokenCache = null; // { token, exp, email }
+let tokenCache = null; // { [scope]: { token, exp, email } }
 
 function pemToPkcs8(pem) {
   const body = String(pem)
@@ -184,9 +184,9 @@ export function parseServiceAccount(env) {
   return sa;
 }
 
-export async function signServiceAccountJwt(sa, nowSec = Math.floor(Date.now() / 1000)) {
+export async function signServiceAccountJwt(sa, nowSec = Math.floor(Date.now() / 1000), scope = CHAT_SCOPE) {
   const header = { alg: "RS256", typ: "JWT", ...(sa.private_key_id ? { kid: sa.private_key_id } : {}) };
-  const claims = { iss: sa.client_email, sub: sa.client_email, scope: CHAT_SCOPE, aud: TOKEN_URL, iat: nowSec, exp: nowSec + 3600 };
+  const claims = { iss: sa.client_email, sub: sa.client_email, scope, aud: TOKEN_URL, iat: nowSec, exp: nowSec + 3600 };
   const input = `${strToB64url(JSON.stringify(header))}.${strToB64url(JSON.stringify(claims))}`;
   const key = await crypto.subtle.importKey(
     "pkcs8",
@@ -199,10 +199,15 @@ export async function signServiceAccountJwt(sa, nowSec = Math.floor(Date.now() /
   return `${input}.${bytesToB64url(new Uint8Array(sig))}`;
 }
 
-export async function getChatAccessToken(env) {
+export const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+export const getChatAccessToken = (env) => getAccessToken(env, CHAT_SCOPE);
+
+// One cached token per scope (Chat for posting, Calendar for the Team Out calendar).
+export async function getAccessToken(env, scope) {
   const sa = parseServiceAccount(env);
-  if (tokenCache && tokenCache.email === sa.client_email && tokenCache.exp - 60 > Date.now() / 1000) return tokenCache.token;
-  const assertion = await signServiceAccountJwt(sa);
+  const hit = tokenCache?.[scope];
+  if (hit && hit.email === sa.client_email && hit.exp - 60 > Date.now() / 1000) return hit.token;
+  const assertion = await signServiceAccountJwt(sa, Math.floor(Date.now() / 1000), scope);
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -211,8 +216,8 @@ export async function getChatAccessToken(env) {
   const text = await res.text();
   if (!res.ok) throw new Error(`Google token ${res.status}: ${text.slice(0, 200)}`);
   const body = JSON.parse(text);
-  tokenCache = { token: body.access_token, exp: Date.now() / 1000 + Number(body.expires_in || 3600), email: sa.client_email };
-  return tokenCache.token;
+  tokenCache = { ...(tokenCache || {}), [scope]: { token: body.access_token, exp: Date.now() / 1000 + Number(body.expires_in || 3600), email: sa.client_email } };
+  return tokenCache[scope].token;
 }
 export const _clearTokenCache = () => {
   tokenCache = null;

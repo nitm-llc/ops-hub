@@ -8821,6 +8821,7 @@ export default {
     if (path === "/clickup-automation") return Response.redirect(url.origin + "/clickup-automation/", 301);
     if (path === "/tiktok-router") return Response.redirect(url.origin + "/tiktok-router/", 301);
     if (path === "/flo") return Response.redirect(url.origin + "/flo/", 301);
+    if (path === "/flo/coach") return Response.redirect(url.origin + "/flo/coach/", 301);
     if (path === "/cx-audit") return Response.redirect(url.origin + "/cx-audit/", 301);
     // ===== LANDING PAGE =====
     if (path === "/" || path === "") { return new Response(landingPageHTML(), { headers: { "Content-Type": "text/html;charset=UTF-8", "X-Robots-Tag": "noindex, nofollow" } }); }

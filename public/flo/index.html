@@ -112,14 +112,39 @@
 <script defer src="/shared/nav.js"></script>
 <div class="wrap">
   <h1>Flo</h1>
-  <p class="sub">Flo is the marketing team's project-management helper in Google Chat. People DM it or @mention it to ask what's due, what's stuck and who has what. It proposes changes, and nothing in ClickUp changes until an approver says yes.</p>
+  <p class="sub">Flo is the marketing team's project-management helper in Google Chat. People DM it or @mention it to ask what's due, what's stuck and who has what. Changes people ask for need an approver's yes. Its morning runs are in practice (shadow) mode: they change nothing and log what Flo would have done, for the team to coach.</p>
   <div class="status" id="status" aria-live="polite"><span><span class="dot"></span>Checking…</span></div>
 
   <div id="error" class="banner bad hide" role="alert"></div>
   <div id="loading" class="card muted">Loading…</div>
 
   <div id="app" class="hide">
+    <a id="coachBanner" class="banner info hide" href="/flo/coach/" style="display:flex;justify-content:space-between;align-items:center;gap:10px;text-decoration:none;color:var(--text)">
+      <span><b>Coach Flo</b> <span id="coachText"></span></span><span style="font-weight:700;color:var(--accent)">Open →</span>
+    </a>
     <div class="stats" id="stats"></div>
+
+    <!-- Who's out -->
+    <section class="card" aria-labelledby="h-out">
+      <div class="card-head">
+        <div>
+          <h2 id="h-out">Who's out</h2>
+          <div class="tiny muted" style="margin-top:4px">From the shared <b>Team Out</b> Google Calendar. Flo leaves people alone while they're out: no messages, no chasing their cards.</div>
+        </div>
+      </div>
+      <div id="outList" style="margin-top:12px"></div>
+      <div id="outSetup" class="hide" style="margin-top:14px">
+        <ol class="tiny" style="padding-left:18px;line-height:1.7;color:var(--text2)">
+          <li>In Google Calendar, create a calendar called <b>Team Out</b> (Other calendars → + → Create new calendar).</li>
+          <li>In its settings, under <i>Share with specific people</i>, add <code id="saEmail">Flo's service account</code> with <b>See all event details</b>. Share it with the team too, so they can add themselves.</li>
+          <li>Under <i>Integrate calendar</i>, copy the <b>Calendar ID</b> and paste it here.</li>
+        </ol>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <input type="text" id="calId" placeholder="…@group.calendar.google.com" style="flex:1;min-width:220px">
+          <button id="saveCal">Save</button>
+        </div>
+      </div>
+    </section>
 
     <!-- Reaching people -->
     <section class="card" aria-labelledby="h-reach">
@@ -397,6 +422,27 @@ function renderReach() {
     ? o.recent.map((m) => `<li><span class="when">${esc(relTime(m.at))}</span><span class="what"><span class="ev ${m.status === 'sent' ? 'applied' : m.status === 'fallback' ? 'approval_refused' : 'apply_failed'}">${esc(statusLabel[m.status] || m.status)}</span> to <b>${esc(firstName(m.to_email))}</b>${m.status === 'fallback' ? ` via ${esc(m.delivered_to)}` : ''}${m.task_id ? ` · <a href="https://app.clickup.com/t/${encodeURIComponent(m.task_id)}" target="_blank" rel="noopener">card</a>` : ''}<div class="who">${inline(m.text)}</div></span></li>`).join('')
     : '<li class="empty" style="border:0">Nothing sent yet.</li>';
 }
+function renderOut() {
+  const t = data.team_out || {};
+  const n = data.coach?.to_review || 0;
+  $('coachBanner').classList.toggle('hide', !n);
+  $('coachText').textContent = n ? `· ${n} thing${n === 1 ? '' : 's'} Flo wanted to do, waiting for your Right / Not quite` : '';
+  $('saEmail').textContent = t.share_with || "Flo's service account (set GOOGLE_CHAT_SA_KEY)";
+  const day = (ymd) => new Date(ymd + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  let html;
+  if (!t.configured) html = '<div class="muted tiny">Not connected yet. Three steps below.</div>';
+  else if (t.error) html = `<div class="banner bad" style="margin-top:0">Couldn't read the calendar: ${esc(t.error)}</div>`;
+  else if (!t.away?.length) html = '<div class="muted" style="font-size:14px">Nobody is out in the next two weeks.</div>';
+  else html = `<div class="chips" style="margin-top:0">${t.away.map((a) => `<span class="chip"><b>${esc(a.name)}</b>&nbsp;${esc(a.from === a.to ? day(a.from) : `${day(a.from)} – ${day(a.to)}`)}</span>`).join('')}</div>`;
+  if (t.configured && data.can_edit) html += `<div class="tiny muted" style="margin-top:10px">Calendar: <code>${esc(t.calendar_id)}</code> · <button class="link tiny" id="changeCal">Change</button></div>`;
+  $('outList').innerHTML = html;
+  $('outSetup').classList.toggle('hide', !(data.can_edit && !t.configured));
+  if ($('changeCal')) $('changeCal').onclick = () => { $('outSetup').classList.remove('hide'); $('calId').value = t.calendar_id || ''; $('calId').focus(); };
+  $('saveCal').onclick = async () => {
+    try { await api('settings', { method: 'PUT', body: { out_calendar_id: $('calId').value.trim() } }); toast('Saved. Flo will check the Team Out calendar from now on.'); await refresh(); }
+    catch (err) { toast(`Not saved: ${err.message}`); }
+  };
+}
 function renderSetup() {
   const c = data.configured;
   const yes = (ok, label) => `<span class="dot ${ok ? 'ok' : 'bad'}" style="display:inline-block;margin-right:6px"></span>${label}`;
@@ -494,7 +540,7 @@ function exitVersion() {
 
 async function refresh() {
   data = await api('overview');
-  renderStatus(); renderStats(); renderReach(); renderInstructions(); renderRules(); renderPending(); renderSetup();
+  renderStatus(); renderStats(); renderOut(); renderReach(); renderInstructions(); renderRules(); renderPending(); renderSetup();
   await Promise.all([loadLog(), loadHistory()]);
 }
 

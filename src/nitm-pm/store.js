@@ -97,6 +97,23 @@ export async function ensureTables(env) {
        action  TEXT,
        result  TEXT
      )`,
+    `CREATE TABLE IF NOT EXISTS pm_coaching (
+       id      INTEGER PRIMARY KEY AUTOINCREMENT,
+       log_id  INTEGER NOT NULL UNIQUE,
+       verdict TEXT NOT NULL,
+       note    TEXT,
+       by      TEXT,
+       at      TEXT NOT NULL
+     )`,
+    `CREATE TABLE IF NOT EXISTS pm_lessons (
+       id            INTEGER PRIMARY KEY AUTOINCREMENT,
+       text          TEXT NOT NULL,
+       by            TEXT,
+       at            TEXT NOT NULL,
+       about         TEXT,
+       source_log_id INTEGER,
+       active        INTEGER NOT NULL DEFAULT 1
+     )`,
   ];
   // One round trip: run serially, 13 statements to remote D1 on a fresh
   // isolate took seconds out of Chat's 30-second reply window.

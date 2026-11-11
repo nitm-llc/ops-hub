@@ -10,6 +10,8 @@
 // ============================================================================
 
 import { routineCheck } from "./routine.js";
+import { teamOut, outLine } from "./teamout.js";
+import { lessonsForPrompt } from "./coach.js";
 import INSTRUCTIONS from "./ai-pm-instructions.md";
 import { findCards, getCard, calendar, prepareAction, describeAction, loadListTask, readCard, applyAction, RefusedError } from "./clickup.js";
 import { createPending, listPending, logAction, loadInstructions } from "./store.js";
@@ -38,6 +40,7 @@ Ground rules, enforced by the tools as well:
 - Calendar balance: use the calendar tool, apply the rules, and suggest swaps for Cass in words. Only propose the swap as changes if the person asks you to make it.
 - Reaching people: message_person sends someone a Google Chat DM (by first name). Use it for the routine's check-ins with a card's owner (Post Date close, daily step 5), escalations to Avery (step 6), calendar suggestions for Cass, and when a person asks you to tell or ask someone something. One card per message: friendly, 1 to 3 short lines, with the card link and the ask. If they can't be reached directly, the tool sends it to Avery and Mark to pass on, so just report what it says. Don't message the person you're already talking to. The ClickUp comment the routine asks for is still a propose_change.
 - If the sender isn't an approver, their proposals are sent to an approver automatically; tell them who it went to.
+- People who are out (the "Out" line in <context>): don't message, chase, comment at or assign them while they're out. Their cards aren't stuck, they're waiting; say "waiting, Gaby's out until Mon" instead of flagging them.
 - Assignees: don't suggest or change who a card is assigned to unless a person asks for that exact change. The team assigns people for reasons you can't see.
 - You can't change your own routine or rules. If someone asks you to work differently ("stop reassigning people"), don't promise it: say you've passed it to Mark, and message_person Mark with their request in one line.
 - Things you can't do (Instagram, Metricool): say so in a line.
@@ -64,7 +67,10 @@ Formatting (Google Chat, not Markdown):
 // default and what "Reset" goes back to. GUARDRAILS are code-only on purpose.
 export const DEFAULT_INSTRUCTIONS = INSTRUCTIONS.trim();
 export { GUARDRAILS };
-export const buildSystemPrompt = (instructions) => `${String(instructions || DEFAULT_INSTRUCTIONS).trim()}\n\n${GUARDRAILS}`;
+// Instructions, then what the team has taught Flo (coach.js), then the
+// guardrails last so they still override both.
+export const buildSystemPrompt = (instructions, lessons = "") =>
+  `${String(instructions || DEFAULT_INSTRUCTIONS).trim()}\n\n${lessons ? `${lessons.trim()}\n\n` : ""}${GUARDRAILS}`;
 export const SYSTEM_PROMPT = buildSystemPrompt(DEFAULT_INSTRUCTIONS);
 
 // Stable order: changing this list invalidates the prompt cache.
@@ -343,6 +349,7 @@ function contextBlock(env, turn, pending) {
   return [
     "<context>",
     `Today: ${weekdayName(turn.today)} (${turn.today}), ${turn.tz}`,
+    ...(turn.out?.configured ? [`Out (Team Out calendar): ${turn.out.error ? `couldn't read it (${turn.out.error})` : outLine(turn.out.away, turn.today)}`] : []),
     `Sender: ${turn.sender.displayName || "?"} <${turn.sender.email}>; approver: ${isApprover(env, turn.sender.email) ? "yes" : "no"}`,
     `Numbers this message approves: ${turn.approvedNumbers.length ? turn.approvedNumbers.join(", ") : "none"}`,
     ...(turn.scheduled
@@ -375,6 +382,7 @@ function historyToMessages(history) {
 export async function runTurn(env, turn) {
   turn.today = turn.today || todayYmd(turn.tz);
   turn.proposed = [];
+  turn.out = await teamOut(env, { tz: turn.tz, today: turn.today }).catch(() => null);
   let pending;
   try {
     pending = await listPending(env, turn.conv);
@@ -384,7 +392,11 @@ export async function runTurn(env, turn) {
 
   let system = SYSTEM_PROMPT;
   try {
-    system = buildSystemPrompt((await loadInstructions(env, DEFAULT_INSTRUCTIONS)).text);
+    const lessons = await lessonsForPrompt(env).catch((e) => {
+      console.error("nitm-pm: lessons load failed:", e);
+      return "";
+    });
+    system = buildSystemPrompt((await loadInstructions(env, DEFAULT_INSTRUCTIONS)).text, lessons);
   } catch (e) {
     console.error("nitm-pm: instructions load failed, using the version in code:", e);
   }

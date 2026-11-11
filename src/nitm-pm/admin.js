@@ -29,7 +29,12 @@ import {
   listRuns,
   getSetting,
   setSetting,
+  deleteSetting,
 } from "./store.js";
+
+import { toReview, countToReview, coachStats, recordVerdict, addLesson, listLessons, setLessonActive, MAX_NOTE } from "./coach.js";
+import { teamOut, _clearTeamOutCache } from "./teamout.js";
+import { parseServiceAccount } from "./google.js";
 
 export const API_PREFIX = "/flo/api/";
 const MIN_CHARS = 200;
@@ -45,6 +50,19 @@ function parseJson(s) {
   } catch {
     return null;
   }
+}
+
+// The Team Out calendar: its id, who Flo shares it with, and who's out.
+async function teamOutInfo(env) {
+  let saEmail = null;
+  try {
+    saEmail = parseServiceAccount(env).client_email;
+  } catch {
+    // no key: the page says so in Setup
+  }
+  const calendarId = await getSetting(env, "out_calendar_id");
+  const t = await teamOut(env).catch((e) => ({ configured: !!calendarId, error: e.message, away: [] }));
+  return { calendar_id: calendarId, share_with: saEmail, ...t };
 }
 
 // Activity rows for the page: friendly label + the card link when there is one.
@@ -176,6 +194,8 @@ async function overview(env, viewer) {
       recent: await listOutreach(env, 25),
     },
     stats: { ...(stats || {}), last_question_at: lastQuestion?.at || null },
+    team_out: await teamOutInfo(env),
+    coach: { to_review: await countToReview(env).catch(() => 0) },
   };
 }
 
@@ -228,6 +248,14 @@ export async function handleFloApi(request, env, path) {
       const denied = mustEdit();
       if (denied) return denied;
       const body = await request.json().catch(() => null);
+      if (body && "out_calendar_id" in body) {
+        const id = String(body.out_calendar_id || "").trim();
+        if (id && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) return json({ error: "That doesn't look like a Google Calendar ID (it looks like an email address, often ending in @group.calendar.google.com)." }, 400);
+        if (id) await setSetting(env, "out_calendar_id", id, viewer);
+        else await deleteSetting(env, "out_calendar_id");
+        _clearTeamOutCache();
+        return json({ ok: true, team_out: await teamOutInfo(env) });
+      }
       if (typeof body?.shadow === "boolean") {
         await setSetting(env, "auto_mode", body.shadow ? "shadow" : "live", viewer);
         return json({ ok: true, shadow: body.shadow });
@@ -251,6 +279,45 @@ export async function handleFloApi(request, env, path) {
     if (sub === "preview" && method === "POST") {
       const r = await sendPreview(env, viewer);
       return json(r, r.ok ? 200 : 400);
+    }
+
+    // ---- Coaching (/flo/coach/) ------------------------------------------
+    if (sub === "coach" && method === "GET") {
+      return json({
+        viewer,
+        can_coach: isApprover(env, viewer),
+        items: await toReview(env, { tz: env.PM_TIMEZONE || DEFAULT_TZ }),
+        stats: await coachStats(env),
+        lessons: await listLessons(env, { includeOff: true }),
+        shadow: (await getSetting(env, "auto_mode", "shadow")) !== "live",
+      });
+    }
+    if (sub === "coach" && method === "POST") {
+      if (!isApprover(env, viewer)) return json({ error: "Only approvers can coach Flo. Ask Mark." }, 403);
+      const body = await request.json().catch(() => null);
+      if (String(body?.note || "").length > MAX_NOTE) return json({ error: `Keep it under ${MAX_NOTE} characters.` }, 400);
+      try {
+        return json(await recordVerdict(env, { logId: body?.id, verdict: body?.verdict, note: body?.note, teach: body?.teach !== false, by: viewer }));
+      } catch (e) {
+        return json({ error: e.message }, 400);
+      }
+    }
+    if (sub === "lessons" && method === "POST") {
+      if (!isApprover(env, viewer)) return json({ error: "Only approvers can teach Flo. Ask Mark." }, 403);
+      const body = await request.json().catch(() => null);
+      if (String(body?.text || "").length > MAX_NOTE) return json({ error: `Keep it under ${MAX_NOTE} characters.` }, 400);
+      try {
+        return json({ ok: true, lesson: await addLesson(env, { text: body?.text, by: viewer }) });
+      } catch (e) {
+        return json({ error: e.message }, 400);
+      }
+    }
+    if (sub === "lessons" && method === "PUT") {
+      if (!isApprover(env, viewer)) return json({ error: "Only approvers can change what Flo has learned." }, 403);
+      const body = await request.json().catch(() => null);
+      if (!Number(body?.id) || typeof body?.active !== "boolean") return json({ error: "Send {id, active}." }, 400);
+      await setLessonActive(env, body.id, body.active);
+      return json({ ok: true });
     }
 
     if (sub === "history" && method === "GET") {

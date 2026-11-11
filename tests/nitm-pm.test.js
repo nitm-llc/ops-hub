@@ -1395,3 +1395,148 @@ test("an approver can switch shadow mode off on the Flo page; others can't", asy
   assert.equal((await floApi("settings", { method: "PUT", body: { shadow: false } })).status, 200);
   assert.equal((await floApi("overview")).json.outreach.shadow, false);
 });
+
+// ===========================================================================
+// Team Out calendar + coaching
+// ===========================================================================
+import { teamOut, isOut, outLine, _clearTeamOutCache } from "../src/nitm-pm/teamout.js";
+
+function withCalendar(items, { status = 200 } = {}) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, o = {}) => {
+    if (String(u).startsWith("https://www.googleapis.com/calendar/v3/calendars/")) {
+      calls.push({ url: String(u), method: "GET" });
+      return new Response(JSON.stringify(status === 200 ? { items } : { error: { message: "Not Found" } }), { status });
+    }
+    return realFetch(u, o);
+  };
+}
+
+test("Team Out calendar: names in titles, creators, all-day ranges", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  _clearTeamOutCache();
+  assert.deepEqual(await teamOut(env, { today: TODAY }), { configured: false, away: [] }, "nothing until a calendar is saved");
+  await sayHi("gaby@anurseinthemaking.com", "Gabriela Eisenbraun");
+  await setSetting(env, "out_calendar_id", "teamout@group.calendar.google.com", "test");
+  withCalendar([
+    { summary: "Gaby out", start: { date: TODAY }, end: { date: addDays(TODAY, 3) } },
+    { summary: "PTO", creator: { email: "gaby@anurseinthemaking.com" }, start: { date: addDays(TODAY, 5) }, end: { date: addDays(TODAY, 6) } },
+    { summary: "Diana - dentist", start: { dateTime: `${addDays(TODAY, 1)}T15:00:00Z` }, end: { dateTime: `${addDays(TODAY, 1)}T16:00:00Z` } },
+    { summary: "Team lunch", start: { date: TODAY }, end: { date: addDays(TODAY, 1) } },
+    { summary: "Old", start: { date: addDays(TODAY, -5) }, end: { date: addDays(TODAY, -3) } },
+  ]);
+  _clearTeamOutCache();
+  const t = await teamOut(env, { today: TODAY });
+  assert.equal(t.configured, true);
+  assert.deepEqual(t.away.map((a) => [a.name, a.from, a.to]), [
+    ["Gaby", TODAY, addDays(TODAY, 2)],
+    ["Diana", addDays(TODAY, 1), addDays(TODAY, 1)],
+    ["Gaby", addDays(TODAY, 5), addDays(TODAY, 5)],
+  ]);
+  assert.ok(isOut(t.away, { name: "Gabriela Eisenbraun" }, TODAY), "by first name / nickname");
+  assert.ok(isOut(t.away, { email: "gaby@anurseinthemaking.com" }, addDays(TODAY, 1)), "by email");
+  assert.equal(isOut(t.away, { name: "Diana" }, TODAY), undefined);
+  assert.match(outLine(t.away, TODAY), /^Gaby \(today through /);
+});
+
+test("Flo doesn't message someone who's out, and its context says who's out", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi("gaby@anurseinthemaking.com", "Gabriela Eisenbraun");
+  await setSetting(env, "out_calendar_id", "teamout@group.calendar.google.com", "test");
+  withCalendar([{ summary: "Gaby out", start: { date: TODAY }, end: { date: addDays(TODAY, 2) } }]);
+  _clearTeamOutCache();
+  claudeScript = [
+    { reply: toolUse("message_person", { person: "Gaby", text: "Peds quiz posts soon. Anything blocking it?", task_id: "peds-quiz", kind: "check_in" }) },
+    { reply: say("Gaby's out, so I didn't message her.") },
+  ];
+  await send(addonMessage("ask gaby about the peds quiz"));
+  assert.equal(postsTo(dmOf("gaby@anurseinthemaking.com")).length, 0);
+  const req = claudeRequests.at(-1);
+  assert.match(JSON.stringify(req.messages), /Out \(Team Out calendar\): Gaby \(today/);
+  const toolResult = JSON.stringify(req.messages.at(-1).content);
+  assert.match(toolResult, /Gaby is out \(Team Out calendar/);
+});
+
+test("a calendar that isn't shared with Flo shows a clear error, not a crash", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await setSetting(env, "out_calendar_id", "teamout@group.calendar.google.com", "test");
+  withCalendar([], { status: 404 });
+  _clearTeamOutCache();
+  const t = await teamOut(env, { today: TODAY });
+  assert.match(t.error, /shared with Flo's service account/);
+  const ov = (await floApi("overview")).json.team_out;
+  assert.equal(ov.share_with, "nitm-pm@nitm-pm.iam.gserviceaccount.com");
+});
+
+test("the Flo page saves the Team Out calendar id (approvers only)", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  withCalendar([]);
+  assert.equal((await floApi("settings", { method: "PUT", body: { out_calendar_id: "x@group.calendar.google.com" }, as: DIANA.email })).status, 403);
+  assert.equal((await floApi("settings", { method: "PUT", body: { out_calendar_id: "not an id" } })).status, 400);
+  const ok = await floApi("settings", { method: "PUT", body: { out_calendar_id: "x@group.calendar.google.com" } });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.team_out.calendar_id, "x@group.calendar.google.com");
+  assert.equal(ok.json.team_out.configured, true);
+});
+
+test("coaching: review what Flo would have done, and what's typed becomes a lesson Flo reads", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  claudeScript = [
+    { reply: toolUse("propose_change", { type: "assignee", task_id: "peds-quiz", add: ["diana"], remove: ["gaby"] }) },
+    { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) },
+    { reply: say("*Heads-up:*\nNothing urgent.") },
+  ];
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  const morning = postsTo(dmOf(AVERY.email)).at(-1).body.cardsV2[0].card;
+  assert.match(JSON.stringify(morning), /Coach Flo · 2 to review/, "the morning card links to coaching");
+
+  const c = (await floApi("coach")).json;
+  assert.equal(c.can_coach, true);
+  assert.equal(c.items.length, 2);
+  const reassign = c.items.find((i) => i.kind === "assignee");
+  assert.equal(reassign.card.name, "Peds Infectious Diseases Quiz");
+  assert.equal(reassign.card.stage, "Ready To Edit / Design");
+  assert.equal(reassign.card.stage_color, "#ffc53d");
+  assert.equal(reassign.would, "would have asked a person first");
+
+  // Diana (not an approver) can look but not coach.
+  assert.equal((await floApi("coach", { as: DIANA.email })).json.can_coach, false);
+  assert.equal((await floApi("coach", { method: "POST", body: { id: reassign.id, verdict: "wrong" }, as: DIANA.email })).status, 403);
+
+  const TIA = "tia@anurseinthemaking.com";
+  env.PM_APPROVERS += "," + TIA;
+  const saved = await floApi("coach", { method: "POST", body: { id: reassign.id, verdict: "wrong", note: "When Gaby is out, Tia edits. Don't move cards to Diana." }, as: TIA });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.json.lesson.text, "When Gaby is out, Tia edits. Don't move cards to Diana.");
+  const prio = c.items.find((i) => i.kind === "priority");
+  await floApi("coach", { method: "POST", body: { id: prio.id, verdict: "right" }, as: TIA });
+
+  const after = (await floApi("coach")).json;
+  assert.equal(after.items.length, 0, "reviewed items leave the queue");
+  assert.deepEqual(after.stats.map((s) => [s.kind, s.right, s.wrong]).sort(), [["assignee", 0, 1], ["priority", 1, 0]]);
+  assert.equal(after.lessons[0].by, TIA);
+
+  // Flo's next message carries the lesson in its instructions.
+  claudeScript = [{ reply: say("ok") }];
+  await send(addonMessage("what's stuck?"));
+  const sys = JSON.stringify(claudeRequests.at(-1).system);
+  assert.match(sys, /What the team has taught you/);
+  assert.match(sys, /When Gaby is out, Tia edits\. Don't move cards to Diana\. \(Tia, about Flo wanting to: On \*Peds Infectious Diseases Quiz\*/);
+  assert.ok(sys.indexOf("What the team has taught you") < sys.indexOf("How you work in Google Chat"), "guardrails still come last");
+
+  // Turning a lesson off takes it out of Flo's instructions.
+  await floApi("lessons", { method: "PUT", body: { id: after.lessons[0].id, active: false }, as: TIA });
+  claudeScript = [{ reply: say("ok") }];
+  await send(addonMessage("and now?"));
+  assert.doesNotMatch(JSON.stringify(claudeRequests.at(-1).system), /When Gaby is out/);
+});
+
+test("approvers can teach Flo directly on the coach page", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  assert.equal((await floApi("lessons", { method: "POST", body: { text: "x" }, as: DIANA.email })).status, 403);
+  assert.equal((await floApi("lessons", { method: "POST", body: { text: "   " } })).status, 400);
+  const r = await floApi("lessons", { method: "POST", body: { text: "Kristine films on Tuesdays and Thursdays only." } });
+  assert.equal(r.status, 200);
+  assert.equal((await floApi("coach")).json.lessons[0].text, "Kristine films on Tuesdays and Thursdays only.");
+});

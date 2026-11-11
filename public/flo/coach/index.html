@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Coach Flo — NITM Ops</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* nav.js owns the neutral palette (--bg/--panel/--surface/--border/--text/...). */
+  :root {
+    --accent: #0f766e; --accent-text: #ffffff; --accent-bg: #e6f4f2;
+    --red: #dc2626; --red-bg: #fee2e2; --amber: #b45309; --amber-bg: #fef3c7;
+    --green: #15803d; --green-bg: #dcfce7;
+  }
+  :root[data-theme="dark"] {
+    --accent: #5eead4; --accent-text: #042f2b; --accent-bg: #10302c;
+    --red: #f87171; --red-bg: #431a1a; --amber: #fbbf24; --amber-bg: #422f06;
+    --green: #4ade80; --green-bg: #10331c;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'DM Sans', system-ui, -apple-system, sans-serif; padding-bottom: 90px; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 22px 16px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.3px; }
+  h2 { font-size: 17px; font-weight: 700; }
+  .sub { font-size: 15px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+  .tiny { font-size: 12.5px; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .hide { display: none !important; }
+
+  button { padding: 10px 16px; border-radius: 12px; border: 0; background: var(--accent); color: var(--accent-text);
+           font-size: 15px; font-weight: 600; font-family: inherit; cursor: pointer; min-height: 44px; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--text2); border: 1px solid var(--border2); }
+  button.link { background: none; color: var(--accent); padding: 4px 2px; min-height: 0; font-weight: 600; font-size: 14px; }
+  button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  textarea {
+    font: inherit; font-size: 16px; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border2); border-radius: 12px; padding: 12px; width: 100%; min-height: 96px; resize: vertical; line-height: 1.45;
+  }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 18px; margin-top: 16px; }
+  .banner { border-radius: 12px; padding: 12px 15px; font-size: 14px; margin-top: 16px; line-height: 1.45; }
+  .banner.bad { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+  .banner.info { background: var(--accent-bg); color: var(--text); border: 1px solid var(--border2); }
+
+  /* Progress */
+  .progress { display: flex; align-items: center; gap: 12px; margin-top: 18px; font-size: 13.5px; color: var(--muted); }
+  .bar { flex: 1; height: 6px; border-radius: 99px; background: var(--surface); overflow: hidden; border: 1px solid var(--border); }
+  .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .25s ease; }
+
+  /* The item being reviewed */
+  .cardline { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13.5px; color: var(--text2); }
+  .cardname { font-size: 17px; font-weight: 700; color: var(--text); text-decoration: none; }
+  .cardname:hover { text-decoration: underline; }
+  .stage { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 3px 9px 3px 7px;
+           border-radius: 99px; background: var(--surface); border: 1px solid var(--border2); color: var(--text2); }
+  .stage i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+  .wanted { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); }
+  .what { font-size: 19px; line-height: 1.4; font-weight: 600; margin-top: 6px; }
+  .how { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); }
+  .kind { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: var(--accent-bg); color: var(--accent); }
+
+  .verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+  .verdicts button { min-height: 54px; font-size: 16px; }
+  button.right { background: var(--green); color: #fff; }
+  button.wrong { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
+  :root[data-theme="dark"] button.right { color: #052e16; }
+  .skiprow { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+  .keys { font-size: 12px; color: var(--faint, var(--muted)); }
+  @media (max-width: 560px) { .keys { display: none; } }
+
+  .teach { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .teach label.q { display: block; font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .teach .hint { font-size: 13.5px; color: var(--muted); margin-bottom: 10px; line-height: 1.45; }
+  .teach .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  .check { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; color: var(--text2); cursor: pointer; }
+  .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+  .done { text-align: center; padding: 34px 18px; }
+  .done .big { font-size: 22px; font-weight: 700; }
+
+  /* Score */
+  .score { display: grid; gap: 10px; margin-top: 12px; }
+  .score .line { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 13.5px; align-items: center; }
+  .score .track { grid-column: 1 / -1; height: 8px; border-radius: 99px; background: var(--red-bg); overflow: hidden; }
+  .score .track > div { height: 100%; background: var(--green); }
+
+  /* Lessons */
+  .lessons { list-style: none; padding: 0; margin-top: 10px; }
+  .lessons li { padding: 12px 0; border-top: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-start; }
+  .lessons li:first-child { border-top: 0; }
+  .lessons .t { font-size: 15px; line-height: 1.45; }
+  .lessons .by { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .lessons li.off .t { color: var(--muted); text-decoration: line-through; }
+  .lessons .grow { flex: 1; min-width: 0; }
+
+  .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--text); color: var(--bg);
+           padding: 11px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 10;
+           display: flex; gap: 12px; align-items: center; max-width: calc(100% - 32px); }
+  .toast button { background: none; color: inherit; text-decoration: underline; padding: 0; min-height: 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<script defer src="/shared/nav.js"></script>
+<div class="wrap">
+  <h1>Coach Flo</h1>
+  <p class="sub">Flo is in practice mode: it doesn't change anything yet. Here's what it <b>wanted</b> to do. Tell it if that's how things really work, and in your own words what it's missing. It remembers what you write.</p>
+
+  <div id="error" class="banner bad hide" role="alert"></div>
+  <div id="readonly" class="banner info hide">You can look, but only approvers can coach Flo. Ask Mark to add you.</div>
+  <div id="loading" class="card muted">Loading…</div>
+
+  <div id="app" class="hide">
+    <div class="progress" id="progressRow"><span id="progressText"></span><div class="bar" aria-hidden="true"><div id="progressBar"></div></div></div>
+
+    <!-- One item at a time -->
+    <section class="card" id="item" aria-live="polite">
+      <div class="cardline" id="cardline"></div>
+      <div class="meta" id="meta"></div>
+      <div class="wanted">
+        <div class="eyebrow">Flo wanted to</div>
+        <div class="what" id="what"></div>
+        <div class="how" id="how"></div>
+      </div>
+      <div id="verdictBox">
+        <div class="verdicts">
+          <button class="right" id="btnRight">Right</button>
+          <button class="wrong" id="btnWrong">Not quite</button>
+        </div>
+        <div class="skiprow">
+          <button class="link" id="btnSkip">Not sure, skip</button>
+          <span class="keys">Keys: R right · N not quite · S skip</span>
+        </div>
+      </div>
+      <div class="teach hide" id="teachBox">
+        <label class="q" for="note" id="teachQ">What really happens here?</label>
+        <div class="hint" id="teachHint">Write it like you'd explain it to a new teammate. Flo reads this from its next message on.</div>
+        <textarea id="note" maxlength="600"></textarea>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="teach" checked> Teach Flo this</label>
+          <div style="display:flex;gap:8px">
+            <button class="ghost" id="btnBack">Back</button>
+            <button id="btnSave">Save and next</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card done hide" id="doneBox">
+      <div class="big">All caught up</div>
+      <p class="sub" id="doneText">Nothing new for you to check. Flo's next practice run is tomorrow at 9 am.</p>
+    </section>
+
+    <!-- How Flo is doing -->
+    <section class="card" id="scoreBox">
+      <h2>How Flo is doing</h2>
+      <p class="sub tiny">Last 30 days of your answers. When something is right nearly every time, it can be switched on for real.</p>
+      <div class="score" id="score"></div>
+    </section>
+
+    <!-- What Flo has learned -->
+    <section class="card">
+      <h2>What Flo has learned</h2>
+      <p class="sub tiny">Flo reads these on every message. Turn one off if it's no longer true.</p>
+      <ul class="lessons" id="lessons"></ul>
+      <div id="addLessonBox" style="margin-top:14px">
+        <label class="tiny muted" for="newLesson" style="display:block;margin-bottom:6px">Teach Flo something else</label>
+        <textarea id="newLesson" maxlength="600" placeholder="When Gaby is out, Tia covers editing."></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px"><button id="btnAddLesson">Teach Flo</button></div>
+      </div>
+    </section>
+
+    <p class="tiny muted" style="margin-top:18px"><a href="/flo/">Back to the Flo page</a></p>
+  </div>
+</div>
+<div id="toast" class="toast hide" role="status"></div>
+
+<script>
+const API = '/flo/api/';
+let data = null, queue = [], idx = 0, total = 0, last = null, toastTimer = null;
+
+async function api(path, opts = {}) {
+  if (opts.body && typeof opts.body !== 'string') {
+    opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API + path, { credentials: 'same-origin', ...opts });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const bold = (s) => esc(s).replace(/\*([^*]+)\*/g, '<b>$1</b>');
+const day = (ymd) => ymd ? new Date(ymd + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }) : null;
+const firstName = (email) => { const n = String(email || '').split('@')[0].split(/[._-]/)[0]; return n ? n[0].toUpperCase() + n.slice(1) : 'Someone'; };
+const ago = (iso) => { const d = (Date.now() - new Date(iso)) / 86400e3; return d < 1 ? 'today' : d < 2 ? 'yesterday' : `${Math.floor(d)} days ago`; };
+
+// Plain words for what Flo wanted, without repeating the card name.
+function wantedText(it) {
+  let t = String(it.summary || '');
+  if (it.card?.name) t = t.replace(/\s*on \*[^*]+\*/, '').replace(/^On \*[^*]+\*:\s*/, '');
+  t = t.replace(/^Move the due date to/, 'Move the due date to').replace(/^Set priority to/, 'Set priority to');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+// A starter for the note box, by kind of action.
+const HINTS = {
+  assignee: 'e.g. Gaby is out this week, so Tia is editing these.',
+  due_date: 'e.g. Due dates on whiteboard videos are loose; the post date is what matters.',
+  comment: 'e.g. The team already talked about this in Chat; a comment just adds noise.',
+  priority: 'e.g. Everything posting this week is already high priority for us.',
+  message: 'e.g. Diana is reviewing these in batches on Fridays; no need to ping her.',
+};
+
+function toast(msg, undo) {
+  const el = $('toast');
+  el.innerHTML = `<span>${esc(msg)}</span>${undo ? '<button id="undoBtn">Undo</button>' : ''}`;
+  el.classList.remove('hide');
+  if (undo) $('undoBtn').onclick = () => { el.classList.add('hide'); undo(); };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add('hide'), 5000);
+}
+
+function renderItem() {
+  const it = queue[idx];
+  const done = !it;
+  $('item').classList.toggle('hide', done);
+  $('doneBox').classList.toggle('hide', !done);
+  $('progressRow').classList.toggle('hide', done || !total);
+  if (done) {
+    $('doneText').textContent = total
+      ? `You went through ${total}. Thanks, Flo will use what you taught it from its next message.`
+      : "Nothing new for you to check. Flo's next practice run is tomorrow at 9 am.";
+    return;
+  }
+  $('progressText').textContent = `${idx + 1} of ${total}`;
+  $('progressBar').style.width = `${Math.round((idx / total) * 100)}%`;
+
+  const c = it.card;
+  $('cardline').innerHTML = c
+    ? `<a class="cardname" href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>` +
+      (c.stage ? ` <span class="stage"><i style="background:${esc(c.stage_color || '#9e9e9e')}"></i>${esc(c.stage)}</span>` : '')
+    : `<span class="cardname">${it.person ? `Message to ${esc(it.person)}` : 'A card'}</span>`;
+  const bits = [];
+  if (c?.post_date) bits.push(`Posts ${day(c.post_date)}`);
+  if (c?.due_date) bits.push(`Due ${day(c.due_date)}`);
+  if (c?.assignees?.length) bits.push(`Has it: ${c.assignees.join(', ')}`);
+  bits.push(`Flo's run ${ago(it.at)}`);
+  $('meta').innerHTML = bits.map(esc).join(' · ');
+  $('what').innerHTML = bold(wantedText(it));
+  $('how').innerHTML = `<span class="kind">${esc(it.kind_label)}</span> <span>It ${esc(it.would)}.</span>`;
+
+  $('verdictBox').classList.remove('hide');
+  $('teachBox').classList.add('hide');
+  $('note').value = '';
+  $('teach').checked = true;
+  $('note').placeholder = HINTS[it.kind] || 'e.g. What Flo should know about how this really works.';
+  [$('btnRight'), $('btnWrong'), $('btnSkip')].forEach((b) => (b.disabled = !data.can_coach));
+}
+
+function openTeach(verdict) {
+  const it = queue[idx];
+  $('teachBox').dataset.verdict = verdict;
+  $('verdictBox').classList.add('hide');
+  $('teachBox').classList.remove('hide');
+  $('teachQ').textContent = verdict === 'wrong' ? 'What really happens here?' : 'Anything Flo should know? (optional)';
+  $('teachHint').textContent = verdict === 'wrong'
+    ? "Write it like you'd explain it to a new teammate. Flo reads this from its next message on."
+    : "Skip this if it's simply right.";
+  $('btnSave').textContent = 'Save and next';
+  setTimeout(() => $('note').focus(), 30);
+}
+
+async function save(verdict, note = '', teach = true) {
+  const it = queue[idx];
+  [$('btnRight'), $('btnWrong'), $('btnSkip'), $('btnSave')].forEach((b) => (b.disabled = true));
+  try {
+    const r = await api('coach', { method: 'POST', body: { id: it.id, verdict, note, teach } });
+    last = { it, at: idx };
+    idx++;
+    renderItem();
+    const msg = verdict === 'right' ? 'Marked right.' : verdict === 'skip' ? 'Skipped.' : 'Saved.';
+    toast(r.lesson ? `${msg} Flo learned: “${r.lesson.text.slice(0, 60)}${r.lesson.text.length > 60 ? '…' : ''}”` : msg, () => { idx = last.at; renderItem(); });
+    if (r.lesson) loadLessonsOnly();
+    loadScoreOnly();
+  } catch (e) {
+    toast(`Not saved: ${e.message}`);
+  } finally {
+    [$('btnRight'), $('btnWrong'), $('btnSkip'), $('btnSave')].forEach((b) => (b.disabled = !data.can_coach));
+  }
+}
+
+function renderScore() {
+  const s = data.stats || [];
+  $('scoreBox').classList.toggle('hide', !s.length);
+  $('score').innerHTML = s.map((k) => {
+    const n = k.right + k.wrong;
+    const pct = n ? Math.round((k.right / n) * 100) : 0;
+    return `<div class="line"><span>${esc(k.label)}</span><span class="muted">${k.right} of ${n} right</span>
+      <div class="track" role="img" aria-label="${pct}% right"><div style="width:${pct}%"></div></div></div>`;
+  }).join('');
+}
+
+function renderLessons() {
+  const ls = data.lessons || [];
+  $('lessons').innerHTML = ls.length
+    ? ls.map((l) => `<li class="${l.active ? '' : 'off'}"><div class="grow"><div class="t">${esc(l.text)}</div>
+        <div class="by">${esc(firstName(l.by))}, ${esc(ago(l.at))}${l.about ? ` · about Flo wanting to: ${bold(l.about)}` : ''}</div></div>
+        ${data.can_coach ? `<button class="link" data-id="${l.id}" data-on="${l.active ? 0 : 1}">${l.active ? 'Turn off' : 'Turn on'}</button>` : ''}</li>`).join('')
+    : '<li class="muted" style="font-size:14px">Nothing yet. What you write when Flo gets something wrong shows up here.</li>';
+  $('lessons').querySelectorAll('button[data-id]').forEach((b) => (b.onclick = async () => {
+    try { await api('lessons', { method: 'PUT', body: { id: Number(b.dataset.id), active: b.dataset.on === '1' } }); await loadLessonsOnly(); }
+    catch (e) { toast(`Not changed: ${e.message}`); }
+  }));
+  $('addLessonBox').classList.toggle('hide', !data.can_coach);
+}
+
+async function loadLessonsOnly() { try { data.lessons = (await api('coach')).lessons; renderLessons(); } catch {} }
+async function loadScoreOnly() { try { data.stats = (await api('coach')).stats; renderScore(); } catch {} }
+
+async function load() {
+  try {
+    data = await api('coach');
+    queue = data.items || [];
+    total = queue.length;
+    idx = 0;
+    $('loading').classList.add('hide');
+    $('app').classList.remove('hide');
+    $('readonly').classList.toggle('hide', !!data.can_coach);
+    renderItem(); renderScore(); renderLessons();
+  } catch (e) {
+    $('loading').classList.add('hide');
+    $('error').textContent = `Couldn't load: ${e.message}`;
+    $('error').classList.remove('hide');
+  }
+}
+
+$('btnRight').onclick = () => save('right');
+$('btnWrong').onclick = () => openTeach('wrong');
+$('btnSkip').onclick = () => save('skip');
+$('btnBack').onclick = () => { $('teachBox').classList.add('hide'); $('verdictBox').classList.remove('hide'); };
+$('btnSave').onclick = () => {
+  const v = $('teachBox').dataset.verdict;
+  const note = $('note').value.trim();
+  if (v === 'wrong' && !note && $('teach').checked) { $('note').focus(); toast('Write a line about what really happens, or untick “Teach Flo this”.'); return; }
+  save(v, note, $('teach').checked);
+};
+$('btnAddLesson').onclick = async () => {
+  const text = $('newLesson').value.trim();
+  if (!text) { $('newLesson').focus(); return; }
+  try { await api('lessons', { method: 'POST', body: { text } }); $('newLesson').value = ''; toast('Flo learned it.'); await loadLessonsOnly(); }
+  catch (e) { toast(`Not saved: ${e.message}`); }
+};
+document.addEventListener('keydown', (e) => {
+  if (!data?.can_coach || e.target.closest('textarea') || e.metaKey || e.ctrlKey || $('item').classList.contains('hide') || $('verdictBox').classList.contains('hide')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'r') save('right');
+  else if (k === 'n') { e.preventDefault(); openTeach('wrong'); }
+  else if (k === 's') save('skip');
+});
+load();
+</script>
+</body>
+</html>

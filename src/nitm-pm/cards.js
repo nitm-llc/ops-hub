@@ -82,7 +82,7 @@ function splitHeading(line) {
  *   body      Flo's reply, unchanged
  *   stages    Map from stageInfo()
  */
-export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl, approveNames = null }) {
+export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl, approveNames = null, coach = null }) {
   const sections = [];
   const proposed = []; // card names with numbered changes, for the reply hint (older summaries)
   for (const block of String(body || "").trim().split(/\n\s*\n/)) {
@@ -144,9 +144,17 @@ export function summaryCard({ title, subtitle, body, stages = new Map(), pageUrl
   const names = [...new Set(approveNames?.length ? approveNames : proposed)].slice(0, 2).map(shortName);
   const hint = `<font color="#80868b">Reply "approve all", or name the cards${names.length ? `: "approve ${esc(names.join(" and "))}"` : ""}</font>`;
   for (const sec of sections) for (const w of sec.widgets) if (w.textParagraph?.text === "{{HINT}}") w.textParagraph.text = hint;
-  if (pageUrl) {
-    sections.push({ widgets: [{ buttonList: { buttons: [{ text: "Open Flo page", onClick: { openLink: { url: pageUrl } } }] } }] });
+  // "Coach Flo · 5 to review" first when there's something to review.
+  const buttons = [];
+  if (coach?.count > 0) {
+    buttons.push({
+      text: `Coach Flo · ${coach.count} to review`,
+      onClick: { openLink: { url: coach.url } },
+      color: { red: 0.06, green: 0.46, blue: 0.43, alpha: 1 },
+    });
   }
+  if (pageUrl) buttons.push({ text: "Open Flo page", onClick: { openLink: { url: pageUrl } } });
+  if (buttons.length) sections.push({ widgets: [{ buttonList: { buttons } }] });
   return {
     fallbackText: `${title}, ${subtitle}`,
     cardsV2: [{ cardId: "flo-summary", card: { header: { title: esc(title), subtitle: esc(subtitle) }, sections } }],
