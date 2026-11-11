@@ -433,7 +433,14 @@ function renderOut() {
   if (!t.configured) html = '<div class="muted tiny">Not connected yet. Three steps below.</div>';
   else if (t.error) html = `<div class="banner bad" style="margin-top:0">Couldn't read the calendar: ${esc(t.error)}</div>`;
   else if (!t.away?.length) html = '<div class="muted" style="font-size:14px">Nobody is out in the next two weeks.</div>';
-  else html = `<div class="chips" style="margin-top:0">${t.away.map((a) => `<span class="chip"><b>${esc(a.name)}</b>&nbsp;${esc(a.from === a.to ? day(a.from) : `${day(a.from)} – ${day(a.to)}`)}</span>`).join('')}</div>`;
+  else {
+    const when = (a) => (a.from === a.to ? day(a.from) : `${day(a.from)} – ${day(a.to)}`);
+    const full = t.away.filter((a) => !a.partial), part = t.away.filter((a) => a.partial);
+    html = full.length
+      ? `<div class="chips" style="margin-top:0">${full.map((a) => `<span class="chip"><b>${esc(a.name)}</b>&nbsp;${esc(when(a))}</span>`).join('')}</div>`
+      : '<div class="muted" style="font-size:14px">Nobody is out a full day in the next two weeks.</div>';
+    if (part.length) html += `<div class="tiny muted" style="margin:12px 0 6px">Short time off, still working (Flo treats them as around):</div><div class="chips" style="margin-top:0">${part.map((a) => `<span class="chip no"><b>${esc(a.name)}</b>&nbsp;${esc(when(a))} · ${esc(a.hours)} hr</span>`).join('')}</div>`;
+  }
   if (t.configured && data.can_edit) html += `<div class="tiny muted" style="margin-top:10px">Calendar: <code>${esc(t.calendar_id)}</code> · <button class="link tiny" id="changeCal">Change</button></div>`;
   $('outList').innerHTML = html;
   $('outSetup').classList.toggle('hide', !(data.can_edit && !t.configured));

@@ -1421,18 +1421,26 @@ test("Team Out calendar: names in titles, creators, all-day ranges", async () =>
   withCalendar([
     { summary: "Gaby out", start: { date: TODAY }, end: { date: addDays(TODAY, 3) } },
     { summary: "PTO", creator: { email: "gaby@anurseinthemaking.com" }, start: { date: addDays(TODAY, 5) }, end: { date: addDays(TODAY, 6) } },
-    { summary: "Diana - dentist", start: { dateTime: `${addDays(TODAY, 1)}T15:00:00Z` }, end: { dateTime: `${addDays(TODAY, 1)}T16:00:00Z` } },
+    { summary: "Diana - dentist", start: { dateTime: `${addDays(TODAY, 1)}T13:00:00Z` }, end: { dateTime: `${addDays(TODAY, 1)}T21:00:00Z` } },
+    { summary: "FREEMAN, TIA - Time Off (1 hours)", start: { date: TODAY }, end: { date: addDays(TODAY, 1) } },
+    { summary: "BOYLE, DIANA - Time Off (8 hours)", start: { date: addDays(TODAY, 2) }, end: { date: addDays(TODAY, 3) } },
+    { summary: "Samantha appt", start: { dateTime: `${TODAY}T15:00:00Z` }, end: { dateTime: `${TODAY}T17:00:00Z` } },
     { summary: "Team lunch", start: { date: TODAY }, end: { date: addDays(TODAY, 1) } },
     { summary: "Old", start: { date: addDays(TODAY, -5) }, end: { date: addDays(TODAY, -3) } },
   ]);
   _clearTeamOutCache();
   const t = await teamOut(env, { today: TODAY });
   assert.equal(t.configured, true);
-  assert.deepEqual(t.away.map((a) => [a.name, a.from, a.to]), [
+  assert.deepEqual(t.away.filter((a) => !a.partial).map((a) => [a.name, a.from, a.to]), [
     ["Gaby", TODAY, addDays(TODAY, 2)],
     ["Diana", addDays(TODAY, 1), addDays(TODAY, 1)],
+    ["Diana", addDays(TODAY, 2), addDays(TODAY, 2)],
     ["Gaby", addDays(TODAY, 5), addDays(TODAY, 5)],
   ]);
+  assert.deepEqual(t.away.filter((a) => a.partial).map((a) => [a.name, a.hours]), [["Tia", 1], ["Samantha", 2]], "under 6 hours is short time off");
+  assert.equal(isOut(t.away, { name: "Tia" }, TODAY), undefined, "1 hour off: still around");
+  assert.ok(isOut(t.away, { name: "Diana" }, addDays(TODAY, 2)), "8 hours off: out");
+  assert.match(outLine(t.away, TODAY), /Short time off, still working those days: Tia \(today, 1 hr\)/);
   assert.ok(isOut(t.away, { name: "Gabriela Eisenbraun" }, TODAY), "by first name / nickname");
   assert.ok(isOut(t.away, { email: "gaby@anurseinthemaking.com" }, addDays(TODAY, 1)), "by email");
   assert.equal(isOut(t.away, { name: "Diana" }, TODAY), undefined);

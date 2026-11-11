@@ -9,6 +9,11 @@
 // it. All-day events cover their days (Google's end date is exclusive); timed
 // events cover the days they touch.
 //
+// Short time off is NOT out (Mark, Nov 11): the HR sync writes titles like
+// "FREEMAN, TIA - Time Off (1 hours)" as all-day events. Under FULL_DAY_HOURS
+// (from "(N hours)" in the title, else a timed event's length) the person is
+// still around: listed as short time off, but messaged and chased as usual.
+//
 // Flo uses this to leave people alone while they're out: the runs and answers
 // see an "Out" line, and message_person won't DM someone who's out today.
 // ============================================================================
@@ -20,6 +25,15 @@ import { PEOPLE, DEFAULT_TZ, todayYmd, addDays, ymd, weekdayName } from "./confi
 const CAL_API = "https://www.googleapis.com/calendar/v3/calendars";
 const CACHE_MS = 10 * 60 * 1000;
 const LOOK_AHEAD_DAYS = 14;
+export const FULL_DAY_HOURS = 6;
+
+/** Hours off, from "(8 hours)" / "(2 hrs)" in the title, else a timed event's length; null = whole day(s). */
+function hoursOff(ev) {
+  const m = String(ev.summary || "").match(/\(\s*(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\s*\)/i);
+  if (m) return Number(m[1]);
+  if (ev.start?.dateTime && ev.end?.dateTime) return Math.round(((Date.parse(ev.end.dateTime) - Date.parse(ev.start.dateTime)) / 3600e3) * 10) / 10;
+  return null;
+}
 
 let cache = null; // { key, at, value }
 export const _clearTeamOutCache = () => {
@@ -100,7 +114,9 @@ export async function teamOut(env, { tz = env.PM_TIMEZONE || DEFAULT_TZ, today =
       if (ev.status === "cancelled" || ev.transparency === "transparent") continue;
       const days = eventDays(ev, tz);
       if (!days || days[1] < today) continue;
-      for (const p of eventPeople(ev, names)) away.push({ name: p.name, email: p.email, from: days[0], to: days[1], title: String(ev.summary || "").slice(0, 80) });
+      const hours = hoursOff(ev);
+      const partial = hours != null && hours < FULL_DAY_HOURS;
+      for (const p of eventPeople(ev, names)) away.push({ name: p.name, email: p.email, from: days[0], to: days[1], title: String(ev.summary || "").slice(0, 80), hours, partial });
     }
     away.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
     value = { configured: true, away };
@@ -118,18 +134,18 @@ export function isOut(away, { email, name }, day) {
   const raw = String(name || "").split(/\s+/)[0].toLowerCase();
   const first = NICKNAMES[raw] || raw;
   return away.find(
-    (a) => a.from <= day && a.to >= day && ((email && a.email && a.email.toLowerCase() === String(email).toLowerCase()) || (first && (NICKNAMES[a.name.toLowerCase()] || a.name.toLowerCase()) === first))
+    (a) => !a.partial && a.from <= day && a.to >= day && ((email && a.email && a.email.toLowerCase() === String(email).toLowerCase()) || (first && (NICKNAMES[a.name.toLowerCase()] || a.name.toLowerCase()) === first))
   );
 }
 
 /** One line for Flo's context: "Gaby (today through Mon, Nov 16), Diana (Thu, Nov 12)". */
 export function outLine(away, today) {
   const within = away.filter((a) => a.from <= addDays(today, 7));
-  if (!within.length) return "nobody in the next week";
-  return within
-    .map((a) => {
-      const from = a.from <= today ? "today" : weekdayName(a.from);
-      return a.from === a.to || (a.from <= today && a.to === today) ? `${a.name} (${from})` : `${a.name} (${from} through ${weekdayName(a.to)})`;
-    })
-    .join(", ");
+  const when = (a) => {
+    const from = a.from <= today ? "today" : weekdayName(a.from);
+    return a.from === a.to || (a.from <= today && a.to === today) ? from : `${from} through ${weekdayName(a.to)}`;
+  };
+  const out = within.filter((a) => !a.partial).map((a) => `${a.name} (${when(a)})`);
+  const short = within.filter((a) => a.partial).map((a) => `${a.name} (${when(a)}, ${a.hours} hr)`);
+  return (out.length ? out.join(", ") : "nobody in the next week") + (short.length ? `. Short time off, still working those days: ${short.join(", ")}` : "");
 }
