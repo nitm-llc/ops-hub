@@ -192,6 +192,19 @@ async function runTool(env, turn, name, input) {
       // Scheduled runs make routine changes themselves (routine.js decides,
       // in code). Anything else becomes a proposal for a person, below.
       let notRoutine = null;
+      // Shadow mode (Nov 11): scheduled runs change nothing and ask nothing.
+      // What Flo would have done is logged for the team to review.
+      if (turn.scheduled && turn.shadow) {
+        const check = await routineCheck(env, action, card, turn.today);
+        await logAction(env, {
+          conv: turn.conv,
+          actor: "flo-scheduled",
+          event: "shadow",
+          action,
+          result: `${summary} · ${check.routine ? "would have changed it" : `would have asked a person (${check.why})`}`,
+        });
+        return { summary, card_url: card.url, status: "logged for review only (shadow mode). Nothing changed. Don't list it in your reply." };
+      }
       if (turn.scheduled) {
         const check = await routineCheck(env, action, card, turn.today);
         if (check.routine) {
@@ -246,6 +259,16 @@ async function runTool(env, turn, name, input) {
       };
     }
     case "message_person": {
+      if (turn.scheduled && turn.shadow) {
+        await logAction(env, {
+          conv: turn.conv,
+          actor: "flo-scheduled",
+          event: "shadow",
+          action: { type: "message", person: input.person, task_id: input.task_id || null, kind: input.kind || "other" },
+          result: `Would have messaged ${input.person}: ${String(input.text || "").slice(0, 300)}`,
+        });
+        return { sent: false, message: "logged for review only (shadow mode). Not sent. Don't list it in your reply." };
+      }
       return messagePerson(env, {
         person: input.person,
         text: input.text,
@@ -323,7 +346,12 @@ function contextBlock(env, turn, pending) {
     `Sender: ${turn.sender.displayName || "?"} <${turn.sender.email}>; approver: ${isApprover(env, turn.sender.email) ? "yes" : "no"}`,
     `Numbers this message approves: ${turn.approvedNumbers.length ? turn.approvedNumbers.join(", ") : "none"}`,
     ...(turn.scheduled
-      ? ["This is a scheduled run, not a person. Call propose_change for every change the routine calls for: routine ones (due date, High priority, the Stage table's owner, a check-in comment) are made right away and come back as done; anything else waits for a person. Never apply_approved here."]
+      ? [
+          ...(turn.shadow
+            ? ["Shadow mode is on: propose_change and message_person only log what you would do, for the team to review later. Still call them for everything the routine calls for."]
+            : []),
+          "This is a scheduled run, not a person. Call propose_change for every change the routine calls for: routine ones (due date, High priority, the Stage table's owner, a check-in comment) are made right away and come back as done; anything else waits for a person. Never apply_approved here.",
+        ]
       : []),
     `Pending proposals in this conversation:\n${p}`,
     "</context>",

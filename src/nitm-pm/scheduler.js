@@ -65,7 +65,14 @@ const SHAPE =
   `*Messaged:* who, and about which cards, in one line.\n` +
   `If nothing needed doing, one line.`;
 
-export function promptFor(kind, { leadFirst, today }) {
+// Shadow mode: the morning message is a short heads-up, nothing more.
+const SHADOW_SHAPE =
+  `Shadow mode: your changes and messages are only logged for the team to review, so don't mention them. ` +
+  `Reply with a short heads-up only: *Heads-up:* then one line per card that posts within 5 workdays and looks stuck: <url|short name>: why, in a few words (whose turn it is, what's missing). ` +
+  `At most 6 cards, most urgent first. If someone already commented on a card today, leave it out. No numbers. If nothing looks stuck, one line.`;
+
+export function promptFor(kind, { leadFirst, today, shadow = false }) {
+  const shape = shadow ? SHADOW_SHAPE : SHAPE;
   if (kind === "weekly") {
     const w = nextWeek(today);
     return (
@@ -73,7 +80,7 @@ export function promptFor(kind, { leadFirst, today }) {
       `1. Find every card with a Post Date next week (${weekdayName(w.from)} to ${weekdayName(w.to)}, ${w.from} to ${w.to}) that isn't done.\n` +
       `2. Set due dates (propose_change type due_date): Post Date minus 8 to 9 days, never on a weekend (use the Friday before), spread so no day piles up. Nothing beyond next week. Skip cards whose due date already fits.\n` +
       `3. Check the calendar balance for the next 3 weeks (calendar tool). If anything breaks a rule, send Cass ONE message (message_person, kind calendar) with the problems and suggested swaps. Don't propose Post Date changes.\n` +
-      SHAPE
+      shape
     );
   }
   return (
@@ -83,7 +90,7 @@ export function promptFor(kind, { leadFirst, today }) {
     `- Never change who a card is assigned to, and don't propose it: people assign cards for reasons you can't see (someone is out, a swap they agreed). If the owner looks wrong for the Stage, leave it alone.\n` +
     `- Check-ins the routine calls for (Post Date within the follow-up window and no active conversation on the card): message_person to the card's owner, kind check_in.\n` +
     `- Escalations (posts within 3 workdays and still stuck after an earlier follow-up, a card in an unused stage, or a workload question): message_person to Avery, kind escalation.\n` +
-    SHAPE
+    shape
   );
 }
 
@@ -110,6 +117,8 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
     return { ok: false, message: msg };
   }
   const leadFirst = String(lead.name).split(/\s+/)[0];
+  // Shadow until someone switches Flo to "live" (pm_settings auto_mode).
+  const shadow = (await getSetting(env, "auto_mode", "shadow")) !== "live";
   const conv = { space: lead.dmSpace, thread: "" };
   // Earlier days' unapproved suggestions are replaced by today's run.
   const cleared = await expireScheduledPending(env, conv, new Date(Date.parse(`${today}T05:00:00Z`)).toISOString());
@@ -117,13 +126,14 @@ export async function runScheduled(env, kind, { trigger = "schedule", tz = env.P
   const reply = await runTurn(env, {
     conv,
     sender: { email: "flo-scheduled", displayName: `Flo (${TITLES[kind]})` },
-    text: promptFor(kind, { leadFirst, today }),
+    text: promptFor(kind, { leadFirst, today, shadow }),
     tz,
     today,
     history: [],
     approvedNumbers: [],
     deadline: Date.now() + RUN_DEADLINE_MS,
     scheduled: true,
+    shadow,
   });
   const title = TITLES[kind];
   const text = toChatFormat(`*${title}, ${weekdayName(today)}*\n${reply}`);

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { handleNitmPmRoutes, CHAT_PATH, endpointUrl } from "../src/nitm-pm/index.js";
 import { _clearJwksCache, _clearTokenCache } from "../src/nitm-pm/google.js";
-import { _resetReady, createPending } from "../src/nitm-pm/store.js";
+import { _resetReady, createPending, setSetting } from "../src/nitm-pm/store.js";
 import { validateAction, applyAction, RefusedError, _clearFieldCache } from "../src/nitm-pm/clickup.js";
 import { parseApproval } from "../src/nitm-pm/approvals.js";
 import { LIST_ID, FIELDS, PEOPLE, todayYmd, addDays, ymdToClickUpMs, isWeekend } from "../src/nitm-pm/config.js";
@@ -1032,6 +1032,7 @@ test("dueRuns: weekday mornings for the daily check, Wednesday for planning, nev
 test("the cron runs the daily check once, in the lead's DM, and posts the summary there", async () => {
   await send(addonMessage("warm up")).catch(() => {});
   await sayHi(AVERY.email, "Avery Pless");
+  await setSetting(env, "auto_mode", "live", "test");
   const before = claudeRequests.length;
   claudeScript = [
     { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) },
@@ -1127,6 +1128,7 @@ test("Tia gets a copy of the morning summary and can approve from it; first appr
   TEAM.push([89106216, "Tia Freeman", "tia@anurseinthemaking.com"]);
   _clearTeamCache();
   await sayHi(AVERY.email, "Avery Pless");
+  await setSetting(env, "auto_mode", "live", "test");
   await sayHi("tia@anurseinthemaking.com", "Tia Freeman");
   claudeScript = [
     { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "low" }) },
@@ -1327,6 +1329,7 @@ test("routineCheck: only the routine steps, checked in code", async () => {
 test("Flo comments on a card at most once every 2 days on its own", async () => {
   await send(addonMessage("warm up")).catch(() => {});
   await sayHi(AVERY.email, "Avery Pless");
+  await setSetting(env, "auto_mode", "live", "test");
   claudeScript = [
     { reply: toolUse("propose_change", { type: "comment", task_id: "peds-quiz", text: "Checking in, anything blocking it?" }) },
     { reply: toolUse("propose_change", { type: "comment", task_id: "peds-quiz", text: "Checking in again" }) },
@@ -1357,4 +1360,38 @@ test("each scheduled run clears earlier runs' unapproved suggestions, not people
   await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
   assert.deepEqual(pendingRows().map((r) => [r.summary, r.status]), [["old", "expired"], ["Avery's own", "pending"]]);
   assert.ok(logRows().some((r) => r.event === "pending_cleared"));
+});
+
+
+test("shadow mode (the default): the morning run changes nothing, asks nothing, messages nobody", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  await sayHi(AVERY.email, "Avery Pless");
+  await sayHi("gaby@anurseinthemaking.com", "Gabriela Eisenbraun");
+  claudeScript = [
+    { reply: toolUse("propose_change", { type: "priority", task_id: "peds-quiz", priority: "high" }) },
+    { reply: toolUse("propose_change", { type: "assignee", task_id: "peds-quiz", add: ["diana"], remove: ["gaby"] }) },
+    { reply: toolUse("message_person", { person: "Gaby", text: "Peds quiz posts soon. Anything blocking it?", task_id: "peds-quiz", kind: "check_in" }) },
+    { reply: say("*Heads-up:*\n<https://app.clickup.com/t/peds-quiz|Peds quiz>: waiting on Gaby's edit, posts in 6 days") },
+  ];
+  await floCron(env, nyTime(`${todayYmd()}T09:10:00`));
+  assert.match(claudeRequests.at(-1).messages[0].content, /Shadow mode: your changes and messages are only logged/);
+  assert.equal(writes().length, 0, "nothing changed in ClickUp");
+  assert.equal(pendingRows().length, 0, "nothing waiting for approval");
+  assert.equal(postsTo(dmOf("gaby@anurseinthemaking.com")).length, 0, "Gaby wasn't messaged");
+  const shadow = logRows().filter((r) => r.event === "shadow");
+  assert.equal(shadow.length, 3);
+  assert.match(shadow[0].result, /would have changed it/);
+  assert.match(shadow[1].result, /would have asked a person/);
+  assert.match(shadow[2].result, /Would have messaged Gaby/);
+  assert.match(JSON.stringify(postsTo(dmOf(AVERY.email)).at(-1).body.cardsV2), /Heads-up/);
+  const log = (await floApi("log?filter=changes")).json.log;
+  assert.ok(log.some((r) => r.label === "Would have done (shadow mode)"));
+  assert.equal((await floApi("overview")).json.outreach.shadow, true);
+});
+
+test("an approver can switch shadow mode off on the Flo page; others can't", async () => {
+  await send(addonMessage("warm up")).catch(() => {});
+  assert.equal((await floApi("settings", { method: "PUT", body: { shadow: false }, as: DIANA.email })).status, 403);
+  assert.equal((await floApi("settings", { method: "PUT", body: { shadow: false } })).status, 200);
+  assert.equal((await floApi("overview")).json.outreach.shadow, false);
 });

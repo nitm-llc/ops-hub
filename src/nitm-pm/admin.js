@@ -52,6 +52,7 @@ const EVENT_LABELS = {
   proposed: "Proposed",
   applied: "Changed",
   auto_applied: "Changed by Flo (routine)",
+  shadow: "Would have done (shadow mode)",
   pending_cleared: "Cleared old suggestions",
   apply_failed: "Change failed",
   rejected: "Turned down",
@@ -164,6 +165,7 @@ async function overview(env, viewer) {
     pending: pending || [],
     outreach: {
       proactive: (await getSetting(env, "proactive", "on")) !== "off",
+      shadow: (await getSetting(env, "auto_mode", "shadow")) !== "live",
       run_requested: !!(await getSetting(env, "run_request")),
       schedule: { daily: `Weekdays from ${DAILY_HOUR}:00`, weekly: `Wednesdays from ${WEEKLY_HOUR}:00`, timezone: env.PM_TIMEZONE || DEFAULT_TZ },
       lead: await findLead(env).then((l) => (l ? { name: l.name, email: l.email } : null)).catch(() => null),
@@ -226,7 +228,11 @@ export async function handleFloApi(request, env, path) {
       const denied = mustEdit();
       if (denied) return denied;
       const body = await request.json().catch(() => null);
-      if (typeof body?.proactive !== "boolean") return json({ error: "Send {proactive: true|false}." }, 400);
+      if (typeof body?.shadow === "boolean") {
+        await setSetting(env, "auto_mode", body.shadow ? "shadow" : "live", viewer);
+        return json({ ok: true, shadow: body.shadow });
+      }
+      if (typeof body?.proactive !== "boolean") return json({ error: "Send {proactive: true|false} or {shadow: true|false}." }, 400);
       await setSetting(env, "proactive", body.proactive ? "on" : "off", viewer);
       return json({ ok: true, proactive: body.proactive });
     }
@@ -261,7 +267,7 @@ export async function handleFloApi(request, env, path) {
       const changesOnly = url.searchParams.get("filter") === "changes";
       const { results } = await env.DB.prepare(
         `SELECT id, at, space, thread, number, actor, event, action, result FROM pm_action_log
-          ${changesOnly ? "WHERE event IN ('proposed','applied','auto_applied','apply_failed','rejected','approval_refused','approval_expired')" : ""}
+          ${changesOnly ? "WHERE event IN ('proposed','applied','auto_applied','shadow','apply_failed','rejected','approval_refused','approval_expired')" : ""}
           ORDER BY id DESC LIMIT ?`
       ).bind(limit).all();
       return json({ log: (results || []).map(shapeLog) });

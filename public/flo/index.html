@@ -86,7 +86,7 @@
   .lists .who { color: var(--muted); font-size: 12.5px; }
   .empty { color: var(--muted); font-size: 14px; margin-top: 10px; }
   .ev { font-weight: 700; }
-  .ev.applied, .ev.auto_applied { color: var(--green); } .ev.apply_failed, .ev.async_post_failed { color: var(--red); }
+  .ev.applied, .ev.auto_applied { color: var(--green); } .ev.shadow { color: var(--muted); } .ev.apply_failed, .ev.async_post_failed { color: var(--red); }
   .ev.approval_refused, .ev.approval_expired, .ev.proposal_refused, .ev.refused_sender { color: var(--amber); }
 
   .seg { display: inline-flex; border: 1px solid var(--border2); border-radius: 9px; overflow: hidden; }
@@ -362,6 +362,7 @@ function renderReach() {
     (lead ? `Summaries and proposals go to <b>${esc(lead)}</b>${o.copies && o.copies.length ? `, with a copy to <b>${esc(o.copies.join(' and '))}</b> (either can approve)` : ''}.` : `<b style="color:var(--amber)">Nobody to send summaries to yet: Avery or Mark needs to open a chat with Flo.</b>`);
   $('reachActions').innerHTML = (data.can_edit
     ? `<label class="switch"><input type="checkbox" id="proactive" ${o.proactive ? 'checked' : ''}> Scheduled runs</label>
+       <label class="switch" title="On: the morning run only logs what it would change or who it would message (see Activity). Off: it makes routine changes itself."><input type="checkbox" id="shadow" ${o.shadow ? 'checked' : ''}> Shadow mode</label>
        <button class="ghost" id="runDaily" ${o.run_requested ? 'disabled' : ''}>${o.run_requested ? 'Run queued…' : 'Run daily check now'}</button>
        <button class="ghost" id="runWeekly" ${o.run_requested ? 'disabled' : ''}>Run weekly planning now</button>`
     : '') + ` <button class="ghost" id="previewCard" title="Re-sends the latest summary to your own chat with Flo. Nothing runs or changes.">Send me a preview</button>`;
@@ -372,6 +373,10 @@ function renderReach() {
   if (data.can_edit) {
     $('proactive').onchange = async (e) => {
       try { await api('settings', { method: 'PUT', body: { proactive: e.target.checked } }); toast(e.target.checked ? 'Scheduled runs are on.' : 'Scheduled runs are off. Flo still answers messages.'); await refresh(); }
+      catch (err) { toast(`Not changed: ${err.message}`); e.target.checked = !e.target.checked; }
+    };
+    $('shadow').onchange = async (e) => {
+      try { await api('settings', { method: 'PUT', body: { shadow: e.target.checked } }); toast(e.target.checked ? 'Shadow mode on: Flo only logs what it would do.' : 'Shadow mode off: Flo makes routine changes itself.'); await refresh(); }
       catch (err) { toast(`Not changed: ${err.message}`); e.target.checked = !e.target.checked; }
     };
     const run = async (kind) => {
