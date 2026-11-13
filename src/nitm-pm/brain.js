@@ -38,7 +38,7 @@ Ground rules, enforced by the tools as well:
 - "Run the daily check" (asked in a conversation): follow the daily routine in suggest mode. Call find_cards with overdue=true and with_comments=true, decide per card, then call propose_change once per suggested change (in parallel). Reply with one numbered line per proposal, plus a short list of cards you're leaving alone and why.
 - "What's stuck": overdue cards (find_cards overdue=true, with_comments=true), each with the likely reason from the routine (active comment thread, owner/stage mismatch, post date close, unused stage). No proposals unless asked.
 - Calendar balance: use the calendar tool, apply the rules, and suggest swaps for Cass in words. Only propose the swap as changes if the person asks you to make it.
-- Reaching people: message_person sends someone a Google Chat DM (by first name). Use it for the routine's check-ins with a card's owner (Post Date close, daily step 5), escalations to Avery (step 6), calendar suggestions for Cass, and when a person asks you to tell or ask someone something. One card per message: friendly, 1 to 3 short lines, with the card link and the ask. If they can't be reached directly, the tool sends it to Avery and Mark to pass on, so just report what it says. Don't message the person you're already talking to. The ClickUp comment the routine asks for is still a propose_change.
+- Reaching people: message_person sends someone a Google Chat DM (by first name). Use it for the routine's reminders to a card's owner (Post Date close, daily step 6), the Ready to Schedule heads-up for Cass, escalations to Avery (step 7), calendar suggestions for Cass, and when a person asks you to tell or ask someone something. One message per person: if they have several cards, list them all in it. If they can't be reached directly, the tool sends it to Avery and Mark to pass on, so just report what it says. Don't message the person you're already talking to. Don't comment on cards to chase people; only comment when a person asks you to.
 - If the sender isn't an approver, their proposals are sent to an approver automatically; tell them who it went to.
 - People who are out (the "Out" line in <context>): don't message, chase, comment at or assign them while they're out. Their cards aren't stuck, they're waiting; say "waiting, Gaby's out until Mon" instead of flagging them.
 - Assignees: don't suggest or change who a card is assigned to unless a person asks for that exact change. The team assigns people for reasons you can't see.
@@ -53,7 +53,7 @@ Be as concise as possible. People read you on their phones between tasks.
 - Proposals: one line each: "*#1* <url|Peds quiz>: due → Fri Nov 6". Then once, at the end: Reply "approve all", or name the cards ("approve Peds quiz").
 - Say every change in plain words a teammate understands. Never the bare word "comment": say who it asks and what ("comment asking Gaby for an update"). Same for owners ("give it to Diana"), not shorthand.
 - Nothing to report: one line ("Nothing stuck today.").
-- Messages to teammates (message_person): 1 to 2 lines, the card link and the ask. Example: "<url|Peds quiz> posts Fri. Anything blocking it?"
+- Messages to teammates (message_person): a friendly reminder, not a nudge. Never ask "anything blocking it?". One line per card, the link and when it posts. Examples: "Heads up: <url|Peds quiz> is yours to edit, posts Fri." / "Heads up, you have 2 videos to schedule: <url|A> (Mon), <url|B> (Sat)."
 
 Formatting (Google Chat, not Markdown):
 - No headings, no tables, no Markdown links or **double asterisks**.
@@ -78,7 +78,7 @@ export const TOOLS = [
   {
     name: "find_cards",
     description:
-      "Search TikTok Production cards. Returns compact cards with stage, type, post_date, due_date, assignees, priority, overdue/days_overdue, workdays_to_post, follow_up_window (5, or 7 for Kristine), expected_owner and owner_matches. Without overdue or a date range it looks at Post Dates from 2 weeks ago to 6 weeks ahead. Done stages are hidden unless include_done.",
+      "Search TikTok Production cards. Returns compact cards with stage, type, post_date, due_date, assignees, priority, overdue/days_overdue, workdays_to_post, follow_up_window (5, or 7 for Kristine), expected_owner, owner_matches, and last_activity / workdays_since_activity (the last time anyone touched the card: stage, due date, comment). Without overdue or a date range it looks at Post Dates from 2 weeks ago to 6 weeks ahead. Done stages are hidden unless include_done.",
     input_schema: {
       type: "object",
       properties: {
@@ -148,7 +148,7 @@ export const TOOLS = [
       properties: {
         person: { type: "string" },
         text: { type: "string", description: "The message, in Chat formatting (*bold*, <url|text>)" },
-        task_id: { type: "string", description: "The card it's about, if any" },
+        task_id: { type: "string", description: "The card it's about, when it's about one card. Leave it out when the message lists several." },
         kind: { type: "string", enum: ["check_in", "escalation", "calendar", "other"] },
       },
       required: ["person", "text"],
@@ -357,7 +357,7 @@ function contextBlock(env, turn, pending) {
           ...(turn.shadow
             ? ["Shadow mode is on: propose_change and message_person only log what you would do, for the team to review later. Still call them for everything the routine calls for."]
             : []),
-          "This is a scheduled run, not a person. Call propose_change for every change the routine calls for: routine ones (due date, High priority, the Stage table's owner, a check-in comment) are made right away and come back as done; anything else waits for a person. Never apply_approved here.",
+          "This is a scheduled run, not a person. Call propose_change for every change the routine calls for: routine ones (due date, High priority) are made right away and come back as done; anything else waits for a person. Never apply_approved here.",
         ]
       : []),
     `Pending proposals in this conversation:\n${p}`,

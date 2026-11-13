@@ -1548,3 +1548,35 @@ test("approvers can teach Flo directly on the coach page", async () => {
   assert.equal(r.status, 200);
   assert.equal((await floApi("coach")).json.lessons[0].text, "Kristine films on Tuesdays and Thursdays only.");
 });
+
+// ===========================================================================
+// Coach Flo feedback (Nov 13)
+// ===========================================================================
+import { readCard } from "../src/nitm-pm/clickup.js";
+import { isDoneStage, isUnusedStage } from "../src/nitm-pm/config.js";
+import { promptFor } from "../src/nitm-pm/scheduler.js";
+import INSTRUCTIONS_MD from "../src/nitm-pm/ai-pm-instructions.md";
+
+test("To Be Posted Manually is on purpose: treated as done, never flagged as unused", () => {
+  assert.equal(isDoneStage("To Be Posted Manually"), true);
+  assert.equal(isUnusedStage("To Be Posted Manually"), false);
+  assert.equal(isUnusedStage("T: Tia Review"), true);
+});
+
+test("cards say when anyone last touched them", () => {
+  const touched = Date.parse(`${addDays(TODAY, -1)}T17:00:00Z`);
+  const c = readCard({ id: "x", name: "X", date_updated: String(touched), custom_fields: [], assignees: [] }, "America/New_York", TODAY);
+  assert.equal(c.last_activity, addDays(TODAY, -1));
+  assert.ok(c.workdays_since_activity <= 1);
+});
+
+test("the daily run reminds people instead of commenting, and batches Cass's scheduling list", () => {
+  const p = promptFor("daily", { leadFirst: "Avery", today: TODAY });
+  assert.match(p, /Don't comment on cards/);
+  assert.match(p, /Ready to Schedule/);
+  assert.match(p, /ONE message per person/);
+  assert.doesNotMatch(p, /public check-in comment/);
+  assert.doesNotMatch(INSTRUCTIONS_MD, /Anything blocking it\?"\n/);
+  assert.doesNotMatch(INSTRUCTIONS_MD, /Every follow-up gets a public comment/);
+  assert.match(INSTRUCTIONS_MD, /Post Date minus 8 to 9 days, never on a weekend \(the Friday before\), and never before today/);
+});

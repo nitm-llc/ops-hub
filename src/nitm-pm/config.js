@@ -34,9 +34,10 @@ export const PERSON_NAME = Object.fromEntries(
 
 const norm = (s) => String(s || "").trim().toLowerCase();
 
-export const DONE_STAGES = ["Scheduled 📅", "Posted", "Posted To All Platforms"];
+// "To Be Posted Manually" is used on purpose (Coach Flo, Nov 12): someone posts it by hand, so Flo leaves it alone.
+export const DONE_STAGES = ["Scheduled 📅", "Posted", "Posted To All Platforms", "To Be Posted Manually"];
 export const PAUSED_STAGES = ["Schedule On Hold", "⚠️CAN NOT FINISH⚠️"];
-export const UNUSED_STAGES = ["T: Tia Review", "T: TikTok Edit", "T: Kristine - Changes", "To Be Posted Manually"];
+export const UNUSED_STAGES = ["T: Tia Review", "T: TikTok Edit", "T: Kristine - Changes"];
 const REVIEW_STAGES = ["T: Nurses Outline Review", "T: Drive Review", "T: TikTok Review", "Review / QA"];
 const KRISTINE_STAGES = ["T: Kristine To Film", "T: Only Voiceover"];
 const EDIT_STAGES = ["Ready To Edit / Design", "Editing / Designing", "Changes", "Rework"];

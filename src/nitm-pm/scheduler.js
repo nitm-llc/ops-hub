@@ -61,7 +61,7 @@ function nextWeek(today) {
 // talk about earlier runs: the card (cards.js) groups the lines by Stage.
 const SHAPE =
   `Then reply in this shape, as briefly as possible. Skip any part that's empty. No proposal numbers, and don't mention earlier runs or older proposals.\n` +
-  `*Done:* then one line per card: <url|short name>: everything you changed on it, in plain words ("due today, priority High, comment asking Gaby if anything's blocking it").\n` +
+  `*Done:* then one line per card: <url|short name>: everything you changed on it, in plain words ("due today, priority High, reminded Gaby").\n` +
   `*Needs a person:* then one line per card for changes waiting for approval or anything you escalated: <url|short name>: what and why, in a few words.\n` +
   `*Messaged:* who, and about which cards, in one line.\n` +
   `If nothing needed doing, one line.`;
@@ -87,9 +87,10 @@ export function promptFor(kind, { leadFirst, today, shadow = false }) {
   return (
     `Scheduled run: the weekday daily check. Your reply goes to ${leadFirst} as the morning summary.\n` +
     `Follow the daily routine: find_cards with overdue=true and with_comments=true, then decide per card.\n` +
-    `- ClickUp changes the routine calls for (due date to today, priority High, the public check-in comment): propose_change. Routine ones are made right away.\n` +
+    `- ClickUp changes the routine calls for (due dates, priority High): propose_change. Routine ones are made right away. Don't comment on cards. Leave a due date alone if a person moved it in the last 2 workdays.\n` +
     `- Never change who a card is assigned to, and don't propose it: people assign cards for reasons you can't see (someone is out, a swap they agreed). If the owner looks wrong for the Stage, leave it alone.\n` +
-    `- Check-ins the routine calls for (Post Date within the follow-up window and no active conversation on the card): message_person to the card's owner, kind check_in.\n` +
+    `- Reminders the routine calls for (Post Date within the follow-up window and no active conversation on the card): message_person to the card's owner, kind check_in, plus Tia when nobody has touched the card in 2+ workdays. ONE message per person: put all of their cards in it.\n` +
+    `- Ready to Schedule: find_cards stage ["Ready to Schedule"] posting in the next 2 weeks; if any, ONE message_person to Cass, kind check_in, listing them all, soonest first.\n` +
     `- Escalations (posts within 3 workdays and still stuck after an earlier follow-up, a card in an unused stage, or a workload question): message_person to Avery, kind escalation.\n` +
     shape
   );

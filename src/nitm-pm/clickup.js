@@ -105,6 +105,12 @@ export function readCard(task, tz, today = todayYmd(tz)) {
     owner_matches: owner ? assigneeIds.length === 1 && assigneeIds[0] === owner : null,
     list_id: String(task.list?.id ?? ""),
   };
+  // Last time anyone touched the card (stage, due date, comment...): movement means it isn't stuck.
+  const touched = ymd(task.date_updated, tz);
+  if (touched) {
+    card.last_activity = touched;
+    card.workdays_since_activity = touched < today ? workdaysBetween(touched, today) : 0;
+  }
   const doc = f(FIELDS.googleDoc)?.value;
   if (doc) card.script = doc;
   return card;
